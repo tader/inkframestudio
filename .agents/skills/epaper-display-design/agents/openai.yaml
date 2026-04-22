@@ -1,0 +1,7 @@
+interface:
+  display_name: "E-Paper Display Design"
+  short_description: "Design widgets for tri-color e-paper screens"
+  default_prompt: "Use $epaper-display-design to design a readable, battery-aware screen for a low-refresh tri-color e-paper display."
+
+policy:
+  allow_implicit_invocation: true

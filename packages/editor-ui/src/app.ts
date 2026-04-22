@@ -1,0 +1,3949 @@
+import { LitElement, css, html, nothing, type TemplateResult } from "lit";
+import { BUILT_IN_WIDGET_DEFINITIONS, DISPLAY_PROFILES, ICON_DEFINITIONS, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FontOption, type FontSlope, type FontVariantKey, type HomeAssistantConnectionSettings, type HomeAssistantConnectionStatus, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutInspectionResult, type LayoutNode, type ManagedDisplay, type OpenEpaperLinkAccessPointSettings, type OpenEpaperLinkAccessPointStatus, type PreviewDataSource, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
+import { SAMPLE_PROJECT } from "../../render-core/src/sample-project.js";
+import {
+  deleteFont,
+  fetchDaFontPage,
+  fetchDevicePreview,
+  fetchDiscoveredDisplays,
+  fetchFontSpecimens,
+  fetchFonts,
+  fetchHomeAssistantEntities,
+  fetchHomeAssistantSettings,
+  fetchIcons,
+  fetchLayoutInspectionPreview,
+  fetchLayoutPreview,
+  fetchOpenEpaperLinkAccessPointSettings,
+  fetchProject,
+  fetchProjects,
+  fetchThemePreview,
+  importDaFontFont as importDaFontFontFromApi,
+  importFont,
+  rescanFonts,
+  saveHomeAssistantSettings,
+  saveOpenEpaperLinkAccessPointSettings,
+  saveProject,
+  testHomeAssistantConnection,
+  testOpenEpaperLinkAccessPointConnection,
+  uploadDeviceImage,
+  uploadPreviewToOpenEpaperLinkAccessPoint,
+  updateFontMetadata,
+  type HomeAssistantSettingsResponse,
+  type FontSpecimenResponse,
+  type DaFontEntry,
+  type LayoutInspectionPreviewResponse,
+  type OpenEpaperLinkAccessPointSettingsResponse,
+  type PreviewResponse
+} from "./api.js";
+import { deriveStructureDropIntent, findInspectionNodeAtPoint, type StructureDropIntent } from "./structure-preview-model.js";
+import { buildNodeTree, getNodeById, isContainerNode, isDescendant, moveNode, moveNodeAfter, moveNodeBefore, moveNodeToGridCell, removeNode } from "./tree-model.js";
+
+type PageId = "displays" | "display-types" | "widgets" | "layouts" | "themes" | "assignments" | "config" | "dafont";
+
+const PAGE_ORDER: PageId[] = ["displays", "display-types", "widgets", "layouts", "themes", "assignments", "config", "dafont"];
+const PAGE_LABELS: Record<PageId, string> = {
+  displays: "Displays",
+  "display-types": "Display Types",
+  widgets: "Widgets",
+  layouts: "Layouts",
+  themes: "Themes",
+  assignments: "Assignments",
+  config: "Config",
+  dafont: "DaFont"
+};
+
+type FontSpecimenFamilyView = FontSpecimenResponse["families"][number] & {
+  variants: Array<
+    FontSpecimenResponse["families"][number]["variants"][number] & {
+      tiles: Array<
+        FontSpecimenResponse["families"][number]["variants"][number]["tiles"][number]
+      >;
+    }
+  >;
+};
+
+type NodeCreateKind =
+  | PrimitiveWidgetKind
+  | "stack"
+  | "grid"
+  | "zstack"
+  | "compound_ref";
+
+function maskToken(hasToken: boolean, token: string): string {
+  if (token) {
+    return token;
+  }
+  return hasToken ? "********" : "";
+}
+
+function routeToPage(hash: string): PageId {
+  const value = hash.replace(/^#\/?/, "");
+  return PAGE_ORDER.includes(value as PageId) ? (value as PageId) : "displays";
+}
+
+function pageToRoute(page: PageId): string {
+  return `#/${page}`;
+}
+
+function nextId(prefix: string): string {
+  return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+function cloneProject(project: Project): Project {
+  return normalizeProject(structuredClone(project));
+}
+
+function defaultSizeSpec(mode: SizeSpec["mode"] = "fill", value?: number): SizeSpec {
+  return { mode, value };
+}
+
+function defaultPrimitiveNode(kind: PrimitiveWidgetKind): PrimitiveInstanceNode {
+  return {
+    id: nextId("node"),
+    type: "primitive_instance",
+    primitiveType: kind,
+    width: defaultSizeSpec("fill"),
+    height: defaultSizeSpec("fill"),
+    style: { paddingPx: 4, borderToken: "none" },
+    bindings: kind === "graph" ? { query: "" } : kind === "text" || kind === "number" ? { entity: "" } : {},
+    props:
+      kind === "text"
+        ? { text: "Text", autoFit: true, placeholderText: "Placeholder", horizontalAlign: "left", verticalAlign: "top", renderEntityState: false, paddingPx: 4 }
+        : kind === "number"
+          ? { digits: 1, autoFit: true, placeholderValue: "88.8", horizontalAlign: "center", verticalAlign: "middle", paddingPx: 4 }
+          : kind === "icon"
+            ? { icon: "warning" }
+            : kind === "line"
+              ? { lineDirection: "horizontal" }
+              : kind === "circle"
+                ? { filled: false }
+                : {}
+  };
+}
+
+function defaultCompoundRefNode(definitionId = ""): LayoutNode {
+  return {
+    id: nextId("node"),
+    type: "compound_ref",
+    definitionId,
+    width: defaultSizeSpec("fill"),
+    height: defaultSizeSpec("fill"),
+    style: { paddingPx: 0, borderToken: "none" },
+    inputBindings: {},
+    inputValues: {}
+  };
+}
+
+function defaultNodeForKind(kind: NodeCreateKind, project: Project): LayoutNode {
+  if (kind === "stack" || kind === "grid" || kind === "zstack") {
+    return defaultRootNode(kind);
+  }
+  if (kind === "compound_ref") {
+    return defaultCompoundRefNode((project.widgetDefinitions ?? []).find((entry) => entry.kind === "compound")?.id ?? "");
+  }
+  return defaultPrimitiveNode(kind);
+}
+
+function labelForNode(node: LayoutNode): string {
+  if (node.type === "primitive_instance") {
+    return node.primitiveType;
+  }
+  if (node.type === "compound_ref") {
+    return "compound";
+  }
+  return node.type;
+}
+
+function availableFontVariants(font: FontOption | undefined): FontVariantKey[] {
+  return font?.variants ?? ["regular"];
+}
+
+function parentIdForNode(root: LayoutNode | undefined, nodeId: string): string | undefined {
+  return buildNodeTree(root).find((entry) => entry.node.id === nodeId)?.parentId;
+}
+
+function defaultRootNode(kind: "stack" | "grid" | "zstack" = "stack"): LayoutNode {
+  if (kind === "grid") {
+    return {
+      id: nextId("node"),
+      type: "grid",
+      rows: [{ size: defaultSizeSpec("fraction", 0.5) }, { size: defaultSizeSpec("fraction", 0.5) }],
+      columns: [{ size: defaultSizeSpec("fraction", 0.5) }, { size: defaultSizeSpec("fraction", 0.5) }],
+      children: [],
+      width: defaultSizeSpec("fill"),
+      height: defaultSizeSpec("fill"),
+      style: { paddingPx: 4, gapPx: 4, borderToken: "none" }
+    };
+  }
+  if (kind === "zstack") {
+    return {
+      id: nextId("node"),
+      type: "zstack",
+      children: [defaultPrimitiveNode("graph"), defaultPrimitiveNode("number")],
+      width: defaultSizeSpec("fill"),
+      height: defaultSizeSpec("fill"),
+      style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+    };
+  }
+  return {
+    id: nextId("node"),
+    type: "stack",
+    axis: "vertical",
+    children: [defaultPrimitiveNode("text")],
+    width: defaultSizeSpec("fill"),
+    height: defaultSizeSpec("fill"),
+    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+  };
+}
+
+function emptyStackRoot(): LayoutNode {
+  return {
+    id: nextId("node"),
+    type: "stack",
+    axis: "vertical",
+    children: [],
+    width: defaultSizeSpec("fill"),
+    height: defaultSizeSpec("fill"),
+    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+  };
+}
+
+function candidateMac(candidate: DiscoveredDisplayCandidate): string {
+  return String(candidate.metadata?.mac ?? candidate.providerRef ?? "");
+}
+
+function parseAllowedPixelSizes(value: string): number[] {
+  return Array.from(
+    new Set(
+      value
+        .split(/[,\s]+/)
+        .map((entry) => Number(entry))
+        .filter((entry) => Number.isInteger(entry) && entry >= 4 && entry <= 200)
+    )
+  ).sort((left, right) => left - right);
+}
+
+function variantLabel(weight: string, slope: string): string {
+  return `${weight}${slope === "italic" ? " italic" : ""}`;
+}
+
+function variantKeyToStyle(variant: FontVariantKey): [string, string] {
+  if (variant === "boldItalic") {
+    return ["bold", "italic"];
+  }
+  if (variant === "bold") {
+    return ["bold", "roman"];
+  }
+  if (variant === "italic") {
+    return ["regular", "italic"];
+  }
+  return ["regular", "roman"];
+}
+
+function updateNode(node: LayoutNode, nodeId: string, updater: (current: LayoutNode) => LayoutNode): LayoutNode {
+  if (node.id === nodeId) {
+    return updater(node);
+  }
+  if (node.type === "stack" || node.type === "zstack") {
+    return {
+      ...node,
+      children: node.children.map((child) => updateNode(child, nodeId, updater))
+    };
+  }
+  if (node.type === "grid") {
+    return {
+      ...node,
+      children: node.children.map((child) => ({
+        ...child,
+        node: updateNode(child.node, nodeId, updater)
+      }))
+    };
+  }
+  return node;
+}
+
+function removeNodeById(node: LayoutNode, nodeId: string): LayoutNode {
+  if (node.type === "stack" || node.type === "zstack") {
+    return {
+      ...node,
+      children: node.children
+        .filter((child) => child.id !== nodeId)
+        .map((child) => removeNodeById(child, nodeId))
+    };
+  }
+  if (node.type === "grid") {
+    return {
+      ...node,
+      children: node.children
+        .filter((child) => child.node.id !== nodeId)
+        .map((child) => ({
+          ...child,
+          node: removeNodeById(child.node, nodeId)
+        }))
+    };
+  }
+  return node;
+}
+
+function stripCompoundRefs(node: LayoutNode, definitionId: string): LayoutNode | undefined {
+  if (node.type === "compound_ref" && node.definitionId === definitionId) {
+    return undefined;
+  }
+  if (node.type === "stack" || node.type === "zstack") {
+    return {
+      ...node,
+      children: node.children
+        .map((child) => stripCompoundRefs(child, definitionId))
+        .filter((child): child is LayoutNode => Boolean(child))
+    };
+  }
+  if (node.type === "grid") {
+    return {
+      ...node,
+      children: node.children
+        .map((child) => {
+          const stripped = stripCompoundRefs(child.node, definitionId);
+          return stripped ? { ...child, node: stripped } : undefined;
+        })
+        .filter((child): child is typeof node.children[number] => Boolean(child))
+    };
+  }
+  return node;
+}
+
+function clearThemeRefs(node: LayoutNode, themeId: string): LayoutNode {
+  const cleanedStyle = node.style?.themeId === themeId ? { ...node.style, themeId: "inherit" } : node.style;
+  if (node.type === "primitive_instance") {
+    return {
+      ...node,
+      style: cleanedStyle,
+      props: node.props?.themeId === themeId ? { ...node.props, themeId: "inherit" } : node.props
+    };
+  }
+  if (node.type === "stack" || node.type === "zstack") {
+    return {
+      ...node,
+      style: cleanedStyle,
+      children: node.children.map((child) => clearThemeRefs(child, themeId))
+    };
+  }
+  if (node.type === "grid") {
+    return {
+      ...node,
+      style: cleanedStyle,
+      children: node.children.map((child) => ({
+        ...child,
+        node: clearThemeRefs(child.node, themeId)
+      }))
+    };
+  }
+  return { ...node, style: cleanedStyle };
+}
+
+function appendChild(node: LayoutNode, parentId: string, child: LayoutNode): LayoutNode {
+  if (node.id === parentId && (node.type === "stack" || node.type === "zstack")) {
+    return {
+      ...node,
+      children: [...node.children, child]
+    };
+  }
+  if (node.id === parentId && node.type === "grid") {
+    return {
+      ...node,
+      children: [
+        ...node.children,
+        {
+          placement: {
+            row: 0,
+            column: 0
+          },
+          node: child
+        }
+      ]
+    };
+  }
+  if (node.type === "stack" || node.type === "zstack") {
+    return {
+      ...node,
+      children: node.children.map((entry) => appendChild(entry, parentId, child))
+    };
+  }
+  if (node.type === "grid") {
+    return {
+      ...node,
+      children: node.children.map((entry) => ({
+        ...entry,
+        node: appendChild(entry.node, parentId, child)
+      }))
+    };
+  }
+  return node;
+}
+
+function moveLayer(node: LayoutNode, parentId: string, childId: string, delta: -1 | 1): LayoutNode {
+  if (node.id === parentId && (node.type === "stack" || node.type === "zstack")) {
+    const index = node.children.findIndex((entry) => entry.id === childId);
+    if (index < 0) {
+      return node;
+    }
+    const nextIndex = index + delta;
+    if (nextIndex < 0 || nextIndex >= node.children.length) {
+      return node;
+    }
+    const children = [...node.children];
+    const [item] = children.splice(index, 1);
+    children.splice(nextIndex, 0, item);
+    return { ...node, children };
+  }
+  if (node.type === "stack" || node.type === "zstack") {
+    return {
+      ...node,
+      children: node.children.map((entry) => moveLayer(entry, parentId, childId, delta))
+    };
+  }
+  if (node.type === "grid") {
+    return {
+      ...node,
+      children: node.children.map((entry) => ({
+        ...entry,
+        node: moveLayer(entry.node, parentId, childId, delta)
+      }))
+    };
+  }
+  return node;
+}
+
+function defaultTheme(): WidgetTheme {
+  return {
+    id: nextId("theme"),
+    name: "New Theme",
+    border: { visible: true, colorRole: "fg", mergeAdjacentBorders: true },
+    surface: {},
+    text: { title: "fg", body: "fg", value: "fg" },
+    accentRole: "accent",
+    autoFitFontFamily: "px-sans",
+    fontRoles: {
+      tiny: { family: "px-sans", weight: "regular", slope: "roman", size: "tiny", pixelSize: 8 },
+      normal: { family: "px-sans", weight: "regular", slope: "roman", size: "normal", pixelSize: 12 },
+      header: { family: "px-sans", weight: "bold", slope: "roman", size: "header", pixelSize: 18 }
+    },
+    borderTokens: {
+      thin: { thicknessPx: 1, colorRole: "fg" },
+      thick: { thicknessPx: 2, colorRole: "fg" }
+    },
+    textOutline: {
+      enabled: false,
+      colorRole: "bg",
+      thicknessPx: 1
+    }
+  };
+}
+
+function defaultDisplayType(): DisplayType {
+  const profile = DISPLAY_PROFILES[0];
+  return {
+    id: nextId("display-type"),
+    name: "New Display Type",
+    width: profile.width,
+    height: profile.height,
+    palette: profile.palette,
+    rotation: profile.rotation,
+    safeMarginPx: profile.safeMarginPx,
+    gridUnitPx: profile.gridUnitPx
+  };
+}
+
+function defaultCompoundWidget(): WidgetDefinition {
+  return {
+    id: nextId("widget"),
+    name: "New Compound Widget",
+    kind: "compound",
+    inputSchema: [],
+    rootNode: defaultRootNode("stack")
+  };
+}
+
+function defaultLayout(displayTypeId: string): LayoutDefinition {
+  return {
+    id: nextId("layout"),
+    name: "New Layout",
+    kind: "fullscreen",
+    displayTypeId,
+    rootNode: defaultRootNode("zstack")
+  };
+}
+
+function defaultVirtualDisplay(displayTypeId: string): ManagedDisplay {
+  return {
+    id: nextId("display"),
+    name: "Virtual Display",
+    providerKind: "virtual",
+    providerRef: nextId("virtual"),
+    displayTypeId,
+    managed: true,
+    virtual: true,
+    metadata: {}
+  };
+}
+
+function defaultAssignment(displayId: string, layoutId?: string): DeviceAssignment {
+  return {
+    id: nextId("assignment"),
+    displayId,
+    defaultFullscreenLayoutId: layoutId,
+    defaultThemeId: "classic-outline",
+    fullscreenRules: [],
+    popupRules: []
+  };
+}
+
+function defaultRule(scope: Rule["scope"], layoutId = ""): Rule {
+  return {
+    id: nextId("rule"),
+    scope,
+    priority: 100,
+    condition: { kind: "entity_state", entityId: "", equals: "on" },
+    action:
+      scope === "popup_activation"
+        ? { type: "activate_popup_layout", layoutId }
+        : { type: "activate_fullscreen_layout", layoutId }
+  };
+}
+
+export class EpPaperEditorApp extends LitElement {
+  static properties = {
+    projectSummaries: { state: true },
+    project: { state: true },
+    activePage: { state: true },
+    selectedDisplayId: { state: true },
+    selectedDisplayTypeId: { state: true },
+    selectedWidgetDefinitionId: { state: true },
+    selectedLayoutId: { state: true },
+    selectedNodeId: { state: true },
+    createChildTargetNodeId: { state: true },
+    selectedThemeId: { state: true },
+    selectedPreviewThemeId: { state: true },
+    selectedAssignmentId: { state: true },
+    discoveredDisplays: { state: true },
+    icons: { state: true },
+    fonts: { state: true },
+    entityCatalog: { state: true },
+    previewRgba: { state: true },
+    previewHash: { state: true },
+    previewWidth: { state: true },
+    previewHeight: { state: true },
+    previewDataSource: { state: true },
+    previewMessage: { state: true },
+    scale: { state: true },
+    fontSpecimens: { state: true },
+    fontSpecimenSampleText: { state: true },
+    fontSpecimenError: { state: true },
+    showAllFontSpecimenSizes: { state: true },
+    confirmDeleteFontId: { state: true },
+    previewViewportWidth: { state: true },
+    previewViewportHeight: { state: true },
+    homeAssistantSettings: { state: true },
+    homeAssistantTokenDraft: { state: true },
+    replaceHomeAssistantToken: { state: true },
+    homeAssistantStatus: { state: true },
+    openEpaperLinkAccessPointSettings: { state: true },
+    openEpaperLinkAccessPointStatus: { state: true },
+    uploadStatusMessage: { state: true },
+    selectedPreviewTagMac: { state: true },
+    dafontEntries: { state: true },
+    dafontPage: { state: true },
+    dafontTotalPages: { state: true },
+    dafontError: { state: true },
+    dafontLoading: { state: true },
+    selectedDaFontId: { state: true },
+    dafontImportingId: { state: true },
+    dafontImportMessage: { state: true },
+    layoutInspection: { state: true },
+    structureHoveredNodeId: { state: true },
+    structureDraggedNodeId: { state: true },
+    structureDropIntent: { state: true }
+  };
+
+  static styles = css`
+    :host {
+      display: block;
+      min-height: 100vh;
+      color: #111;
+    }
+    .shell {
+      display: grid;
+      grid-template-columns: 220px minmax(240px, 320px) minmax(420px, 1fr) minmax(420px, 1.2fr);
+      min-height: 100vh;
+    }
+    nav,
+    .panel {
+      border-right: 2px solid #111;
+      background: #f7f1e5;
+      box-sizing: border-box;
+    }
+    nav {
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+      align-content: start;
+    }
+    .panel {
+      padding: 12px;
+      overflow: auto;
+    }
+    .detail {
+      background: #fbf7ef;
+    }
+    .preview {
+      background: #f4efe4;
+      border-right: none;
+      display: flex;
+      flex-direction: column;
+    }
+    h1, h2, h3 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+    button {
+      border: 2px solid #111;
+      background: #fff;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    button.primary,
+    button.active {
+      background: #111;
+      color: #fff;
+    }
+    .nav-button,
+    .item-button {
+      width: 100%;
+      text-align: left;
+    }
+    .section {
+      margin-bottom: 16px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+    input,
+    select,
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      border: 2px solid #111;
+      padding: 6px;
+      background: #fff;
+    }
+    textarea {
+      min-height: 96px;
+      resize: vertical;
+    }
+    .preview-stage {
+      border: 2px solid #111;
+      background: #efe7d4;
+      image-rendering: pixelated;
+      display: inline-block;
+      max-width: 100%;
+      max-height: 100%;
+    }
+    .preview-body {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      overflow: auto;
+      padding-bottom: 12px;
+    }
+    canvas {
+      display: block;
+      image-rendering: pixelated;
+    }
+    .structure-stage {
+      position: relative;
+      overflow: hidden;
+      touch-action: none;
+      cursor: crosshair;
+      width: 100%;
+      min-height: 220px;
+      border: 2px solid #111;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.6), rgba(239,231,212,0.9)),
+        repeating-linear-gradient(0deg, transparent, transparent 23px, rgba(17,17,17,0.04) 24px),
+        repeating-linear-gradient(90deg, transparent, transparent 23px, rgba(17,17,17,0.04) 24px);
+    }
+    .structure-overlay {
+      position: absolute;
+      inset: 0;
+    }
+    .structure-node {
+      position: absolute;
+      box-sizing: border-box;
+      border: 1px dashed rgba(17, 17, 17, 0.45);
+      background: rgba(255, 255, 255, 0.08);
+      color: #111;
+      overflow: hidden;
+    }
+    .structure-node.container {
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .structure-node.hovered {
+      border-color: #c98912;
+      background: rgba(216, 188, 92, 0.14);
+    }
+    .structure-node.selected {
+      border: 2px solid #111;
+      background: rgba(17, 17, 17, 0.08);
+    }
+    .structure-node.drop-target {
+      border-color: #1f6f3a;
+      background: rgba(31, 111, 58, 0.12);
+    }
+    .structure-label {
+      position: absolute;
+      left: 2px;
+      top: 2px;
+      font-size: 11px;
+      background: rgba(247, 241, 229, 0.92);
+      border: 1px solid rgba(17, 17, 17, 0.25);
+      padding: 1px 4px;
+      max-width: calc(100% - 4px);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .editor-structure-preview {
+      margin-bottom: 12px;
+      border: 2px solid #111;
+      background: #fff;
+      padding: 10px;
+    }
+    .structure-cell {
+      position: absolute;
+      box-sizing: border-box;
+      border: 1px dotted rgba(17, 17, 17, 0.22);
+      background: transparent;
+    }
+    .structure-cell.drop-target {
+      border-color: #1f6f3a;
+      background: rgba(31, 111, 58, 0.12);
+    }
+    .font-specimen {
+      max-width: 100%;
+      height: auto;
+    }
+    .font-size-grid {
+      display: grid;
+      gap: 8px;
+    }
+    .font-size-row {
+      border: 1px solid #111;
+      background: #fdfbf6;
+      padding: 8px;
+    }
+    .font-size-row-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .font-variant-grid {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+    .font-variant-card {
+      border: 1px solid #111;
+      background: #fff;
+      padding: 6px;
+    }
+    .font-variant-title {
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    details {
+      border: 2px solid #111;
+      background: #fff;
+      padding: 8px;
+      margin-bottom: 8px;
+    }
+    summary {
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .muted {
+      color: #555;
+      font-size: 12px;
+    }
+    .node-children {
+      margin-left: 16px;
+      border-left: 2px solid #ddd;
+      padding-left: 8px;
+    }
+    .editor-split {
+      display: grid;
+      grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+    }
+    .node-tree {
+      border: 2px solid #111;
+      background: #fff;
+      padding: 8px;
+    }
+    .tree-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .tree-node {
+      width: 100%;
+      text-align: left;
+    }
+    .tree-drop {
+      padding: 4px 6px;
+      min-width: 58px;
+    }
+    .inspector-panel {
+      border: 2px solid #111;
+      background: #fff;
+      padding: 12px;
+    }
+    .danger {
+      border-color: #7f1d1d;
+      color: #7f1d1d;
+    }
+    .empty-state {
+      border: 2px dashed #111;
+      background: #fff;
+      padding: 12px;
+    }
+    .font-preview-card {
+      margin-bottom: 12px;
+    }
+    .dafont-card {
+      border: 2px solid #111;
+      background: #fff;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+    .dafont-preview {
+      max-width: 100%;
+      border: 2px solid #111;
+      background: #fff;
+      display: block;
+    }
+    .pill {
+      display: inline-block;
+      border: 1px solid #111;
+      padding: 1px 6px;
+      font-size: 12px;
+      background: #fff;
+    }
+    .status-ok {
+      color: #1f6f3a;
+      font-weight: 600;
+    }
+    .status-error {
+      color: #9d1f15;
+      font-weight: 600;
+    }
+  `;
+
+  private previewResizeObserver: ResizeObserver | null = null;
+  private draggedNodeId = "";
+
+  declare private projectSummaries: Array<Pick<Project, "id" | "name" | "version">>;
+  declare private project: Project;
+  declare private activePage: PageId;
+  declare private selectedDisplayId: string;
+  declare private selectedDisplayTypeId: string;
+  declare private selectedWidgetDefinitionId: string;
+  declare private selectedLayoutId: string;
+  declare private selectedNodeId: string;
+  declare private createChildTargetNodeId: string;
+  declare private selectedThemeId: string;
+  declare private selectedPreviewThemeId: string;
+  declare private selectedAssignmentId: string;
+  declare private discoveredDisplays: DiscoveredDisplayCandidate[];
+  declare private icons: IconDefinition[];
+  declare private fonts: FontOption[];
+  declare private entityCatalog: Array<{ entityId: string; friendlyName: string; domain: string; unit?: string }>;
+  declare private previewRgba: Uint8ClampedArray;
+  declare private previewHash: string;
+  declare private previewWidth: number;
+  declare private previewHeight: number;
+  declare private previewDataSource: PreviewDataSource;
+  declare private previewMessage: string;
+  declare private scale: number;
+  declare private fontSpecimens: FontSpecimenFamilyView[];
+  declare private fontSpecimenSampleText: string;
+  declare private fontSpecimenError: string;
+  declare private showAllFontSpecimenSizes: boolean;
+  declare private fontSpecimenLoading: boolean;
+  declare private selectedFontPreviewFamilyId: string;
+  private fontSpecimenRequestId = 0;
+  declare private confirmDeleteFontId: string;
+  declare private previewViewportWidth: number;
+  declare private previewViewportHeight: number;
+  declare private homeAssistantSettings: HomeAssistantSettingsResponse;
+  declare private homeAssistantTokenDraft: string;
+  declare private replaceHomeAssistantToken: boolean;
+  declare private homeAssistantStatus: HomeAssistantConnectionStatus | null;
+  declare private openEpaperLinkAccessPointSettings: OpenEpaperLinkAccessPointSettingsResponse;
+  declare private openEpaperLinkAccessPointStatus: OpenEpaperLinkAccessPointStatus | null;
+  declare private uploadStatusMessage: string;
+  declare private selectedPreviewTagMac: string;
+  declare private dafontEntries: DaFontEntry[];
+  declare private dafontPage: number;
+  declare private dafontTotalPages: number;
+  declare private dafontError: string;
+  declare private dafontLoading: boolean;
+  declare private selectedDaFontId: string;
+  declare private dafontImportingId: string;
+  declare private dafontImportMessage: string;
+  declare private layoutInspection: LayoutInspectionPreviewResponse | null;
+  declare private structureHoveredNodeId: string;
+  declare private structureDraggedNodeId: string;
+  declare private structureDropIntent: StructureDropIntent | null;
+
+  constructor() {
+    super();
+    this.projectSummaries = [];
+    this.project = cloneProject(SAMPLE_PROJECT);
+    this.activePage = routeToPage(window.location.hash);
+    this.selectedDisplayId = "";
+    this.selectedDisplayTypeId = "";
+    this.selectedWidgetDefinitionId = "";
+    this.selectedLayoutId = "";
+    this.selectedNodeId = "";
+    this.createChildTargetNodeId = "";
+    this.selectedThemeId = "";
+    this.selectedPreviewThemeId = "";
+    this.selectedAssignmentId = "";
+    this.discoveredDisplays = [];
+    this.icons = ICON_DEFINITIONS;
+    this.fonts = [];
+    this.entityCatalog = [];
+    this.previewRgba = new Uint8ClampedArray();
+    this.previewHash = "";
+    this.previewWidth = 0;
+    this.previewHeight = 0;
+    this.previewDataSource = "live";
+    this.previewMessage = "";
+    this.scale = 1;
+    this.fontSpecimens = [];
+    this.fontSpecimenSampleText = "Ag 09:45 21.5C";
+    this.fontSpecimenError = "";
+    this.showAllFontSpecimenSizes = false;
+    this.fontSpecimenLoading = false;
+    this.selectedFontPreviewFamilyId = "";
+    this.confirmDeleteFontId = "";
+    this.previewViewportWidth = 0;
+    this.previewViewportHeight = 0;
+    this.homeAssistantSettings = {
+      host: "",
+      token: "",
+      hasToken: false,
+      mode: "custom",
+      useSupervisorProxy: false,
+      allowInsecureTls: false
+    };
+    this.homeAssistantTokenDraft = "";
+    this.replaceHomeAssistantToken = false;
+    this.homeAssistantStatus = null;
+    this.openEpaperLinkAccessPointSettings = { url: "" };
+    this.openEpaperLinkAccessPointStatus = null;
+    this.uploadStatusMessage = "";
+    this.selectedPreviewTagMac = "";
+    this.dafontEntries = [];
+    this.dafontPage = 1;
+    this.dafontTotalPages = 1;
+    this.dafontError = "";
+    this.dafontLoading = false;
+    this.selectedDaFontId = "";
+    this.dafontImportingId = "";
+    this.dafontImportMessage = "";
+    this.layoutInspection = null;
+    this.structureHoveredNodeId = "";
+    this.structureDraggedNodeId = "";
+    this.structureDropIntent = null;
+  }
+
+  connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener("hashchange", this.onHashChange);
+    void this.initialize();
+  }
+
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    window.removeEventListener("hashchange", this.onHashChange);
+    this.previewResizeObserver?.disconnect();
+    this.previewResizeObserver = null;
+  }
+
+  private onHashChange = (): void => {
+    this.activePage = routeToPage(window.location.hash);
+    if (this.activePage === "config") {
+      void this.refreshFontSpecimens();
+    }
+    if (this.activePage === "dafont") {
+      void this.loadDaFontPage(this.dafontPage);
+    }
+    void this.refreshPreview();
+  };
+
+  private async initialize(): Promise<void> {
+    try {
+      const [projectsResult, iconsResult, fontsResult, entitiesResult, settingsResult, accessPointSettingsResult] = await Promise.allSettled([
+        fetchProjects(),
+        fetchIcons(),
+        fetchFonts(),
+        fetchHomeAssistantEntities(),
+        fetchHomeAssistantSettings(),
+        fetchOpenEpaperLinkAccessPointSettings()
+      ]);
+      const projects = projectsResult.status === "fulfilled" ? projectsResult.value : [];
+      this.projectSummaries = projects;
+      this.icons = iconsResult.status === "fulfilled" ? iconsResult.value : ICON_DEFINITIONS;
+      this.fonts = fontsResult.status === "fulfilled" ? fontsResult.value : [];
+      this.entityCatalog = entitiesResult.status === "fulfilled" ? entitiesResult.value : [];
+      this.homeAssistantSettings = settingsResult.status === "fulfilled"
+        ? settingsResult.value
+        : {
+            host: "",
+            token: "",
+            hasToken: false,
+            mode: "custom",
+            useSupervisorProxy: false,
+            allowInsecureTls: false
+          };
+      this.openEpaperLinkAccessPointSettings = accessPointSettingsResult.status === "fulfilled"
+        ? accessPointSettingsResult.value
+        : { url: "" };
+      this.homeAssistantTokenDraft = maskToken(this.homeAssistantSettings.hasToken, "");
+      if (projects[0]) {
+        this.project = cloneProject(await fetchProject(projects[0].id));
+      }
+    } catch {
+      this.project = cloneProject(SAMPLE_PROJECT);
+    }
+    this.syncSelections();
+    await this.discoverDisplays().catch(() => undefined);
+    await this.refreshPreview();
+    if (this.activePage === "config") {
+      this.ensureSelectedFontPreviewFamily();
+      void this.refreshFontSpecimens();
+    }
+    if (this.activePage === "dafont") {
+      await this.loadDaFontPage(this.dafontPage);
+    }
+  }
+
+  private syncSelections(): void {
+    this.selectedDisplayId = this.project.devices?.some((entry) => entry.id === this.selectedDisplayId)
+      ? this.selectedDisplayId
+      : this.project.devices?.[0]?.id || "";
+    this.selectedDisplayTypeId = this.project.displayTypes?.some((entry) => entry.id === this.selectedDisplayTypeId)
+      ? this.selectedDisplayTypeId
+      : this.project.displayTypes?.[0]?.id || "";
+    this.selectedWidgetDefinitionId = this.project.widgetDefinitions?.some((entry) => entry.id === this.selectedWidgetDefinitionId)
+      ? this.selectedWidgetDefinitionId
+      : this.project.widgetDefinitions?.find((entry) => entry.kind === "compound")?.id || "";
+    this.selectedLayoutId = this.project.layoutDefinitions?.some((entry) => entry.id === this.selectedLayoutId)
+      ? this.selectedLayoutId
+      : this.project.layoutDefinitions?.[0]?.id || "";
+    this.selectedThemeId = this.project.themes?.some((entry) => entry.id === this.selectedThemeId)
+      ? this.selectedThemeId
+      : this.project.themes?.[0]?.id || "";
+    this.selectedPreviewThemeId = this.project.themes?.some((entry) => entry.id === this.selectedPreviewThemeId)
+      ? this.selectedPreviewThemeId
+      : this.project.themes?.[0]?.id || "";
+    this.selectedAssignmentId = this.project.deviceAssignments?.some((entry) => entry.id === this.selectedAssignmentId)
+      ? this.selectedAssignmentId
+      : this.project.deviceAssignments?.[0]?.id || "";
+    const currentRoot = this.editorRootNode;
+    this.selectedNodeId = currentRoot && getNodeById(currentRoot, this.selectedNodeId)
+      ? this.selectedNodeId
+      : currentRoot?.id ?? "";
+  }
+
+  updated(): void {
+    const previewHost = this.renderRoot.querySelector<HTMLElement>(".preview-body");
+    if (previewHost && typeof ResizeObserver !== "undefined" && !this.previewResizeObserver) {
+      this.previewResizeObserver = new ResizeObserver((entries) => {
+        const entry = entries[0];
+        if (!entry) {
+          return;
+        }
+        this.previewViewportWidth = Math.floor(entry.contentRect.width);
+        this.previewViewportHeight = Math.floor(entry.contentRect.height);
+      });
+      this.previewResizeObserver.observe(previewHost);
+      this.previewViewportWidth = previewHost.clientWidth;
+      this.previewViewportHeight = previewHost.clientHeight;
+    }
+
+    const canvases = Array.from(this.renderRoot.querySelectorAll<HTMLCanvasElement>("canvas.preview-canvas"));
+    if (canvases.length && this.previewRgba.length) {
+      const imageData = new ImageData(new Uint8ClampedArray(this.tonedPreviewRgba()), this.previewWidth, this.previewHeight);
+      for (const canvas of canvases) {
+        const context = canvas.getContext("2d");
+        if (context) {
+          context.putImageData(imageData, 0, 0);
+        }
+      }
+    }
+
+  }
+
+  private replaceProject(project: Project): void {
+    this.project = cloneProject(project);
+    this.syncSelections();
+    this.ensureSelectedFontPreviewFamily();
+    this.structureDraggedNodeId = "";
+    this.structureDropIntent = null;
+    this.structureHoveredNodeId = "";
+    void this.refreshPreview();
+    if (this.activePage === "config") {
+      void this.refreshFontSpecimens();
+    }
+  }
+
+  private async persistProject(): Promise<void> {
+    this.project = cloneProject(await saveProject(this.project));
+    this.projectSummaries = await fetchProjects();
+    this.syncSelections();
+    await this.refreshPreview();
+  }
+
+  private async refreshPreview(): Promise<void> {
+    const [preview, inspection] = await Promise.all([
+      this.fetchPagePreview().catch(() => undefined),
+      this.fetchPageInspection().catch(() => undefined)
+    ]);
+    if (!preview) {
+      this.previewRgba = new Uint8ClampedArray();
+      this.previewHash = "";
+      this.previewMessage = "";
+      this.previewWidth = 0;
+      this.previewHeight = 0;
+      this.layoutInspection = null;
+      this.structureHoveredNodeId = "";
+      this.structureDraggedNodeId = "";
+      this.structureDropIntent = null;
+      return;
+    }
+    this.previewRgba = new Uint8ClampedArray(preview.rgba);
+    this.previewHash = preview.hash;
+    this.previewMessage = preview.dataSourceMessage ?? "";
+    this.previewWidth = preview.width;
+    this.previewHeight = preview.height;
+    this.layoutInspection = inspection ?? null;
+    if (this.selectedNodeId && !this.currentInspectionNodeById(this.selectedNodeId)) {
+      this.structureHoveredNodeId = "";
+      this.structureDropIntent = null;
+    }
+  }
+
+  private ensureSelectedFontPreviewFamily(): void {
+    const userFonts = this.fonts.filter((font) => font.source === "user");
+    if (userFonts.some((font) => font.id === this.selectedFontPreviewFamilyId)) {
+      return;
+    }
+    this.selectedFontPreviewFamilyId = userFonts[0]?.id ?? "";
+  }
+
+  private async refreshFontSpecimens(): Promise<void> {
+    const displayTypeId = this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id;
+    if (!displayTypeId) {
+      this.fontSpecimens = [];
+      this.fontSpecimenError = "No display type selected.";
+      return;
+    }
+    this.ensureSelectedFontPreviewFamily();
+    if (!this.selectedFontPreviewFamilyId) {
+      this.fontSpecimens = [];
+      this.fontSpecimenError = "No imported fonts yet.";
+      return;
+    }
+    const requestId = ++this.fontSpecimenRequestId;
+    this.fontSpecimenLoading = true;
+    try {
+      const response = await fetchFontSpecimens(
+        this.project.id,
+        displayTypeId,
+        this.fontSpecimenSampleText,
+        this.project,
+        4,
+        36,
+        this.selectedFontPreviewFamilyId,
+        this.showAllFontSpecimenSizes
+      );
+      if (requestId !== this.fontSpecimenRequestId) {
+        return;
+      }
+      this.fontSpecimens = response.families ?? [];
+      this.fontSpecimenError = this.fontSpecimens.length ? "" : "No font variants available for preview.";
+    } catch (error) {
+      if (requestId !== this.fontSpecimenRequestId) {
+        return;
+      }
+      this.fontSpecimens = [];
+      this.fontSpecimenError = error instanceof Error ? error.message : "Font preview failed.";
+    } finally {
+      if (requestId === this.fontSpecimenRequestId) {
+        this.fontSpecimenLoading = false;
+      }
+    }
+  }
+
+  private async loadDaFontPage(page = 1): Promise<void> {
+    this.dafontLoading = true;
+    this.dafontError = "";
+    try {
+      const response = await fetchDaFontPage(page);
+      this.dafontEntries = response.entries ?? [];
+      this.dafontPage = response.page;
+      this.dafontTotalPages = response.totalPages;
+      this.selectedDaFontId = this.dafontEntries.some((entry) => entry.id === this.selectedDaFontId)
+        ? this.selectedDaFontId
+        : this.dafontEntries[0]?.id ?? "";
+      this.dafontImportMessage = "";
+    } catch (error) {
+      this.dafontEntries = [];
+      this.dafontError = error instanceof Error ? error.message : "DaFont load failed.";
+    } finally {
+      this.dafontLoading = false;
+    }
+  }
+
+  private async importSelectedDaFont(entry: DaFontEntry): Promise<void> {
+    this.dafontImportingId = entry.id;
+    this.dafontImportMessage = "";
+    try {
+      await importDaFontFontFromApi(entry);
+      this.fonts = await fetchFonts();
+      this.ensureSelectedFontPreviewFamily();
+      this.dafontImportMessage = `Imported ${entry.name}`;
+      if (this.activePage === "config") {
+        void this.refreshFontSpecimens();
+      }
+    } catch (error) {
+      this.dafontImportMessage = error instanceof Error ? error.message : "DaFont import failed.";
+    } finally {
+      this.dafontImportingId = "";
+    }
+  }
+
+  private projectWithPreviewThemeForLayout(layoutId: string): Project {
+    const previewThemeId = this.effectivePreviewThemeId;
+    if (!previewThemeId) {
+      return this.project;
+    }
+    return cloneProject({
+      ...this.project,
+      layoutDefinitions: (this.project.layoutDefinitions ?? []).map((entry) => (
+        entry.id === layoutId && entry.rootNode
+          ? {
+              ...entry,
+              rootNode: {
+                ...entry.rootNode,
+                style: { ...entry.rootNode.style, themeId: previewThemeId }
+              }
+            }
+          : entry
+      ))
+    });
+  }
+
+  private widgetPreviewProject(definition: WidgetDefinition, displayTypeId: string): Project {
+    const tempLayoutId = "__widget-preview-layout";
+    return cloneProject({
+      ...this.project,
+      layoutDefinitions: [
+        ...(this.project.layoutDefinitions ?? []).filter((entry) => entry.id !== tempLayoutId),
+        {
+          id: tempLayoutId,
+          name: "Widget Preview",
+          kind: "fullscreen",
+          displayTypeId,
+          rootNode: {
+            id: "__widget-preview-ref",
+            type: "compound_ref",
+            definitionId: definition.id,
+            width: defaultSizeSpec("fill"),
+            height: defaultSizeSpec("fill"),
+            style: { paddingPx: 0, borderToken: "none", themeId: this.effectivePreviewThemeId },
+            inputBindings: {},
+            inputValues: Object.fromEntries(
+              (definition.inputSchema ?? []).map((input) => [
+                input.id,
+                input.previewValue ?? input.defaultValue ?? (input.valueType === "boolean" ? false : input.valueType === "number" ? 0 : "")
+              ])
+            )
+          }
+        }
+      ]
+    });
+  }
+
+  private async fetchPagePreview(): Promise<PreviewResponse | undefined> {
+    if (this.activePage === "displays" || this.activePage === "assignments") {
+      if (!this.selectedDisplayId) {
+        return undefined;
+      }
+      return await fetchDevicePreview(this.project.id, this.selectedDisplayId, this.previewDataSource, this.project);
+    }
+    if (this.activePage === "layouts") {
+      if (!this.selectedLayoutId) {
+        return undefined;
+      }
+      return await fetchLayoutPreview(
+        this.project.id,
+        this.selectedLayoutId,
+        undefined,
+        this.previewDataSource,
+        this.projectWithPreviewThemeForLayout(this.selectedLayoutId)
+      );
+    }
+    if (this.activePage === "widgets") {
+      const definition = this.selectedWidgetDefinition;
+      if (!definition?.rootNode) {
+        return undefined;
+      }
+      const displayTypeId = this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id;
+      if (!displayTypeId) {
+        return undefined;
+      }
+      const tempLayoutId = "__widget-preview-layout";
+      const tempProject = this.widgetPreviewProject(definition, displayTypeId);
+      return await fetchLayoutPreview(this.project.id, tempLayoutId, undefined, this.previewDataSource, tempProject);
+    }
+    if (this.activePage === "themes") {
+      const theme = this.selectedTheme;
+      const displayTypeId = this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id;
+      if (!theme || !displayTypeId) {
+        return undefined;
+      }
+      return await fetchThemePreview(this.project.id, theme.id, displayTypeId, this.project);
+    }
+    return undefined;
+  }
+
+  private async fetchPageInspection(): Promise<LayoutInspectionPreviewResponse | undefined> {
+    if (this.activePage !== "widgets" && this.activePage !== "layouts") {
+      return undefined;
+    }
+    if (this.activePage === "layouts") {
+      if (!this.selectedLayoutId) {
+        return undefined;
+      }
+      return await fetchLayoutInspectionPreview(
+        this.project.id,
+        this.selectedLayoutId,
+        undefined,
+        this.previewDataSource,
+        this.projectWithPreviewThemeForLayout(this.selectedLayoutId),
+        false
+      );
+    }
+    const definition = this.selectedWidgetDefinition;
+    if (!definition?.rootNode) {
+      return undefined;
+    }
+    const displayTypeId = this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id;
+    if (!displayTypeId) {
+      return undefined;
+    }
+    const tempLayoutId = "__widget-preview-layout";
+    const tempProject = this.widgetPreviewProject(definition, displayTypeId);
+    const inspection = await fetchLayoutInspectionPreview(this.project.id, tempLayoutId, undefined, this.previewDataSource, tempProject, true);
+    if (inspection.root?.nodeId === "__widget-preview-ref" && inspection.root.children[0]) {
+      return {
+        ...inspection,
+        root: inspection.root.children[0]
+      };
+    }
+    return inspection;
+  }
+
+  private navigate(page: PageId): void {
+    window.location.hash = pageToRoute(page);
+  }
+
+  private removeDisplay(displayId: string): void {
+    this.replaceProject({
+      ...this.project,
+      devices: (this.project.devices ?? []).filter((entry) => entry.id !== displayId),
+      deviceAssignments: (this.project.deviceAssignments ?? []).filter((entry) => entry.displayId !== displayId)
+    });
+    if (this.selectedDisplayId === displayId) {
+      this.selectedDisplayId = this.project.devices?.find((entry) => entry.id !== displayId)?.id ?? "";
+    }
+  }
+
+  private removeDisplayType(displayTypeId: string): void {
+    const removedDeviceIds = new Set((this.project.devices ?? []).filter((entry) => entry.displayTypeId === displayTypeId).map((entry) => entry.id));
+    this.replaceProject({
+      ...this.project,
+      displayTypes: (this.project.displayTypes ?? []).filter((entry) => entry.id !== displayTypeId),
+      devices: (this.project.devices ?? []).filter((entry) => entry.displayTypeId !== displayTypeId),
+      layoutDefinitions: (this.project.layoutDefinitions ?? []).filter((entry) => entry.displayTypeId !== displayTypeId),
+      deviceAssignments: (this.project.deviceAssignments ?? []).filter((entry) => !removedDeviceIds.has(entry.displayId))
+    });
+    if (this.selectedDisplayTypeId === displayTypeId) {
+      this.selectedDisplayTypeId = this.project.displayTypes?.find((entry) => entry.id !== displayTypeId)?.id ?? "";
+    }
+  }
+
+  private removeWidgetDefinition(definitionId: string): void {
+    this.replaceProject({
+      ...this.project,
+      widgetDefinitions: (this.project.widgetDefinitions ?? [])
+        .filter((entry) => entry.id !== definitionId)
+        .map((entry) => ({
+          ...entry,
+          rootNode: entry.rootNode ? stripCompoundRefs(entry.rootNode, definitionId) ?? emptyStackRoot() : entry.rootNode
+        })),
+      layoutDefinitions: (this.project.layoutDefinitions ?? []).map((layout) => ({
+        ...layout,
+        rootNode: layout.rootNode ? stripCompoundRefs(layout.rootNode, definitionId) ?? emptyStackRoot() : layout.rootNode
+      }))
+    });
+  }
+
+  private removeLayout(layoutId: string): void {
+    this.replaceProject({
+      ...this.project,
+      layoutDefinitions: (this.project.layoutDefinitions ?? []).filter((entry) => entry.id !== layoutId),
+      deviceAssignments: (this.project.deviceAssignments ?? []).map((assignment) => ({
+        ...assignment,
+        defaultFullscreenLayoutId: assignment.defaultFullscreenLayoutId === layoutId ? undefined : assignment.defaultFullscreenLayoutId,
+        fullscreenRules: assignment.fullscreenRules.filter((rule) => rule.action.type !== "activate_fullscreen_layout" || rule.action.layoutId !== layoutId),
+        popupRules: assignment.popupRules.filter((rule) => rule.action.type !== "activate_popup_layout" || rule.action.layoutId !== layoutId)
+      }))
+    });
+  }
+
+  private removeTheme(themeId: string): void {
+    const remainingThemes = this.project.themes.filter((entry) => entry.id !== themeId);
+    this.replaceProject({
+      ...this.project,
+      themes: remainingThemes.length ? remainingThemes : [defaultTheme()],
+      widgetDefinitions: (this.project.widgetDefinitions ?? []).map((definition) => ({
+        ...definition,
+        rootNode: definition.rootNode ? clearThemeRefs(definition.rootNode, themeId) : definition.rootNode
+      })),
+      layoutDefinitions: (this.project.layoutDefinitions ?? []).map((layout) => ({
+        ...layout,
+        rootNode: layout.rootNode ? clearThemeRefs(layout.rootNode, themeId) : layout.rootNode
+      })),
+      deviceAssignments: (this.project.deviceAssignments ?? []).map((assignment) => ({
+        ...assignment,
+        defaultThemeId: assignment.defaultThemeId === themeId ? undefined : assignment.defaultThemeId
+      }))
+    });
+  }
+
+  private removeAssignment(assignmentId: string): void {
+    this.replaceProject({
+      ...this.project,
+      deviceAssignments: (this.project.deviceAssignments ?? []).filter((entry) => entry.id !== assignmentId)
+    });
+  }
+
+  private async discoverDisplays(): Promise<void> {
+    this.discoveredDisplays = await fetchDiscoveredDisplays(this.project.id);
+  }
+
+  private addDiscoveredDisplay(candidate: DiscoveredDisplayCandidate): void {
+    const existingSuggestedDisplayTypeId =
+      candidate.suggestedDisplayTypeId && this.project.displayTypes?.some((entry) => entry.id === candidate.suggestedDisplayTypeId)
+        ? candidate.suggestedDisplayTypeId
+        : undefined;
+    const createdDisplayType =
+      !existingSuggestedDisplayTypeId && candidate.suggestedDisplayType
+        ? candidate.suggestedDisplayType
+        : undefined;
+    const displayTypeId =
+      existingSuggestedDisplayTypeId ??
+      createdDisplayType?.id ??
+      this.project.displayTypes?.[0]?.id;
+    if (!displayTypeId) {
+      return;
+    }
+    const device: ManagedDisplay = {
+      id: nextId("display"),
+      name: candidate.name,
+      providerKind: candidate.providerKind,
+      providerRef: candidate.providerRef,
+      displayTypeId,
+      managed: true,
+      virtual: false,
+      metadata: candidate.metadata
+    };
+    this.replaceProject({
+      ...this.project,
+      displayTypes: createdDisplayType
+        ? [...(this.project.displayTypes ?? []), createdDisplayType]
+        : this.project.displayTypes,
+      devices: [...(this.project.devices ?? []), device],
+      deviceAssignments: [
+        ...(this.project.deviceAssignments ?? []),
+        defaultAssignment(device.id, this.project.layoutDefinitions?.find((entry) => entry.displayTypeId === displayTypeId && entry.kind === "fullscreen")?.id)
+      ]
+    });
+    this.selectedDisplayId = device.id;
+  }
+
+  private addVirtualDisplay(): void {
+    const displayTypeId = this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id;
+    if (!displayTypeId) {
+      return;
+    }
+    const device = defaultVirtualDisplay(displayTypeId);
+    this.replaceProject({
+      ...this.project,
+      devices: [...(this.project.devices ?? []), device],
+      deviceAssignments: [...(this.project.deviceAssignments ?? []), defaultAssignment(device.id, this.project.layoutDefinitions?.find((entry) => entry.displayTypeId === displayTypeId && entry.kind === "fullscreen")?.id)]
+    });
+    this.selectedDisplayId = device.id;
+  }
+
+  private updateDisplay(id: string, patch: Partial<ManagedDisplay>): void {
+    this.replaceProject({
+      ...this.project,
+      devices: (this.project.devices ?? []).map((entry) => (entry.id === id ? { ...entry, ...patch } : entry))
+    });
+  }
+
+  private addDisplayType(): void {
+    const displayType = defaultDisplayType();
+    this.replaceProject({
+      ...this.project,
+      displayTypes: [...(this.project.displayTypes ?? []), displayType]
+    });
+    this.selectedDisplayTypeId = displayType.id;
+  }
+
+  private updateDisplayType(id: string, patch: Partial<DisplayType>): void {
+    this.replaceProject({
+      ...this.project,
+      displayTypes: (this.project.displayTypes ?? []).map((entry) => (entry.id === id ? { ...entry, ...patch } : entry))
+    });
+  }
+
+  private addCompoundWidget(): void {
+    const definition = defaultCompoundWidget();
+    this.replaceProject({
+      ...this.project,
+      widgetDefinitions: [...(this.project.widgetDefinitions ?? []), definition]
+    });
+    this.selectedWidgetDefinitionId = definition.id;
+  }
+
+  private updateWidgetDefinition(id: string, updater: (definition: WidgetDefinition) => WidgetDefinition): void {
+    this.replaceProject({
+      ...this.project,
+      widgetDefinitions: (this.project.widgetDefinitions ?? []).map((entry) => (entry.id === id ? updater(entry) : entry))
+    });
+  }
+
+  private addLayout(): void {
+    const displayTypeId = this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id;
+    if (!displayTypeId) {
+      return;
+    }
+    const layout = defaultLayout(displayTypeId);
+    this.replaceProject({
+      ...this.project,
+      layoutDefinitions: [...(this.project.layoutDefinitions ?? []), layout]
+    });
+    this.selectedLayoutId = layout.id;
+  }
+
+  private updateLayout(id: string, updater: (layout: LayoutDefinition) => LayoutDefinition): void {
+    this.replaceProject({
+      ...this.project,
+      layoutDefinitions: (this.project.layoutDefinitions ?? []).map((entry) => (entry.id === id ? updater(entry) : entry))
+    });
+  }
+
+  private addTheme(): void {
+    const theme = defaultTheme();
+    this.replaceProject({
+      ...this.project,
+      themes: [...this.project.themes, theme]
+    });
+    this.selectedThemeId = theme.id;
+  }
+
+  private updateTheme(id: string, updater: (theme: WidgetTheme) => WidgetTheme): void {
+    this.replaceProject({
+      ...this.project,
+      themes: this.project.themes.map((entry) => (entry.id === id ? updater(entry) : entry))
+    });
+  }
+
+  private updateAssignment(id: string, updater: (assignment: DeviceAssignment) => DeviceAssignment): void {
+    this.replaceProject({
+      ...this.project,
+      deviceAssignments: (this.project.deviceAssignments ?? []).map((entry) => (entry.id === id ? updater(entry) : entry))
+    });
+  }
+
+  private addAssignment(): void {
+    const displayId = this.selectedDisplayId || this.project.devices?.[0]?.id;
+    if (!displayId) {
+      return;
+    }
+    const assignment = defaultAssignment(displayId, this.project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen")?.id);
+    this.replaceProject({
+      ...this.project,
+      deviceAssignments: [...(this.project.deviceAssignments ?? []), assignment]
+    });
+    this.selectedAssignmentId = assignment.id;
+  }
+
+  private addCompoundInput(definitionId: string): void {
+    this.updateWidgetDefinition(definitionId, (definition) => ({
+      ...definition,
+      inputSchema: [
+        ...definition.inputSchema,
+        {
+          id: nextId("input"),
+          name: "New Input",
+          valueType: "string",
+          previewValue: ""
+        }
+      ]
+    }));
+  }
+
+  private updateRootNode(owner: { id: string; rootNode?: LayoutNode }, updater: (root: LayoutNode) => LayoutNode): void {
+    if ("kind" in owner && (owner as LayoutDefinition).displayTypeId) {
+      this.updateLayout(owner.id, (layout) => ({
+        ...layout,
+        rootNode: layout.rootNode ? updater(layout.rootNode) : defaultRootNode("stack")
+      }));
+      return;
+    }
+    this.updateWidgetDefinition(owner.id, (definition) => ({
+      ...definition,
+      rootNode: definition.rootNode ? updater(definition.rootNode) : defaultRootNode("stack")
+    }));
+  }
+
+  private setRootNode(owner: { id: string; rootNode?: LayoutNode }, rootNode: LayoutNode | undefined): void {
+    if ("kind" in owner && (owner as LayoutDefinition).displayTypeId) {
+      this.updateLayout(owner.id, (layout) => ({ ...layout, rootNode }));
+      return;
+    }
+    this.updateWidgetDefinition(owner.id, (definition) => ({ ...definition, rootNode }));
+  }
+
+  private selectNode(nodeId: string): void {
+    this.selectedNodeId = nodeId;
+    this.createChildTargetNodeId = "";
+  }
+
+  private structurePreviewCoords(event: PointerEvent, target: HTMLElement): { x: number; y: number } {
+    const rect = target.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.floor(((event.clientX - rect.left) / Math.max(1, rect.width)) * this.previewWidth)),
+      y: Math.max(0, Math.floor(((event.clientY - rect.top) / Math.max(1, rect.height)) * this.previewHeight))
+    };
+  }
+
+  private structureHitNode(event: PointerEvent, target: HTMLElement): LayoutInspectionNode | undefined {
+    const { x, y } = this.structurePreviewCoords(event, target);
+    return findInspectionNodeAtPoint(this.layoutInspection?.popup ?? this.layoutInspection?.root, x, y)
+      ?? findInspectionNodeAtPoint(this.layoutInspection?.root, x, y);
+  }
+
+  private handleStructurePointerDown(event: PointerEvent): void {
+    const owner = this.editorOwner;
+    const target = event.currentTarget as HTMLElement;
+    const hit = this.structureHitNode(event, target);
+    if (!owner || !hit) {
+      return;
+    }
+    this.selectNode(hit.nodeId);
+    this.structureDraggedNodeId = hit.nodeId;
+    this.draggedNodeId = hit.nodeId;
+    this.structureDropIntent = null;
+    this.structureHoveredNodeId = hit.nodeId;
+    target.setPointerCapture?.(event.pointerId);
+  }
+
+  private handleStructurePointerMove(event: PointerEvent): void {
+    const owner = this.editorOwner;
+    const target = event.currentTarget as HTMLElement;
+    const hit = this.structureHitNode(event, target);
+    this.structureHoveredNodeId = hit?.nodeId ?? "";
+    if (!owner?.rootNode || !this.structureDraggedNodeId) {
+      return;
+    }
+    const { x, y } = this.structurePreviewCoords(event, target);
+    const root = this.layoutInspection?.popup ?? this.layoutInspection?.root;
+    const intent = deriveStructureDropIntent(root, this.structureDraggedNodeId, x, y);
+    if (
+      intent &&
+      (intent.parentId === this.structureDraggedNodeId || isDescendant(owner.rootNode, this.structureDraggedNodeId, intent.parentId))
+    ) {
+      this.structureDropIntent = null;
+      return;
+    }
+    this.structureDropIntent = intent;
+  }
+
+  private applyStructureDropIntent(owner: { id: string; rootNode?: LayoutNode }): void {
+    if (!owner.rootNode || !this.structureDraggedNodeId || !this.structureDropIntent) {
+      return;
+    }
+    if (this.structureDropIntent.parentId === this.structureDraggedNodeId) {
+      return;
+    }
+    if (isDescendant(owner.rootNode, this.structureDraggedNodeId, this.structureDropIntent.parentId)) {
+      return;
+    }
+    let nextRoot = owner.rootNode;
+    if (this.structureDropIntent.kind === "into") {
+      nextRoot = moveNode(owner.rootNode, this.structureDraggedNodeId, this.structureDropIntent.parentId);
+    } else if (this.structureDropIntent.kind === "grid-cell") {
+      nextRoot = moveNodeToGridCell(
+        owner.rootNode,
+        this.structureDraggedNodeId,
+        this.structureDropIntent.parentId,
+        this.structureDropIntent.row ?? 0,
+        this.structureDropIntent.column ?? 0
+      );
+    } else if (this.structureDropIntent.targetNodeId) {
+      nextRoot = this.structureDropIntent.kind === "before"
+        ? moveNodeBefore(owner.rootNode, this.structureDraggedNodeId, this.structureDropIntent.parentId, this.structureDropIntent.targetNodeId)
+        : moveNodeAfter(owner.rootNode, this.structureDraggedNodeId, this.structureDropIntent.parentId, this.structureDropIntent.targetNodeId);
+    }
+    this.setRootNode(owner, nextRoot);
+    this.selectedNodeId = this.structureDraggedNodeId;
+  }
+
+  private handleStructurePointerUp(event: PointerEvent): void {
+    const owner = this.editorOwner;
+    const target = event.currentTarget as HTMLElement;
+    if (owner && this.structureDropIntent) {
+      this.applyStructureDropIntent(owner);
+    }
+    this.structureDraggedNodeId = "";
+    this.draggedNodeId = "";
+    this.structureDropIntent = null;
+    target.releasePointerCapture?.(event.pointerId);
+  }
+
+  private handleStructurePointerLeave(): void {
+    if (!this.structureDraggedNodeId) {
+      this.structureHoveredNodeId = "";
+    }
+  }
+
+  private deleteSelectedNode(owner: { id: string; rootNode?: LayoutNode }): void {
+    if (!owner.rootNode || !this.selectedNodeId) {
+      return;
+    }
+    if (owner.rootNode.id === this.selectedNodeId) {
+      this.setRootNode(owner, undefined);
+      this.selectedNodeId = "";
+      return;
+    }
+    const parentId = parentIdForNode(owner.rootNode, this.selectedNodeId);
+    const next = removeNode(owner.rootNode, this.selectedNodeId);
+    this.setRootNode(owner, next.root);
+    this.selectedNodeId = parentId ?? owner.rootNode.id;
+  }
+
+  private createChildNode(owner: { id: string; rootNode?: LayoutNode }, parentId: string, kind: NodeCreateKind): void {
+    if (!owner.rootNode) {
+      return;
+    }
+    const nextNode = defaultNodeForKind(kind, this.project);
+    this.setRootNode(owner, appendChild(owner.rootNode, parentId, nextNode));
+    this.selectedNodeId = nextNode.id;
+  }
+
+  private moveDraggedNodeToParent(owner: { id: string; rootNode?: LayoutNode }, targetParentId: string): void {
+    if (!owner.rootNode || !this.draggedNodeId || this.draggedNodeId === targetParentId) {
+      return;
+    }
+    const nextRoot = moveNode(owner.rootNode, this.draggedNodeId, targetParentId);
+    this.setRootNode(owner, nextRoot);
+    this.selectedNodeId = this.draggedNodeId;
+    this.draggedNodeId = "";
+  }
+
+  private moveDraggedNodeAfter(owner: { id: string; rootNode?: LayoutNode }, targetParentId: string, targetNodeId: string): void {
+    if (!owner.rootNode || !this.draggedNodeId || this.draggedNodeId === targetNodeId) {
+      return;
+    }
+    const nextRoot = moveNodeAfter(owner.rootNode, this.draggedNodeId, targetParentId, targetNodeId);
+    this.setRootNode(owner, nextRoot);
+    this.selectedNodeId = this.draggedNodeId;
+    this.draggedNodeId = "";
+  }
+
+  private removeCompoundInput(definitionId: string, inputId: string): void {
+    this.updateWidgetDefinition(definitionId, (definition) => ({
+      ...definition,
+      inputSchema: definition.inputSchema.filter((entry) => entry.id !== inputId)
+    }));
+  }
+
+  private removeAssignmentRule(assignmentId: string, ruleId: string, scope: "popupRules" | "fullscreenRules"): void {
+    this.updateAssignment(assignmentId, (assignment) => ({
+      ...assignment,
+      [scope]: assignment[scope].filter((rule) => rule.id !== ruleId)
+    }));
+  }
+
+  private async saveConnection(): Promise<void> {
+    this.homeAssistantSettings = await saveHomeAssistantSettings({
+      ...this.homeAssistantSettings,
+      token: this.homeAssistantTokenDraft === "********" ? "" : this.homeAssistantTokenDraft,
+      replaceToken: this.replaceHomeAssistantToken || (this.homeAssistantTokenDraft !== "" && this.homeAssistantTokenDraft !== "********")
+    });
+    this.replaceHomeAssistantToken = false;
+    this.homeAssistantTokenDraft = maskToken(this.homeAssistantSettings.hasToken, "");
+    this.entityCatalog = await fetchHomeAssistantEntities().catch(() => []);
+    await this.refreshPreview();
+  }
+
+  private async testConnection(): Promise<void> {
+    this.homeAssistantStatus = await testHomeAssistantConnection({
+      ...this.homeAssistantSettings,
+      token: this.homeAssistantTokenDraft === "********" ? "" : this.homeAssistantTokenDraft,
+      replaceToken: this.replaceHomeAssistantToken || (this.homeAssistantTokenDraft !== "" && this.homeAssistantTokenDraft !== "********")
+    });
+  }
+
+  private async saveAccessPointSettings(): Promise<void> {
+    this.openEpaperLinkAccessPointSettings = await saveOpenEpaperLinkAccessPointSettings({
+      url: this.openEpaperLinkAccessPointSettings.url,
+      defaultTestDisplayMac: this.openEpaperLinkAccessPointSettings.defaultTestDisplayMac
+    });
+    this.discoveredDisplays = await fetchDiscoveredDisplays(this.project.id).catch(() => this.discoveredDisplays);
+  }
+
+  private async testAccessPointConnection(): Promise<void> {
+    this.openEpaperLinkAccessPointStatus = await testOpenEpaperLinkAccessPointConnection({
+      url: this.openEpaperLinkAccessPointSettings.url
+    });
+  }
+
+  private async uploadSelectedDisplay(): Promise<void> {
+    const display = this.selectedDisplay;
+    if (!display || display.providerKind !== "openepaperlink-ap") {
+      return;
+    }
+    this.uploadStatusMessage = "Uploading...";
+    try {
+      const result = await uploadDeviceImage(this.project.id, display.id, this.previewDataSource, this.project);
+      this.uploadStatusMessage = `Uploaded. hash ${result.hash}`;
+    } catch (error) {
+      this.uploadStatusMessage = error instanceof Error ? error.message : "Upload failed";
+    }
+  }
+
+  private async uploadCurrentPreviewToTag(): Promise<void> {
+    const mac = this.effectivePreviewTagMac;
+    if (!mac || !this.previewWidth || !this.previewHeight || !this.previewRgba.length) {
+      return;
+    }
+    this.uploadStatusMessage = "Uploading preview...";
+    try {
+      await uploadPreviewToOpenEpaperLinkAccessPoint(
+        mac,
+        this.previewWidth,
+        this.previewHeight,
+        this.previewRgba,
+        0
+      );
+      this.uploadStatusMessage = `Uploaded preview to ${mac}`;
+    } catch (error) {
+      this.uploadStatusMessage = error instanceof Error ? error.message : "Preview upload failed";
+    }
+  }
+
+  private async uploadFont(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) {
+      return;
+    }
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = "";
+    for (const byte of bytes) {
+      binary += String.fromCharCode(byte);
+    }
+    await importFont(file.name, btoa(binary));
+    this.fonts = await fetchFonts();
+    this.ensureSelectedFontPreviewFamily();
+    input.value = "";
+    void this.refreshFontSpecimens();
+  }
+
+  private async rescanFontDirectory(): Promise<void> {
+    this.fonts = await rescanFonts();
+    this.ensureSelectedFontPreviewFamily();
+    void this.refreshFontSpecimens();
+  }
+
+  private async saveFontAllowedSizes(fontId: string, rawValue: string): Promise<void> {
+    await updateFontMetadata(fontId, parseAllowedPixelSizes(rawValue));
+    this.fonts = await fetchFonts();
+    void this.refreshFontSpecimens();
+  }
+
+  private async toggleFontAllowedSize(fontId: string, size: number, enabled: boolean): Promise<void> {
+    const current = this.fonts.find((font) => font.id === fontId)?.allowedPixelSizes ?? [];
+    const next = enabled
+      ? Array.from(new Set([...current, size])).sort((left, right) => left - right)
+      : current.filter((entry) => entry !== size);
+    await updateFontMetadata(fontId, next);
+    this.fonts = await fetchFonts();
+    void this.refreshFontSpecimens();
+  }
+
+  private async removeFontOption(fontId: string): Promise<void> {
+    await deleteFont(fontId);
+    this.fonts = await fetchFonts();
+    if (this.selectedFontPreviewFamilyId === fontId) {
+      this.selectedFontPreviewFamilyId = this.fonts.find((font) => font.source === "user")?.id ?? "";
+    }
+    void this.refreshFontSpecimens();
+    this.confirmDeleteFontId = "";
+  }
+
+  private get selectedDisplay(): ManagedDisplay | undefined {
+    return this.project.devices?.find((entry) => entry.id === this.selectedDisplayId);
+  }
+
+  private get selectedDisplayType(): DisplayType | undefined {
+    return this.project.displayTypes?.find((entry) => entry.id === this.selectedDisplayTypeId);
+  }
+
+  private get accessPointTagCandidates(): DiscoveredDisplayCandidate[] {
+    return this.discoveredDisplays.filter((candidate) => candidate.providerKind === "openepaperlink-ap");
+  }
+
+  private get selectedDaFontEntry(): DaFontEntry | undefined {
+    return this.dafontEntries.find((entry) => entry.id === this.selectedDaFontId);
+  }
+
+  private get previewUploadCandidates(): DiscoveredDisplayCandidate[] {
+    const matches = this.accessPointTagCandidates.filter((candidate) => {
+      const displayType = candidate.suggestedDisplayType;
+      return displayType?.width === this.previewWidth && displayType?.height === this.previewHeight;
+    });
+    return matches.length ? matches : this.accessPointTagCandidates;
+  }
+
+  private get effectivePreviewTagMac(): string {
+    const options = this.previewUploadCandidates;
+    const selected = this.selectedPreviewTagMac;
+    const defaultMac = this.openEpaperLinkAccessPointSettings.defaultTestDisplayMac ?? "";
+    if (selected && options.some((candidate) => candidateMac(candidate) === selected)) {
+      return selected;
+    }
+    if (defaultMac && options.some((candidate) => candidateMac(candidate) === defaultMac)) {
+      return defaultMac;
+    }
+    return options[0] ? candidateMac(options[0]) : "";
+  }
+
+  private get selectedWidgetDefinition(): WidgetDefinition | undefined {
+    return this.project.widgetDefinitions?.find((entry) => entry.id === this.selectedWidgetDefinitionId);
+  }
+
+  private get selectedLayout(): LayoutDefinition | undefined {
+    return this.project.layoutDefinitions?.find((entry) => entry.id === this.selectedLayoutId);
+  }
+
+  private get selectedTheme(): WidgetTheme | undefined {
+    return this.project.themes.find((entry) => entry.id === this.selectedThemeId);
+  }
+
+  private get selectedAssignment(): DeviceAssignment | undefined {
+    return this.project.deviceAssignments?.find((entry) => entry.id === this.selectedAssignmentId);
+  }
+
+  private get effectivePreviewThemeId(): string | undefined {
+    return this.project.themes.find((entry) => entry.id === this.selectedPreviewThemeId)?.id
+      ?? this.project.themes[0]?.id;
+  }
+
+  private get editorOwner(): WidgetDefinition | LayoutDefinition | undefined {
+    if (this.activePage === "widgets") {
+      return this.selectedWidgetDefinition;
+    }
+    if (this.activePage === "layouts") {
+      return this.selectedLayout;
+    }
+    return undefined;
+  }
+
+  private get editorRootNode(): LayoutNode | undefined {
+    return this.editorOwner?.rootNode;
+  }
+
+  private get selectedEditorNode(): LayoutNode | undefined {
+    return getNodeById(this.editorRootNode, this.selectedNodeId);
+  }
+
+  private currentInspectionNodeById(nodeId: string): LayoutInspectionNode | undefined {
+    const visit = (node: LayoutInspectionNode | undefined): LayoutInspectionNode | undefined => {
+      if (!node) {
+        return undefined;
+      }
+      if (node.nodeId === nodeId) {
+        return node;
+      }
+      for (const child of node.children) {
+        const found = visit(child);
+        if (found) {
+          return found;
+        }
+      }
+      return undefined;
+    };
+    return visit(this.layoutInspection?.root) ?? visit(this.layoutInspection?.popup);
+  }
+
+  private renderNavigation() {
+    return html`
+      <nav>
+        <h1>Display Designer</h1>
+        ${PAGE_ORDER.map(
+          (page) => html`
+            <button class="nav-button ${this.activePage === page ? "active" : ""}" @click=${() => this.navigate(page)}>
+              ${PAGE_LABELS[page]}
+            </button>
+          `
+        )}
+        <div class="section">
+          <h3>Project</h3>
+          <div class="muted">${this.project.name}</div>
+          <div class="muted">v${this.project.version}</div>
+          <button class="primary" @click=${() => void this.persistProject()}>Save project</button>
+        </div>
+        <div class="section">
+          <h3>Preview</h3>
+          <div class="row">
+            <button class=${this.previewDataSource === "live" ? "primary" : ""} @click=${() => {
+              this.previewDataSource = "live";
+              void this.refreshPreview();
+            }}>Live HA</button>
+            <button class=${this.previewDataSource === "sample" ? "primary" : ""} @click=${() => {
+              this.previewDataSource = "sample";
+              void this.refreshPreview();
+            }}>Sample</button>
+          </div>
+          <label>
+            Scale
+            <select .value=${String(this.scale)} @change=${(event: Event) => (this.scale = Number((event.target as HTMLSelectElement).value))}>
+              <option value="1">1x</option>
+              <option value="2">2x</option>
+              <option value="3">3x</option>
+            </select>
+          </label>
+        </div>
+      </nav>
+    `;
+  }
+
+  private renderListPanel() {
+    if (this.activePage === "displays") {
+      return html`
+        <div class="section">
+          <h2>Displays</h2>
+          <div class="row">
+            <button @click=${() => void this.discoverDisplays()}>Discover OEL</button>
+            <button @click=${() => this.addVirtualDisplay()}>Add Virtual</button>
+          </div>
+          ${(this.project.devices ?? []).map(
+            (device) => html`
+              <div class="row">
+                <button class="item-button ${device.id === this.selectedDisplayId ? "active" : ""}" @click=${() => {
+                  this.selectedDisplayId = device.id;
+                  this.selectedAssignmentId = this.project.deviceAssignments?.find((entry) => entry.displayId === device.id)?.id ?? "";
+                  void this.refreshPreview();
+                }}>${device.name}</button>
+                <button @click=${() => this.removeDisplay(device.id)}>${device.virtual ? "Delete" : "Unmanage"}</button>
+              </div>
+            `
+          )}
+        </div>
+        <div class="section">
+          <h3>Discovered</h3>
+          ${this.discoveredDisplays.map(
+            (candidate) => html`
+              <details>
+                <summary>${candidate.name}</summary>
+                <div class="muted">${candidate.providerKind} ${candidate.discoverySource ? `(${candidate.discoverySource})` : ""}</div>
+                <button @click=${() => this.addDiscoveredDisplay(candidate)}>Manage device</button>
+              </details>
+            `
+          )}
+        </div>
+      `;
+    }
+    if (this.activePage === "display-types") {
+      return html`
+        <div class="section">
+          <h2>Display Types</h2>
+          <button @click=${() => this.addDisplayType()}>Add display type</button>
+          ${(this.project.displayTypes ?? []).map(
+            (displayType) => html`
+              <div class="row">
+                <button class="item-button ${displayType.id === this.selectedDisplayTypeId ? "active" : ""}" @click=${() => {
+                  this.selectedDisplayTypeId = displayType.id;
+                  if (this.activePage === "config") {
+                    void this.refreshFontSpecimens();
+                  }
+                  void this.refreshPreview();
+                }}>${displayType.name}</button>
+                <button @click=${() => this.removeDisplayType(displayType.id)}>Delete</button>
+              </div>
+            `
+          )}
+        </div>
+      `;
+    }
+    if (this.activePage === "widgets") {
+      return html`
+        <div class="section">
+          <h2>Built-in</h2>
+          ${BUILT_IN_WIDGET_DEFINITIONS.map((definition) => html`<div class="pill">${definition.name}</div>`)}
+        </div>
+        <div class="section">
+          <h2>Compound Widgets</h2>
+          <button @click=${() => this.addCompoundWidget()}>Add compound</button>
+          ${(this.project.widgetDefinitions ?? [])
+            .filter((entry) => entry.kind === "compound")
+            .map(
+              (definition) => html`
+                <div class="row">
+                  <button class="item-button ${definition.id === this.selectedWidgetDefinitionId ? "active" : ""}" @click=${() => {
+                    this.selectedWidgetDefinitionId = definition.id;
+                    void this.refreshPreview();
+                  }}>${definition.name}</button>
+                  <button @click=${() => this.removeWidgetDefinition(definition.id)}>Delete</button>
+                </div>
+              `
+            )}
+        </div>
+      `;
+    }
+    if (this.activePage === "layouts") {
+      return html`
+        <div class="section">
+          <h2>Layouts</h2>
+          <button @click=${() => this.addLayout()}>Add layout</button>
+          ${(this.project.layoutDefinitions ?? []).map(
+            (layout) => html`
+              <div class="row">
+                <button class="item-button ${layout.id === this.selectedLayoutId ? "active" : ""}" @click=${() => {
+                  this.selectedLayoutId = layout.id;
+                  void this.refreshPreview();
+                }}>${layout.name}</button>
+                <button @click=${() => this.removeLayout(layout.id)}>Delete</button>
+              </div>
+            `
+          )}
+        </div>
+      `;
+    }
+    if (this.activePage === "themes") {
+      return html`
+        <div class="section">
+          <h2>Themes</h2>
+          <button @click=${() => this.addTheme()}>Add theme</button>
+          ${this.project.themes.map(
+            (theme) => html`
+              <div class="row">
+                <button class="item-button ${theme.id === this.selectedThemeId ? "active" : ""}" @click=${() => (this.selectedThemeId = theme.id)}>${theme.name}</button>
+              </div>
+            `
+          )}
+        </div>
+      `;
+    }
+    if (this.activePage === "config") {
+      return html`
+        <div class="section">
+          <h2>Config</h2>
+          <div class="muted">Home Assistant. OpenEPaperLink access point. Fonts.</div>
+        </div>
+        <div class="section">
+          <h3>Font Preview Display</h3>
+          <select .value=${this.selectedDisplayTypeId} @change=${(event: Event) => {
+            this.selectedDisplayTypeId = (event.target as HTMLSelectElement).value;
+            void this.refreshFontSpecimens();
+          }}>
+            ${(this.project.displayTypes ?? []).map((displayType) => html`<option value=${displayType.id}>${displayType.name}</option>`)}
+          </select>
+        </div>
+      `;
+    }
+    if (this.activePage === "dafont") {
+      return html`
+        <div class="section">
+          <h2>DaFont</h2>
+          <div class="row">
+            <button ?disabled=${this.dafontPage <= 1 || this.dafontLoading} @click=${() => void this.loadDaFontPage(this.dafontPage - 1)}>Prev</button>
+            <button ?disabled=${this.dafontLoading || this.dafontPage >= this.dafontTotalPages} @click=${() => void this.loadDaFontPage(this.dafontPage + 1)}>Next</button>
+            <span class="muted">Page ${this.dafontPage} / ${this.dafontTotalPages}</span>
+          </div>
+          ${this.dafontError ? html`<div class="status-error">${this.dafontError}</div>` : nothing}
+          ${this.dafontLoading ? html`<div class="muted">Loading…</div>` : nothing}
+          ${this.dafontEntries.map((entry) => html`
+            <div class="row">
+              <button class="item-button ${entry.id === this.selectedDaFontId ? "active" : ""}" @click=${() => { this.selectedDaFontId = entry.id; }}>
+                ${entry.name}
+              </button>
+            </div>
+          `)}
+        </div>
+      `;
+    }
+    return html`
+      <div class="section">
+        <h2>Assignments</h2>
+        <button @click=${() => this.addAssignment()}>Add assignment</button>
+        ${(this.project.deviceAssignments ?? []).map(
+          (assignment) => html`
+            <div class="row">
+              <button class="item-button ${assignment.id === this.selectedAssignmentId ? "active" : ""}" @click=${() => {
+                this.selectedAssignmentId = assignment.id;
+                this.selectedDisplayId = assignment.displayId;
+                void this.refreshPreview();
+              }}>${assignment.id}</button>
+              <button @click=${() => this.removeAssignment(assignment.id)}>Delete</button>
+            </div>
+          `
+        )}
+      </div>
+    `;
+  }
+
+  private structureNodeClass(node: LayoutInspectionNode): string {
+    const dropMatchesNode =
+      this.structureDropIntent?.kind !== "grid-cell" &&
+      (this.structureDropIntent?.targetNodeId === node.nodeId || this.structureDropIntent?.parentId === node.nodeId);
+    return [
+      "structure-node",
+      node.isContainer ? "container" : "",
+      this.selectedNodeId === node.nodeId ? "selected" : "",
+      this.structureHoveredNodeId === node.nodeId ? "hovered" : "",
+      dropMatchesNode ? "drop-target" : ""
+    ].filter(Boolean).join(" ");
+  }
+
+  private renderStructureOverlayNode(node: LayoutInspectionNode, rootWidth: number, rootHeight: number, depth = 0): TemplateResult {
+    const left = (node.frame.x / Math.max(1, rootWidth)) * 100;
+    const top = (node.frame.y / Math.max(1, rootHeight)) * 100;
+    const width = (node.frame.w / Math.max(1, rootWidth)) * 100;
+    const height = (node.frame.h / Math.max(1, rootHeight)) * 100;
+    return html`
+      <div
+        class=${this.structureNodeClass(node)}
+        style=${`left:${left}%;top:${top}%;width:${width}%;height:${height}%;z-index:${depth + 1};`}
+      >
+        <div class="structure-label">${node.label}</div>
+      </div>
+      ${node.gridCells?.map((cell) => html`
+        <div
+          class=${[
+            "structure-cell",
+            this.structureDropIntent?.kind === "grid-cell" &&
+            this.structureDropIntent.parentId === node.nodeId &&
+            this.structureDropIntent.row === cell.row &&
+            this.structureDropIntent.column === cell.column
+              ? "drop-target"
+              : ""
+          ].filter(Boolean).join(" ")}
+          style=${`left:${(cell.frame.x / Math.max(1, rootWidth)) * 100}%;top:${(cell.frame.y / Math.max(1, rootHeight)) * 100}%;width:${(cell.frame.w / Math.max(1, rootWidth)) * 100}%;height:${(cell.frame.h / Math.max(1, rootHeight)) * 100}%;z-index:${depth + 2};`}
+        ></div>
+      `) ?? nothing}
+      ${node.children.map((child) => this.renderStructureOverlayNode(child, rootWidth, rootHeight, depth + 1))}
+    `;
+  }
+
+  private renderStructurePreviewStage(): TemplateResult {
+    const root = this.layoutInspection?.popup ?? this.layoutInspection?.root;
+    if (!root || !this.previewWidth || !this.previewHeight) {
+      return html`<div class="muted">No structure preview.</div>`;
+    }
+    return html`
+      <div
+        class="preview-stage structure-stage"
+        style=${`aspect-ratio:${this.previewWidth} / ${this.previewHeight};`}
+        @pointerdown=${(event: PointerEvent) => this.handleStructurePointerDown(event)}
+        @pointermove=${(event: PointerEvent) => this.handleStructurePointerMove(event)}
+        @pointerup=${(event: PointerEvent) => this.handleStructurePointerUp(event)}
+        @pointercancel=${(event: PointerEvent) => this.handleStructurePointerUp(event)}
+        @pointerleave=${() => this.handleStructurePointerLeave()}
+      >
+        <div class="structure-overlay">
+          ${this.renderStructureOverlayNode(root, this.previewWidth, this.previewHeight)}
+        </div>
+      </div>
+    `;
+  }
+
+  private renderPreviewPanel() {
+    if (this.activePage === "dafont") {
+      const entry = this.selectedDaFontEntry;
+      return html`
+        <div class="section">
+          <h2>Preview</h2>
+          ${entry
+            ? html`
+                <div class="muted">${entry.name}</div>
+                ${entry.pixelSize ? html`<div class="muted">Recommended ${entry.pixelSize}px and multiples</div>` : nothing}
+              `
+            : html`<div class="muted">No selection.</div>`}
+        </div>
+        <div class="preview-body">
+          ${entry
+            ? html`<img class="dafont-preview" src=${entry.previewUrl} alt=${entry.name} />`
+            : html`<div class="muted">No preview for this page.</div>`}
+        </div>
+      `;
+    }
+    const effectiveScale = this.previewScaleBase() * this.scale;
+    const uploadCandidates = this.previewUploadCandidates;
+    const effectivePreviewTagMac = this.effectivePreviewTagMac;
+    return html`
+      <div class="section">
+        <h2>Preview</h2>
+        <div class="muted">hash ${this.previewHash || "n/a"}</div>
+        ${this.previewMessage ? html`<div class="muted">${this.previewMessage}</div>` : nothing}
+        ${this.previewWidth && this.previewHeight
+          ? html`<div class="muted">${this.previewWidth}x${this.previewHeight}</div>`
+          : nothing}
+        <div class="row">
+          <button @click=${() => void this.refreshPreview()}>Refresh preview</button>
+        </div>
+        ${this.activePage === "widgets" || this.activePage === "themes"
+          ? html`
+              <label>
+                Preview display type
+                <select
+                  .value=${this.selectedDisplayTypeId}
+                  @change=${(event: Event) => {
+                    this.selectedDisplayTypeId = (event.target as HTMLSelectElement).value;
+                    void this.refreshPreview();
+                  }}
+                >
+                  ${(this.project.displayTypes ?? []).map((displayType) => html`<option value=${displayType.id}>${displayType.name}</option>`)}
+                </select>
+              </label>
+            `
+          : nothing}
+        ${this.activePage === "widgets" || this.activePage === "layouts"
+          ? html`
+              <label>
+                Preview theme
+                <select
+                  .value=${this.effectivePreviewThemeId ?? ""}
+                  @change=${(event: Event) => {
+                    this.selectedPreviewThemeId = (event.target as HTMLSelectElement).value;
+                    void this.refreshPreview();
+                  }}
+                >
+                  ${this.project.themes.map((theme) => html`<option value=${theme.id}>${theme.name}</option>`)}
+                </select>
+              </label>
+            `
+          : nothing}
+        ${uploadCandidates.length
+          ? html`
+              <div class="row">
+                <select
+                  .value=${effectivePreviewTagMac}
+                  @change=${(event: Event) => {
+                    this.selectedPreviewTagMac = (event.target as HTMLSelectElement).value;
+                  }}
+                >
+                  ${uploadCandidates.map((candidate) => {
+                    const mac = candidateMac(candidate);
+                    const displayType = candidate.suggestedDisplayType;
+                    return html`
+                      <option value=${mac}>
+                        ${candidate.name} ${mac}${displayType ? ` (${displayType.width}x${displayType.height})` : ""}
+                      </option>
+                    `;
+                  })}
+                </select>
+                <button class="primary" @click=${() => void this.uploadCurrentPreviewToTag()}>Send Preview</button>
+              </div>
+            `
+          : html`<div class="muted">No AP tags for preview size.</div>`}
+        ${this.uploadStatusMessage ? html`<div class="muted">${this.uploadStatusMessage}</div>` : nothing}
+      </div>
+      <div class="preview-body">
+        ${this.previewWidth && this.previewHeight
+          ? html`
+              <div class="preview-stage" style=${`width:${Math.max(1, Math.round(this.previewWidth * effectiveScale))}px;height:${Math.max(1, Math.round(this.previewHeight * effectiveScale))}px;`}>
+                <canvas class="preview-canvas" width=${this.previewWidth} height=${this.previewHeight} style=${`width:${Math.max(1, Math.round(this.previewWidth * effectiveScale))}px;height:${Math.max(1, Math.round(this.previewHeight * effectiveScale))}px;`}></canvas>
+              </div>
+            `
+          : html`<div class="muted">No preview for this page.</div>`}
+      </div>
+    `;
+  }
+
+  private renderEntitySelector(
+    value: string,
+    onInput: (value: string) => void,
+    extraOptions: Array<{ value: string; label: string }> = []
+  ) {
+    const listId = nextId("entities");
+    return html`
+      <input .value=${value} list=${listId} @input=${(event: Event) => onInput((event.target as HTMLInputElement).value)} />
+      <datalist id=${listId}>
+        ${extraOptions.map((entry) => html`<option value=${entry.value}>${entry.label}</option>`)}
+        ${this.entityCatalog.map((entry) => html`<option value=${entry.entityId}>${entry.friendlyName}</option>`)}
+      </datalist>
+    `;
+  }
+
+  private entityInputBindingOptions(owner: { id: string }): Array<{ value: string; label: string }> {
+    const definition = (this.project.widgetDefinitions ?? []).find((entry) => entry.id === owner.id && entry.kind === "compound");
+    return (definition?.inputSchema ?? [])
+      .filter((input) => input.valueType === "entity")
+      .flatMap((input) => ([
+        { value: `{{${input.name}}}`, label: `Widget input: ${input.name}` },
+        { value: `{{${input.id}}}`, label: `Widget input id: ${input.id}` }
+      ]));
+  }
+
+  private renderFontFamilyOptions(selected: string | undefined) {
+    return html`
+      ${(this.fonts.length ? this.fonts : [{ id: "px-sans", label: "PX Sans", source: "built-in", variants: ["regular", "bold"] }, { id: "px-mono-special", label: "PX Mono Special", source: "built-in", variants: ["regular"] }]).map(
+        (font) => html`<option value=${font.id} ?selected=${selected === font.id}>${font.label}</option>`
+      )}
+    `;
+  }
+
+  private fontAllowedPixelSizes(family: string | undefined): number[] {
+    const allowed = this.fonts.find((font) => font.id === family)?.allowedPixelSizes ?? [];
+    return [...allowed].sort((left, right) => left - right);
+  }
+
+  private renderFontPixelSizeControl(
+    family: string | undefined,
+    value: number,
+    onChange: (pixelSize: number) => void
+  ): TemplateResult {
+    const allowedSizes = this.fontAllowedPixelSizes(family);
+    if (allowedSizes.length) {
+      const effective = allowedSizes.includes(value) ? value : allowedSizes[0]!;
+      return html`
+        <select .value=${String(effective)} @change=${(event: Event) => onChange(Number((event.target as HTMLSelectElement).value))}>
+          ${allowedSizes.map((size) => html`<option value=${size}>${size}px</option>`)}
+        </select>
+      `;
+    }
+    return html`
+      <input type="number" .value=${String(value)} @input=${(event: Event) => onChange(Number((event.target as HTMLInputElement).value))} />
+    `;
+  }
+
+  private renderTextVariantControls(
+    family: string | undefined,
+    style: Partial<TextStyle> | undefined,
+    onChange: (patch: Partial<TextStyle>) => void
+  ): TemplateResult {
+    const currentFamily = family ?? "px-sans";
+    const currentWeight = style?.weight ?? "regular";
+    const currentSlope = style?.slope ?? "roman";
+    const italicAvailable = this.fontVariantAvailable(currentFamily, currentWeight, "italic");
+    const regularAvailable = this.fontVariantAvailable(currentFamily, currentWeight, "roman");
+    const canUseBold = this.fontVariantAvailable(currentFamily, "bold", currentSlope) || this.fontVariantAvailable(currentFamily, "bold", "roman");
+    return html`
+      <label>
+        Weight
+        <select
+          .value=${currentWeight}
+          @change=${(event: Event) => {
+            const nextWeight = (event.target as HTMLSelectElement).value as TextStyle["weight"];
+            const nextSlope = this.fontVariantAvailable(currentFamily, nextWeight, currentSlope) ? currentSlope : "roman";
+            onChange({ weight: nextWeight, slope: nextSlope });
+          }}
+        >
+          <option value="regular">Regular</option>
+          <option value="bold" ?disabled=${!canUseBold}>Bold</option>
+        </select>
+      </label>
+      <label>
+        Slope
+        <select
+          .value=${regularAvailable ? currentSlope : "roman"}
+          @change=${(event: Event) => onChange({ slope: (event.target as HTMLSelectElement).value as FontSlope })}
+        >
+          <option value="roman">Roman</option>
+          <option value="italic" ?disabled=${!italicAvailable}>Italic</option>
+        </select>
+      </label>
+    `;
+  }
+
+  private fontOption(id: string | undefined): FontOption | undefined {
+    return this.fonts.find((font) => font.id === id);
+  }
+
+  private fontVariantAvailable(family: string | undefined, weight: TextStyle["weight"], slope: FontSlope): boolean {
+    if (!family) {
+      return false;
+    }
+    const option = this.fontOption(family);
+    const variants = availableFontVariants(option);
+    const variant: FontVariantKey =
+      weight === "bold" && slope === "italic"
+        ? "boldItalic"
+        : weight === "bold"
+          ? "bold"
+          : slope === "italic"
+            ? "italic"
+            : "regular";
+    return variants.includes(variant) || supportsFontVariant(family, weight, slope);
+  }
+
+  private coerceTextStyleVariant(style: Partial<TextStyle> | undefined): Partial<TextStyle> {
+    const family = style?.family ?? "px-sans";
+    const weight = style?.weight ?? "regular";
+    const slope = style?.slope ?? "roman";
+    if (this.fontVariantAvailable(family, weight, slope)) {
+      return style ?? {};
+    }
+    return {
+      ...style,
+      slope: "roman"
+    };
+  }
+
+  private previewScaleBase(): number {
+    return typeof window !== "undefined" && window.devicePixelRatio >= 1.75 ? 2 : 1;
+  }
+
+  private tonedPreviewRgba(): Uint8ClampedArray {
+    if (!this.previewRgba.length) {
+      return this.previewRgba;
+    }
+    const toned = new Uint8ClampedArray(this.previewRgba.length);
+    for (let index = 0; index < this.previewRgba.length; index += 4) {
+      const r = this.previewRgba[index];
+      const g = this.previewRgba[index + 1];
+      const b = this.previewRgba[index + 2];
+      const a = this.previewRgba[index + 3];
+      const isWhite = r >= 245 && g >= 245 && b >= 245;
+      const isBlack = r <= 20 && g <= 20 && b <= 20;
+
+      if (isWhite) {
+        toned[index] = 236;
+        toned[index + 1] = 236;
+        toned[index + 2] = 232;
+      } else if (isBlack) {
+        toned[index] = 48;
+        toned[index + 1] = 48;
+        toned[index + 2] = 48;
+      } else if (r > 180 && g > 160 && b < 120) {
+        toned[index] = 216;
+        toned[index + 1] = 188;
+        toned[index + 2] = 92;
+      } else {
+        toned[index] = Math.min(255, Math.round(r * 0.78 + 18));
+        toned[index + 1] = Math.min(255, Math.round(g * 0.72 + 12));
+        toned[index + 2] = Math.min(255, Math.round(b * 0.72 + 12));
+      }
+      toned[index + 3] = a;
+    }
+    return toned;
+  }
+
+  private renderSizeSpecEditor(label: string, spec: SizeSpec | undefined, onChange: (next: SizeSpec) => void) {
+    const current = spec?.mode === "intrinsic_font_height"
+      ? { ...spec, mode: "fit_content" as SizeSpec["mode"] }
+      : spec ?? defaultSizeSpec("fill");
+    return html`
+      <details>
+        <summary>${label}</summary>
+        <label>
+          Mode
+          <select .value=${current.mode} @change=${(event: Event) => onChange({ ...current, mode: (event.target as HTMLSelectElement).value as SizeSpec["mode"] })}>
+            <option value="fill">Fill</option>
+            <option value="fixed_px">Fixed px</option>
+            <option value="fraction">Fraction</option>
+            <option value="fit_content">Fit content</option>
+          </select>
+        </label>
+        ${current.mode === "fixed_px" || current.mode === "fraction"
+          ? html`
+              <label>
+                Value
+                <input type="number" step=${current.mode === "fraction" ? "0.1" : "1"} .value=${String(current.value ?? "")} @input=${(event: Event) => onChange({ ...current, value: Number((event.target as HTMLInputElement).value) })} />
+              </label>
+            `
+          : nothing}
+      </details>
+    `;
+  }
+
+  private primitiveAutoFitDisabled(node: PrimitiveInstanceNode): boolean {
+    return node.width?.mode === "fit_content" || node.height?.mode === "fit_content";
+  }
+
+  private renderContentAlignmentControls(
+    node: PrimitiveInstanceNode,
+    owner: { id: string; rootNode?: LayoutNode },
+    defaults: { horizontal: "left" | "center" | "right"; vertical: "top" | "middle" | "bottom" } = { horizontal: "center", vertical: "middle" }
+  ): TemplateResult {
+    return html`
+      <label>
+        Horizontal align
+        <select .value=${String(node.props?.horizontalAlign ?? defaults.horizontal)} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, horizontalAlign: (event.target as HTMLSelectElement).value as "left" | "center" | "right" } })))}>
+          <option value="left">Left</option>
+          <option value="center">Center</option>
+          <option value="right">Right</option>
+        </select>
+      </label>
+      <label>
+        Vertical align
+        <select .value=${String(node.props?.verticalAlign ?? defaults.vertical)} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, verticalAlign: (event.target as HTMLSelectElement).value as "top" | "middle" | "bottom" } })))}>
+          <option value="top">Top</option>
+          <option value="middle">Middle</option>
+          <option value="bottom">Bottom</option>
+        </select>
+      </label>
+    `;
+  }
+
+  private renderPrimitiveEditor(node: PrimitiveInstanceNode, owner: { id: string; rootNode?: LayoutNode }): TemplateResult {
+    const autoFitDisabled = this.primitiveAutoFitDisabled(node);
+    const entityInputOptions = this.entityInputBindingOptions(owner);
+    return html`
+      <label>
+        Primitive
+        <select .value=${node.primitiveType} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), primitiveType: (event.target as HTMLSelectElement).value as PrimitiveWidgetKind })))}>
+          ${BUILT_IN_WIDGET_DEFINITIONS.map((entry) => html`<option value=${entry.primitiveType ?? "text"}>${entry.name}</option>`)}
+        </select>
+      </label>
+      <label>
+        Content padding
+        <input type="number" .value=${String(node.props?.paddingPx ?? node.style?.paddingPx ?? 4)} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, paddingPx: Number((event.target as HTMLInputElement).value) } })))}/>
+      </label>
+      ${node.primitiveType === "text"
+        ? html`
+            <label>
+              Text
+              <textarea .value=${String(node.props?.text ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, text: (event.target as HTMLTextAreaElement).value } })))}></textarea>
+            </label>
+            <div class="muted">Inputs in compound widgets: use <code>{{Input Name}}</code> or <code>\${Input Name}</code>.</div>
+            <label>
+              <input type="checkbox" .checked=${Boolean(node.props?.renderEntityState)} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, renderEntityState: (event.target as HTMLInputElement).checked } })))} />
+              Render entity state
+            </label>
+            <label>
+              Entity
+              ${this.renderEntitySelector(String(node.bindings?.entity ?? ""), (value) =>
+                this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), bindings: { ...(current as PrimitiveInstanceNode).bindings, entity: value } })))
+              , entityInputOptions)}
+            </label>
+            <label>
+              <input type="checkbox" ?disabled=${autoFitDisabled} .checked=${Boolean(node.props?.autoFit)} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, autoFit: (event.target as HTMLInputElement).checked } })))} />
+              Auto fit
+            </label>
+            <label>
+              Placeholder
+              <input ?disabled=${autoFitDisabled} .value=${String(node.props?.placeholderText ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, placeholderText: (event.target as HTMLInputElement).value } })))} />
+            </label>
+            ${autoFitDisabled ? html`<div class="muted">Auto fit unavailable when width or height uses Fit content.</div>` : nothing}
+            <label>
+              Theme font role
+              <select .value=${String(node.props?.fontRole ?? "normal")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, fontRole: (event.target as HTMLSelectElement).value as "tiny" | "normal" | "header" } })))}>
+                <option value="tiny">Tiny</option>
+                <option value="normal">Normal</option>
+                <option value="header">Header</option>
+              </select>
+            </label>
+            ${this.renderContentAlignmentControls(node, owner, { horizontal: "left", vertical: "top" })}
+          `
+        : nothing}
+      ${node.primitiveType === "number"
+        ? html`
+            <label>
+              Entity
+              ${this.renderEntitySelector(String(node.bindings?.entity ?? ""), (value) =>
+                this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), bindings: { ...(current as PrimitiveInstanceNode).bindings, entity: value } })))
+              , entityInputOptions)}
+            </label>
+            <label>
+              Decimals
+              <input type="number" .value=${String(node.props?.digits ?? 1)} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, digits: Number((event.target as HTMLInputElement).value) } })))} />
+            </label>
+            <label>
+              Prefix
+              <input .value=${String(node.props?.prefix ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, prefix: (event.target as HTMLInputElement).value } })))} />
+            </label>
+            <label>
+              Suffix
+              <input .value=${String(node.props?.suffix ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, suffix: (event.target as HTMLInputElement).value } })))} />
+            </label>
+            <label>
+              <input type="checkbox" ?disabled=${autoFitDisabled} .checked=${Boolean(node.props?.autoFit)} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, autoFit: (event.target as HTMLInputElement).checked } })))} />
+              Auto fit
+            </label>
+            <label>
+              Placeholder
+              <input ?disabled=${autoFitDisabled} .value=${String(node.props?.placeholderValue ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, placeholderValue: (event.target as HTMLInputElement).value } })))} />
+            </label>
+            ${autoFitDisabled ? html`<div class="muted">Auto fit unavailable when width or height uses Fit content.</div>` : nothing}
+            <label>
+              Theme font role
+              <select .value=${String(node.props?.fontRole ?? "header")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, fontRole: (event.target as HTMLSelectElement).value as "tiny" | "normal" | "header" } })))}>
+                <option value="tiny">Tiny</option>
+                <option value="normal">Normal</option>
+                <option value="header">Header</option>
+              </select>
+            </label>
+            ${this.renderContentAlignmentControls(node, owner, { horizontal: "center", vertical: "middle" })}
+          `
+        : nothing}
+      ${node.primitiveType === "icon"
+        ? html`
+            <label>
+              Icon
+              <select .value=${String(node.props?.icon ?? "warning")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, icon: (event.target as HTMLSelectElement).value } })))}>
+                ${this.icons.map((icon) => html`<option value=${icon.id}>${icon.label}</option>`)}
+              </select>
+            </label>
+            ${this.renderContentAlignmentControls(node, owner, { horizontal: "center", vertical: "middle" })}
+          `
+        : nothing}
+      ${node.primitiveType === "state_tile"
+        ? this.renderContentAlignmentControls(node, owner, { horizontal: "center", vertical: "middle" })
+        : nothing}
+      ${node.primitiveType === "graph"
+        ? html`
+            <label>
+              Query id
+              <input .value=${String(node.bindings?.query ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), bindings: { ...(current as PrimitiveInstanceNode).bindings, query: (event.target as HTMLInputElement).value } })))} />
+            </label>
+          `
+        : nothing}
+      ${node.primitiveType === "line"
+        ? html`
+            <label>
+              Direction
+              <select .value=${String(node.props?.lineDirection ?? "horizontal")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, lineDirection: (event.target as HTMLSelectElement).value as "horizontal" | "vertical" | "diag_down" | "diag_up" } })))}>
+                <option value="horizontal">Horizontal</option>
+                <option value="vertical">Vertical</option>
+                <option value="diag_down">Diagonal down</option>
+                <option value="diag_up">Diagonal up</option>
+              </select>
+            </label>
+          `
+        : nothing}
+      ${node.primitiveType === "circle"
+        ? html`
+            <label>
+              <input type="checkbox" .checked=${Boolean(node.props?.filled)} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, filled: (event.target as HTMLInputElement).checked } })))} />
+              Filled
+            </label>
+          `
+        : nothing}
+    `;
+  }
+
+  private renderNodeTree(owner: { id: string; rootNode?: LayoutNode }): TemplateResult {
+    const entries = buildNodeTree(owner.rootNode);
+    return html`
+      <div class="node-tree">
+        <div class="row">
+          <strong>Node Tree</strong>
+          ${owner.rootNode
+            ? nothing
+            : html`
+                <div class="row">
+                  <button @click=${() => this.setRootNode(owner, defaultRootNode("stack"))}>Add Stack Root</button>
+                  <button @click=${() => this.setRootNode(owner, defaultRootNode("grid"))}>Add Grid Root</button>
+                  <button @click=${() => this.setRootNode(owner, defaultRootNode("zstack"))}>Add ZStack Root</button>
+                </div>
+              `}
+        </div>
+        ${entries.length
+          ? entries.map((entry) => {
+              const canDropInside = isContainerNode(entry.node);
+              return html`
+                <div class="tree-row" style=${`padding-left:${entry.depth * 14}px;`}>
+                  <button
+                    class="tree-node ${this.selectedNodeId === entry.node.id ? "active" : ""}"
+                    draggable="true"
+                    @click=${() => this.selectNode(entry.node.id)}
+                    @dragstart=${() => {
+                      this.draggedNodeId = entry.node.id;
+                    }}
+                    @dragend=${() => {
+                      this.draggedNodeId = "";
+                    }}
+                    @dragover=${(event: DragEvent) => {
+                      if (canDropInside) {
+                        event.preventDefault();
+                      }
+                    }}
+                    @drop=${(event: DragEvent) => {
+                      event.preventDefault();
+                      if (canDropInside) {
+                        this.moveDraggedNodeToParent(owner, entry.node.id);
+                      }
+                    }}
+                  >
+                    ${labelForNode(entry.node)}
+                  </button>
+                  ${entry.parentId
+                    ? html`
+                        <button
+                          class="tree-drop"
+                          title="Drop after"
+                          @dragover=${(event: DragEvent) => event.preventDefault()}
+                          @drop=${(event: DragEvent) => {
+                            event.preventDefault();
+                            this.moveDraggedNodeAfter(owner, entry.parentId!, entry.node.id);
+                          }}
+                        >
+                          After
+                        </button>
+                      `
+                    : html`<span></span>`}
+                  ${canDropInside ? html`<span class="muted">Drop into</span>` : html`<span></span>`}
+                </div>
+              `;
+            })
+          : html`<div class="muted">No root node.</div>`}
+      </div>
+    `;
+  }
+
+  private renderNodeEditor(node: LayoutNode, owner: { id: string; rootNode?: LayoutNode }, parentId?: string): TemplateResult {
+    return html`
+      <div class="inspector-panel">
+        <div class="row">
+          <strong>${node.type}</strong>
+          <span class="muted">${node.id}</span>
+        </div>
+        <div class="row">
+          ${parentId
+            ? html`
+                <button class="danger" @click=${() => this.deleteSelectedNode(owner)}>Delete node</button>
+              `
+            : html`<button class="danger" @click=${() => this.deleteSelectedNode(owner)}>Delete root node</button>`}
+          ${isContainerNode(node)
+            ? html`<button @click=${() => {
+                this.createChildTargetNodeId = this.createChildTargetNodeId === node.id ? "" : node.id;
+              }}>Create child</button>`
+            : nothing}
+        </div>
+        ${this.createChildTargetNodeId === node.id
+          ? html`
+              <div class="row">
+                <button @click=${() => this.createChildNode(owner, node.id, "text")}>Text</button>
+                <button @click=${() => this.createChildNode(owner, node.id, "number")}>Number</button>
+                <button @click=${() => this.createChildNode(owner, node.id, "graph")}>Graph</button>
+                <button @click=${() => this.createChildNode(owner, node.id, "icon")}>Icon</button>
+                <button @click=${() => this.createChildNode(owner, node.id, "line")}>Line</button>
+                <button @click=${() => this.createChildNode(owner, node.id, "box")}>Box</button>
+                <button @click=${() => this.createChildNode(owner, node.id, "circle")}>Circle</button>
+                ${(this.project.widgetDefinitions ?? []).some((entry) => entry.kind === "compound")
+                  ? html`<button @click=${() => this.createChildNode(owner, node.id, "compound_ref")}>Compound</button>`
+                  : nothing}
+                <button @click=${() => this.createChildNode(owner, node.id, "stack")}>Stack</button>
+                <button @click=${() => this.createChildNode(owner, node.id, "grid")}>Grid</button>
+                <button @click=${() => this.createChildNode(owner, node.id, "zstack")}>ZStack</button>
+              </div>
+            `
+          : nothing}
+        ${this.renderSizeSpecEditor("Width", node.width, (next) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, width: next }))))}
+        ${this.renderSizeSpecEditor("Height", node.height, (next) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, height: next }))))}
+        ${node.type === "primitive_instance"
+          ? nothing
+          : html`
+              <label>
+                Padding
+                <input type="number" .value=${String(node.style?.paddingPx ?? 0)} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, style: { ...current.style, paddingPx: Number((event.target as HTMLInputElement).value) } })))} />
+              </label>
+            `}
+        <label>
+          Border token
+          <select .value=${String(node.style?.borderToken ?? "none")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, style: { ...current.style, borderToken: (event.target as HTMLSelectElement).value as BorderToken } })))} }>
+            <option value="none">None</option>
+            <option value="thin">Thin</option>
+            <option value="thick">Thick</option>
+          </select>
+        </label>
+        <label>
+          Theme override
+          <select .value=${String(node.style?.themeId ?? "inherit")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, style: { ...current.style, themeId: (event.target as HTMLSelectElement).value } })))} }>
+            <option value="inherit">Inherit</option>
+            ${this.project.themes.map((theme) => html`<option value=${theme.id}>${theme.name}</option>`)}
+          </select>
+        </label>
+        ${node.type === "stack"
+          ? html`
+              <label>
+                Axis
+                <select .value=${node.axis} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), axis: (event.target as HTMLSelectElement).value as "horizontal" | "vertical" })))} >
+                  <option value="horizontal">HStack</option>
+                  <option value="vertical">VStack</option>
+                </select>
+              </label>
+              <label>
+                Gap
+                <input type="number" .value=${String(node.style?.gapPx ?? 0)} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, style: { ...current.style, gapPx: Number((event.target as HTMLInputElement).value) } })))} />
+              </label>
+            `
+          : nothing}
+        ${node.type === "zstack"
+          ? html`
+              <div class="muted">Children share same frame. Order is back to front.</div>
+            `
+          : nothing}
+        ${node.type === "grid"
+          ? html`
+              <label>
+                Rows
+                <input type="number" min="1" .value=${String(node.rows.length)} @input=${(event: Event) => {
+                  const count = Math.max(1, Number((event.target as HTMLInputElement).value));
+                  this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({
+                    ...(current as typeof node),
+                    rows: Array.from({ length: count }, (_entry, index) => (current as typeof node).rows[index] ?? { size: defaultSizeSpec("fraction", 1 / count) })
+                  })));
+                }} />
+              </label>
+              <label>
+                Columns
+                <input type="number" min="1" .value=${String(node.columns.length)} @input=${(event: Event) => {
+                  const count = Math.max(1, Number((event.target as HTMLInputElement).value));
+                  this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({
+                    ...(current as typeof node),
+                    columns: Array.from({ length: count }, (_entry, index) => (current as typeof node).columns[index] ?? { size: defaultSizeSpec("fraction", 1 / count) })
+                  })));
+                }} />
+              </label>
+            `
+          : nothing}
+        ${node.type === "primitive_instance" ? this.renderPrimitiveEditor(node, owner) : nothing}
+        ${node.type === "compound_ref"
+          ? html`
+              <label>
+                Compound widget
+                <select .value=${node.definitionId} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), definitionId: (event.target as HTMLSelectElement).value })))} >
+                  ${(this.project.widgetDefinitions ?? [])
+                    .filter((entry) => entry.kind === "compound")
+                    .map((entry) => html`<option value=${entry.id}>${entry.name}</option>`)}
+                </select>
+              </label>
+              ${(() => {
+                const definition = (this.project.widgetDefinitions ?? []).find((entry) => entry.id === node.definitionId && entry.kind === "compound");
+                if (!definition?.inputSchema.length) {
+                  return html`<div class="muted">No inputs.</div>`;
+                }
+                return html`
+                  <div class="section">
+                    <h4>Inputs</h4>
+                    ${definition.inputSchema.map((input) => html`
+                      <details open>
+                        <summary>${input.name}</summary>
+                        ${input.valueType === "entity"
+                          ? html`
+                              <label>
+                                Entity
+                                ${this.renderEntitySelector(String(node.inputBindings?.[input.id] ?? node.inputBindings?.[input.name] ?? ""), (value) =>
+                                  this.updateRootNode(owner, (root) =>
+                                    updateNode(root, node.id, (current) => ({
+                                      ...(current as typeof node),
+                                      inputBindings: {
+                                        ...((current as typeof node).inputBindings ?? {}),
+                                        [input.id]: value
+                                      }
+                                    }))
+                                  )
+                                )}
+                              </label>
+                            `
+                          : nothing}
+                        ${input.valueType === "string"
+                          ? html`
+                              <label>
+                                Value
+                                <input .value=${String(node.inputValues?.[input.id] ?? input.defaultValue ?? "")} @input=${(event: Event) =>
+                                  this.updateRootNode(owner, (root) =>
+                                    updateNode(root, node.id, (current) => ({
+                                      ...(current as typeof node),
+                                      inputValues: {
+                                        ...((current as typeof node).inputValues ?? {}),
+                                        [input.id]: (event.target as HTMLInputElement).value
+                                      }
+                                    }))
+                                  )} />
+                              </label>
+                            `
+                          : nothing}
+                        ${input.valueType === "number"
+                          ? html`
+                              <label>
+                                Value
+                                <input type="number" .value=${String(node.inputValues?.[input.id] ?? input.defaultValue ?? 0)} @input=${(event: Event) =>
+                                  this.updateRootNode(owner, (root) =>
+                                    updateNode(root, node.id, (current) => ({
+                                      ...(current as typeof node),
+                                      inputValues: {
+                                        ...((current as typeof node).inputValues ?? {}),
+                                        [input.id]: Number((event.target as HTMLInputElement).value)
+                                      }
+                                    }))
+                                  )} />
+                              </label>
+                            `
+                          : nothing}
+                        ${input.valueType === "boolean"
+                          ? html`
+                              <label>
+                                Value
+                                <select .value=${String(node.inputValues?.[input.id] ?? input.defaultValue ?? false)} @change=${(event: Event) =>
+                                  this.updateRootNode(owner, (root) =>
+                                    updateNode(root, node.id, (current) => ({
+                                      ...(current as typeof node),
+                                      inputValues: {
+                                        ...((current as typeof node).inputValues ?? {}),
+                                        [input.id]: (event.target as HTMLSelectElement).value === "true"
+                                      }
+                                    }))
+                                  )}>
+                                  <option value="true">true</option>
+                                  <option value="false">false</option>
+                                </select>
+                              </label>
+                            `
+                          : nothing}
+                      </details>
+                    `)}
+                  </div>
+                `;
+              })()}
+            `
+          : nothing}
+        ${node.type === "grid" && parentId
+          ? html`
+              ${(() => {
+                const root = owner.rootNode;
+                const gridParent = root ? getNodeById(root, parentId) : undefined;
+                if (!gridParent || gridParent.type !== "grid") {
+                  return nothing;
+                }
+                const child = gridParent.children.find((entry) => entry.node.id === node.id);
+                if (!child) {
+                  return nothing;
+                }
+                return html`
+                  <label>
+                    Grid row
+                    <input type="number" .value=${String(child.placement.row)} @input=${(event: Event) =>
+                      this.updateRootNode(owner, (rootNode) => updateNode(rootNode, parentId, (current) => ({
+                        ...(current as typeof gridParent),
+                        children: (current as typeof gridParent).children.map((entry) =>
+                          entry.node.id === node.id ? { ...entry, placement: { ...entry.placement, row: Number((event.target as HTMLInputElement).value) } } : entry
+                        )
+                      })))} />
+                  </label>
+                  <label>
+                    Grid column
+                    <input type="number" .value=${String(child.placement.column)} @input=${(event: Event) =>
+                      this.updateRootNode(owner, (rootNode) => updateNode(rootNode, parentId, (current) => ({
+                        ...(current as typeof gridParent),
+                        children: (current as typeof gridParent).children.map((entry) =>
+                          entry.node.id === node.id ? { ...entry, placement: { ...entry.placement, column: Number((event.target as HTMLInputElement).value) } } : entry
+                        )
+                      })))} />
+                  </label>
+                `;
+              })()}
+            `
+          : nothing}
+      </div>
+    `;
+  }
+
+  private renderRuleEditor(rule: Rule, assignment: DeviceAssignment, scope: "fullscreen_activation" | "popup_activation") {
+    const layoutOptions = (this.project.layoutDefinitions ?? []).filter((entry) => entry.kind === (scope === "popup_activation" ? "popup" : "fullscreen"));
+    return html`
+      <details open>
+        <summary>${rule.id}</summary>
+        <div class="row">
+          <button
+            class="danger"
+            @click=${() =>
+              this.removeAssignmentRule(
+                assignment.id,
+                rule.id,
+                scope === "popup_activation" ? "popupRules" : "fullscreenRules"
+              )}
+          >
+            Delete rule
+          </button>
+        </div>
+        <label>
+          Priority
+          <input type="number" .value=${String(rule.priority)} @input=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({
+            ...current,
+            [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, priority: Number((event.target as HTMLInputElement).value) } : entry)
+          }))} />
+        </label>
+        <label>
+          Condition
+          <select .value=${rule.condition.kind} @change=${(event: Event) => {
+            const kind = (event.target as HTMLSelectElement).value;
+            const nextCondition: Condition =
+              kind === "entity_matches"
+                ? { kind: "entity_matches", entityId: "", pattern: ".*" }
+                : kind === "entity_duration_ge"
+                  ? { kind: "entity_duration_ge", entityId: "", state: "on", minutes: 15 }
+                  : kind === "numeric_compare"
+                    ? { kind: "numeric_compare", left: { type: "entity_state", entityId: "" }, op: "gte", right: 0 }
+                    : kind === "boolean_compare"
+                      ? { kind: "boolean_compare", left: { type: "entity_state", entityId: "" }, equals: true }
+                      : kind === "is_defined"
+                        ? { kind: "is_defined", ref: { type: "entity_state", entityId: "" }, expected: true }
+                        : { kind: "entity_state", entityId: "", equals: "on" };
+            this.updateAssignment(assignment.id, (current) => ({
+              ...current,
+              [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, condition: nextCondition } : entry)
+            }));
+          }}>
+            <option value="entity_state">Entity state</option>
+            <option value="entity_matches">Regex match</option>
+            <option value="entity_duration_ge">Duration in state</option>
+            <option value="numeric_compare">Numeric compare</option>
+            <option value="boolean_compare">Boolean compare</option>
+            <option value="is_defined">Is defined</option>
+          </select>
+        </label>
+        ${rule.condition.kind === "entity_state" ? html`
+          <label>Entity ${this.renderEntitySelector(rule.condition.entityId, (value) => this.updateAssignment(assignment.id, (current) => ({
+            ...current,
+            [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, condition: { ...rule.condition, entityId: value } } : entry)
+          })))}</label>
+          <label>
+            Equals
+            <input .value=${rule.condition.equals} @input=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({
+              ...current,
+              [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, condition: { ...rule.condition, equals: (event.target as HTMLInputElement).value } } : entry)
+            }))} />
+          </label>
+        ` : nothing}
+        ${rule.condition.kind === "entity_matches" ? html`
+          <label>Entity ${this.renderEntitySelector(rule.condition.entityId, (value) => this.updateAssignment(assignment.id, (current) => ({
+            ...current,
+            [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, condition: { ...rule.condition, entityId: value } } : entry)
+          })))}</label>
+          <label>
+            Pattern
+            <input .value=${rule.condition.pattern} @input=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({
+              ...current,
+              [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, condition: { ...rule.condition, pattern: (event.target as HTMLInputElement).value } } : entry)
+            }))} />
+          </label>
+        ` : nothing}
+        ${rule.condition.kind === "entity_duration_ge" ? html`
+          <label>Entity ${this.renderEntitySelector(rule.condition.entityId, (value) => this.updateAssignment(assignment.id, (current) => ({
+            ...current,
+            [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, condition: { ...rule.condition, entityId: value } } : entry)
+          })))}</label>
+          <label>
+            State
+            <input .value=${rule.condition.state} @input=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({
+              ...current,
+              [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, condition: { ...rule.condition, state: (event.target as HTMLInputElement).value } } : entry)
+            }))} />
+          </label>
+          <label>
+            Minutes
+            <input type="number" .value=${String(rule.condition.minutes)} @input=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({
+              ...current,
+              [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, condition: { ...rule.condition, minutes: Number((event.target as HTMLInputElement).value) } } : entry)
+            }))} />
+          </label>
+        ` : nothing}
+        ${rule.condition.kind === "numeric_compare" ? html`
+          <label>Entity ${this.renderEntitySelector(rule.condition.left.type === "entity_state" ? rule.condition.left.entityId : "", (value) => this.updateAssignment(assignment.id, (current) => ({
+            ...current,
+            [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, condition: { ...rule.condition, left: { type: "entity_state", entityId: value } } } : entry)
+          })))}</label>
+          <label>
+            Operator
+            <select .value=${rule.condition.op} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({
+              ...current,
+              [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, condition: { ...rule.condition, op: (event.target as HTMLSelectElement).value as typeof rule.condition.op } } : entry)
+            }))}>
+              <option value="gt">></option>
+              <option value="gte">>=</option>
+              <option value="lt"><</option>
+              <option value="lte"><=</option>
+              <option value="eq">=</option>
+            </select>
+          </label>
+          <label>
+            Threshold
+            <input type="number" .value=${String(rule.condition.right)} @input=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({
+              ...current,
+              [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, condition: { ...rule.condition, right: Number((event.target as HTMLInputElement).value) } } : entry)
+            }))} />
+          </label>
+        ` : nothing}
+        ${rule.condition.kind === "boolean_compare" ? html`
+          <label>Entity ${this.renderEntitySelector(rule.condition.left.type === "entity_state" ? rule.condition.left.entityId : "", (value) => this.updateAssignment(assignment.id, (current) => ({
+            ...current,
+            [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, condition: { ...rule.condition, left: { type: "entity_state", entityId: value } } } : entry)
+          })))}</label>
+          <label>
+            Equals
+            <select .value=${String(rule.condition.equals)} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({
+              ...current,
+              [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, condition: { ...rule.condition, equals: (event.target as HTMLSelectElement).value === "true" } } : entry)
+            }))}>
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          </label>
+        ` : nothing}
+        ${rule.condition.kind === "is_defined" ? html`
+          <label>Entity ${this.renderEntitySelector(rule.condition.ref.type === "entity_state" ? rule.condition.ref.entityId : "", (value) => this.updateAssignment(assignment.id, (current) => ({
+            ...current,
+            [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, condition: { ...rule.condition, ref: { type: "entity_state", entityId: value } } } : entry)
+          })))}</label>
+          <label>
+            Expected
+            <select .value=${String(rule.condition.expected !== false)} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({
+              ...current,
+              [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? { ...entry, condition: { ...rule.condition, expected: (event.target as HTMLSelectElement).value === "true" } } : entry)
+            }))}>
+              <option value="true">defined</option>
+              <option value="false">not defined</option>
+            </select>
+          </label>
+        ` : nothing}
+        <label>
+          Layout
+          <select .value=${rule.action.type === "activate_popup_layout" || rule.action.type === "activate_fullscreen_layout" ? rule.action.layoutId : ""} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({
+            ...current,
+            [scope === "popup_activation" ? "popupRules" : "fullscreenRules"]: (scope === "popup_activation" ? current.popupRules : current.fullscreenRules).map((entry) => entry.id === rule.id ? {
+              ...entry,
+              action: scope === "popup_activation"
+                ? { type: "activate_popup_layout", layoutId: (event.target as HTMLSelectElement).value }
+                : { type: "activate_fullscreen_layout", layoutId: (event.target as HTMLSelectElement).value }
+            } : entry)
+          }))}>
+            ${layoutOptions.map((layout) => html`<option value=${layout.id}>${layout.name}</option>`)}
+          </select>
+        </label>
+      </details>
+    `;
+  }
+
+  private renderDetailPanel() {
+    if (this.activePage === "displays") {
+      const device = this.selectedDisplay;
+      return html`
+        <div class="detail">
+          <div class="section">
+            <h2>Display</h2>
+            ${device
+              ? html`
+                  <label>
+                    Name
+                    <input .value=${device.name} @input=${(event: Event) => this.updateDisplay(device.id, { name: (event.target as HTMLInputElement).value })} />
+                  </label>
+                  <label>
+                    Provider
+                    <input .value=${device.providerKind} disabled />
+                  </label>
+                  <label>
+                    Display type
+                    <select .value=${device.displayTypeId} @change=${(event: Event) => this.updateDisplay(device.id, { displayTypeId: (event.target as HTMLSelectElement).value })}>
+                      ${(this.project.displayTypes ?? []).map((displayType) => html`<option value=${displayType.id}>${displayType.name}</option>`)}
+                    </select>
+                  </label>
+                  <label>
+                    <input type="checkbox" .checked=${device.managed} @change=${(event: Event) => this.updateDisplay(device.id, { managed: (event.target as HTMLInputElement).checked })} />
+                    Managed by this tool
+                  </label>
+                  <div class="muted">${device.virtual ? "Virtual device" : "Provider-backed device"}</div>
+                  ${device.metadata?.mac ? html`<div class="muted">MAC ${String(device.metadata.mac)}</div>` : nothing}
+                  ${device.providerKind === "openepaperlink-ap"
+                    ? html`
+                        <div class="row">
+                          <button class="primary" @click=${() => void this.uploadSelectedDisplay()}>Upload image to AP</button>
+                        </div>
+                        ${this.uploadStatusMessage ? html`<div class="muted">${this.uploadStatusMessage}</div>` : nothing}
+                      `
+                    : nothing}
+                  <button @click=${() => this.removeDisplay(device.id)}>${device.virtual ? "Delete virtual display" : "Unmanage device"}</button>
+                `
+              : html`<div class="muted">Select display.</div>`}
+          </div>
+        </div>
+      `;
+    }
+
+    if (this.activePage === "display-types") {
+      const displayType = this.selectedDisplayType;
+      return html`
+        <div class="detail">
+          <div class="section">
+            <h2>Display Type</h2>
+            ${displayType
+              ? html`
+                  <label>Name <input .value=${displayType.name} @input=${(event: Event) => this.updateDisplayType(displayType.id, { name: (event.target as HTMLInputElement).value })} /></label>
+                  <div class="row">
+                    <label>Width <input type="number" .value=${String(displayType.width)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { width: Number((event.target as HTMLInputElement).value) })} /></label>
+                    <label>Height <input type="number" .value=${String(displayType.height)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { height: Number((event.target as HTMLInputElement).value) })} /></label>
+                  </div>
+                  <div class="row">
+                    <label>Grid unit <input type="number" .value=${String(displayType.gridUnitPx)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { gridUnitPx: Number((event.target as HTMLInputElement).value) })} /></label>
+                    <label>Safe margin <input type="number" .value=${String(displayType.safeMarginPx)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { safeMarginPx: Number((event.target as HTMLInputElement).value) })} /></label>
+                  </div>
+                  <label>Background <input .value=${displayType.palette.bg} @input=${(event: Event) => this.updateDisplayType(displayType.id, { palette: { ...displayType.palette, bg: (event.target as HTMLInputElement).value } })} /></label>
+                  <label>Foreground <input .value=${displayType.palette.fg} @input=${(event: Event) => this.updateDisplayType(displayType.id, { palette: { ...displayType.palette, fg: (event.target as HTMLInputElement).value } })} /></label>
+                  <label>Accent <input .value=${displayType.palette.accent} @input=${(event: Event) => this.updateDisplayType(displayType.id, { palette: { ...displayType.palette, accent: (event.target as HTMLInputElement).value } })} /></label>
+                  <button @click=${() => this.removeDisplayType(displayType.id)}>Delete display type</button>
+                `
+              : html`<div class="muted">Select display type.</div>`}
+          </div>
+        </div>
+      `;
+    }
+
+    if (this.activePage === "widgets") {
+      const definition = this.selectedWidgetDefinition;
+      return html`
+        <div class="detail">
+          <div class="section">
+            <h2>Compound Widget</h2>
+            ${definition
+              ? html`
+                  <label>Name <input .value=${definition.name} @input=${(event: Event) => this.updateWidgetDefinition(definition.id, (current) => ({ ...current, name: (event.target as HTMLInputElement).value }))} /></label>
+                  <div class="section">
+                    <h3>Inputs</h3>
+                    <button @click=${() => this.addCompoundInput(definition.id)}>Add input</button>
+                    ${definition.inputSchema.map(
+                      (input: CompoundInputDefinition) => html`
+                        <details>
+                          <summary>${input.name}</summary>
+                          <div class="row">
+                            <button class="danger" @click=${() => this.removeCompoundInput(definition.id, input.id)}>Delete input</button>
+                          </div>
+                          <label>Name <input .value=${input.name} @input=${(event: Event) => this.updateWidgetDefinition(definition.id, (current) => ({
+                            ...current,
+                            inputSchema: current.inputSchema.map((entry) => entry.id === input.id ? { ...entry, name: (event.target as HTMLInputElement).value } : entry)
+                          }))} /></label>
+                          <label>
+                            Type
+                            <select .value=${input.valueType} @change=${(event: Event) => this.updateWidgetDefinition(definition.id, (current) => ({
+                              ...current,
+                              inputSchema: current.inputSchema.map((entry) => entry.id === input.id ? { ...entry, valueType: (event.target as HTMLSelectElement).value as CompoundInputDefinition["valueType"] } : entry)
+                            }))}>
+                              <option value="entity">Entity</option>
+                              <option value="string">String</option>
+                              <option value="number">Number</option>
+                              <option value="boolean">Boolean</option>
+                            </select>
+                          </label>
+                          ${input.valueType === "string" || input.valueType === "entity"
+                            ? html`
+                                <label>
+                                  Preview value
+                                  <input .value=${String(input.previewValue ?? "")} @input=${(event: Event) => this.updateWidgetDefinition(definition.id, (current) => ({
+                                    ...current,
+                                    inputSchema: current.inputSchema.map((entry) => entry.id === input.id ? { ...entry, previewValue: (event.target as HTMLInputElement).value } : entry)
+                                  }))} />
+                                </label>
+                              `
+                            : nothing}
+                          ${input.valueType === "number"
+                            ? html`
+                                <label>
+                                  Preview value
+                                  <input type="number" .value=${String(input.previewValue ?? 0)} @input=${(event: Event) => this.updateWidgetDefinition(definition.id, (current) => ({
+                                    ...current,
+                                    inputSchema: current.inputSchema.map((entry) => entry.id === input.id ? { ...entry, previewValue: Number((event.target as HTMLInputElement).value) } : entry)
+                                  }))} />
+                                </label>
+                              `
+                            : nothing}
+                          ${input.valueType === "boolean"
+                            ? html`
+                                <label>
+                                  Preview value
+                                  <select .value=${String(input.previewValue ?? false)} @change=${(event: Event) => this.updateWidgetDefinition(definition.id, (current) => ({
+                                    ...current,
+                                    inputSchema: current.inputSchema.map((entry) => entry.id === input.id ? { ...entry, previewValue: (event.target as HTMLSelectElement).value === "true" } : entry)
+                                  }))}>
+                                    <option value="true">true</option>
+                                    <option value="false">false</option>
+                                  </select>
+                                </label>
+                              `
+                            : nothing}
+                        </details>
+                      `
+                    )}
+                  </div>
+                  <button @click=${() => this.removeWidgetDefinition(definition.id)}>Delete compound widget</button>
+                  <div class="editor-structure-preview">
+                    <div class="row">
+                      <strong>Visual Structure</strong>
+                      <span class="muted">Click boxes to select. Drag to reorder/reparent.</span>
+                    </div>
+                    ${this.renderStructurePreviewStage()}
+                  </div>
+                  <div class="editor-split">
+                    ${this.renderNodeTree(definition)}
+                    ${definition.rootNode
+                      ? this.selectedEditorNode
+                        ? this.renderNodeEditor(this.selectedEditorNode, definition, parentIdForNode(definition.rootNode, this.selectedEditorNode.id))
+                        : html`<div class="empty-state">Select node.</div>`
+                      : html`
+                          <div class="empty-state">
+                            <div class="muted">No root node.</div>
+                            <div class="row">
+                              <button @click=${() => this.setRootNode(definition, defaultRootNode("stack"))}>Add Stack Root</button>
+                              <button @click=${() => this.setRootNode(definition, defaultRootNode("grid"))}>Add Grid Root</button>
+                              <button @click=${() => this.setRootNode(definition, defaultRootNode("zstack"))}>Add ZStack Root</button>
+                            </div>
+                          </div>
+                        `}
+                  </div>
+                `
+              : html`<div class="muted">Select compound widget.</div>`}
+          </div>
+        </div>
+      `;
+    }
+
+    if (this.activePage === "layouts") {
+      const layout = this.selectedLayout;
+      return html`
+        <div class="detail">
+          <div class="section">
+            <h2>Layout</h2>
+            ${layout
+              ? html`
+                  <label>Name <input .value=${layout.name} @input=${(event: Event) => this.updateLayout(layout.id, (current) => ({ ...current, name: (event.target as HTMLInputElement).value }))} /></label>
+                  <label>
+                    Kind
+                    <select .value=${layout.kind} @change=${(event: Event) => this.updateLayout(layout.id, (current) => ({ ...current, kind: (event.target as HTMLSelectElement).value as LayoutDefinition["kind"] }))}>
+                      <option value="fullscreen">Fullscreen</option>
+                      <option value="popup">Popup</option>
+                    </select>
+                  </label>
+                  <label>
+                    Display type
+                    <select .value=${layout.displayTypeId} @change=${(event: Event) => this.updateLayout(layout.id, (current) => ({ ...current, displayTypeId: (event.target as HTMLSelectElement).value }))}>
+                      ${(this.project.displayTypes ?? []).map((displayType) => html`<option value=${displayType.id}>${displayType.name}</option>`)}
+                    </select>
+                  </label>
+                  ${layout.kind === "popup"
+                    ? html`
+                        <div class="row">
+                          <label>Popup width <input type="number" .value=${String(layout.popupDefaults?.widthPx ?? 180)} @input=${(event: Event) => this.updateLayout(layout.id, (current) => ({ ...current, popupDefaults: { ...current.popupDefaults, widthPx: Number((event.target as HTMLInputElement).value) } }))} /></label>
+                          <label>Popup height <input type="number" .value=${String(layout.popupDefaults?.heightPx ?? 80)} @input=${(event: Event) => this.updateLayout(layout.id, (current) => ({ ...current, popupDefaults: { ...current.popupDefaults, heightPx: Number((event.target as HTMLInputElement).value) } }))} /></label>
+                        </div>
+                      `
+                    : nothing}
+                  <button @click=${() => this.removeLayout(layout.id)}>Delete layout</button>
+                  <div class="editor-structure-preview">
+                    <div class="row">
+                      <strong>Visual Structure</strong>
+                      <span class="muted">Click boxes to select. Drag to reorder/reparent.</span>
+                    </div>
+                    ${this.renderStructurePreviewStage()}
+                  </div>
+                  <div class="editor-split">
+                    ${this.renderNodeTree(layout)}
+                    ${layout.rootNode
+                      ? this.selectedEditorNode
+                        ? this.renderNodeEditor(this.selectedEditorNode, layout, parentIdForNode(layout.rootNode, this.selectedEditorNode.id))
+                        : html`<div class="empty-state">Select node.</div>`
+                      : html`
+                          <div class="empty-state">
+                            <div class="muted">No root node.</div>
+                            <div class="row">
+                              <button @click=${() => this.setRootNode(layout, defaultRootNode("stack"))}>Add Stack Root</button>
+                              <button @click=${() => this.setRootNode(layout, defaultRootNode("grid"))}>Add Grid Root</button>
+                              <button @click=${() => this.setRootNode(layout, defaultRootNode("zstack"))}>Add ZStack Root</button>
+                            </div>
+                          </div>
+                        `}
+                  </div>
+                `
+              : html`<div class="muted">Select layout.</div>`}
+          </div>
+        </div>
+      `;
+    }
+
+    if (this.activePage === "themes") {
+      const theme = this.selectedTheme;
+      return html`
+        <div class="detail">
+          <div class="section">
+            <h2>Theme</h2>
+            ${theme
+              ? html`
+                  <label>Name <input .value=${theme.name} @input=${(event: Event) => this.updateTheme(theme.id, (current) => ({ ...current, name: (event.target as HTMLInputElement).value }))} /></label>
+                  <label>
+                    Auto-fit font family
+                    <select .value=${theme.autoFitFontFamily ?? "px-sans"} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({ ...current, autoFitFontFamily: (event.target as HTMLSelectElement).value }))}>
+                      ${this.renderFontFamilyOptions(theme.autoFitFontFamily ?? "px-sans")}
+                    </select>
+                  </label>
+                  <label>
+                    Title color
+                    <select .value=${theme.text.title} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({ ...current, text: { ...current.text, title: (event.target as HTMLSelectElement).value as typeof current.text.title } }))}>
+                      <option value="fg">Foreground</option>
+                      <option value="accent">Accent</option>
+                      <option value="bg">Background</option>
+                    </select>
+                  </label>
+                  <label>
+                    Body color
+                    <select .value=${theme.text.body} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({ ...current, text: { ...current.text, body: (event.target as HTMLSelectElement).value as typeof current.text.body } }))}>
+                      <option value="fg">Foreground</option>
+                      <option value="accent">Accent</option>
+                      <option value="bg">Background</option>
+                    </select>
+                  </label>
+                  <label>
+                    Value color
+                    <select .value=${theme.text.value} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({ ...current, text: { ...current.text, value: (event.target as HTMLSelectElement).value as typeof current.text.value } }))}>
+                      <option value="fg">Foreground</option>
+                      <option value="accent">Accent</option>
+                      <option value="bg">Background</option>
+                    </select>
+                  </label>
+                  <label>
+                    Background fill
+                    <select .value=${theme.surface.fillRole ?? "none"} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({
+                      ...current,
+                      surface: {
+                        ...current.surface,
+                        fillRole: (event.target as HTMLSelectElement).value === "none"
+                          ? undefined
+                          : (event.target as HTMLSelectElement).value as "bg" | "fg" | "accent"
+                      }
+                    }))}>
+                      <option value="none">None</option>
+                      <option value="bg">Background</option>
+                      <option value="fg">Foreground</option>
+                      <option value="accent">Accent</option>
+                    </select>
+                  </label>
+                  ${(["tiny", "normal", "header"] as const).map(
+                    (role) => {
+                      const roleStyle = this.coerceTextStyleVariant(theme.fontRoles?.[role]);
+                      const roleFamily = roleStyle.family ?? "px-sans";
+                      return html`
+                      <details>
+                        <summary>${role} font</summary>
+                        <label>
+                          Family
+                          <select .value=${roleFamily} @change=${(event: Event) => {
+                            const family = (event.target as HTMLSelectElement).value;
+                            const currentRole = this.coerceTextStyleVariant({ ...theme.fontRoles?.[role], family });
+                            this.updateTheme(theme.id, (current) => ({
+                              ...current,
+                              fontRoles: { ...current.fontRoles, [role]: currentRole }
+                            }));
+                          }}>
+                            ${this.renderFontFamilyOptions(roleFamily)}
+                          </select>
+                        </label>
+                        ${this.renderTextVariantControls(roleFamily, roleStyle, (patch) =>
+                          this.updateTheme(theme.id, (current) => ({
+                            ...current,
+                            fontRoles: { ...current.fontRoles, [role]: { ...current.fontRoles?.[role], family: roleFamily, ...patch } }
+                          }))
+                        )}
+                        <label>
+                          Pixel size
+                          ${this.renderFontPixelSizeControl(
+                            roleFamily,
+                            Number(theme.fontRoles?.[role]?.pixelSize ?? this.project.fontPresets[role]),
+                            (pixelSize) => this.updateTheme(theme.id, (current) => ({ ...current, fontRoles: { ...current.fontRoles, [role]: { ...current.fontRoles?.[role], pixelSize } } }))
+                          )}
+                        </label>
+                      </details>
+                    `}
+                  )}
+                  <details>
+                    <summary>Text outline</summary>
+                    <label>
+                      <input type="checkbox" .checked=${Boolean(theme.textOutline?.enabled)} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({ ...current, textOutline: { ...current.textOutline, enabled: (event.target as HTMLInputElement).checked, colorRole: current.textOutline?.colorRole ?? "bg", thicknessPx: current.textOutline?.thicknessPx ?? 1 } }))} />
+                      Enable glyph outline
+                    </label>
+                    <label>
+                      Color
+                      <select .value=${theme.textOutline?.colorRole ?? "bg"} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({ ...current, textOutline: { ...current.textOutline, enabled: current.textOutline?.enabled ?? false, colorRole: (event.target as HTMLSelectElement).value as "bg" | "fg" | "accent", thicknessPx: current.textOutline?.thicknessPx ?? 1 } }))}>
+                        <option value="bg">Background</option>
+                        <option value="fg">Foreground</option>
+                        <option value="accent">Accent</option>
+                      </select>
+                    </label>
+                  </details>
+                  <button @click=${() => this.removeTheme(theme.id)}>Delete theme</button>
+                `
+              : html`<div class="muted">Select theme.</div>`}
+          </div>
+        </div>
+      `;
+    }
+
+    if (this.activePage === "config") {
+      const userFonts = this.fonts.filter((family) => family.source === "user");
+      const activeFontPreview = this.fontSpecimens[0];
+      return html`
+        <div class="detail">
+          <div class="section">
+            <h2>Home Assistant</h2>
+            <label>
+              Mode
+              <select .value=${this.homeAssistantSettings.mode} @change=${(event: Event) => (this.homeAssistantSettings = { ...this.homeAssistantSettings, mode: (event.target as HTMLSelectElement).value as HomeAssistantConnectionSettings["mode"] })}>
+                <option value="custom">Custom host</option>
+                <option value="supervisor">Use local HA</option>
+              </select>
+            </label>
+            <label>
+              Host
+              <input .value=${this.homeAssistantSettings.host} ?disabled=${this.homeAssistantSettings.mode === "supervisor"} @input=${(event: Event) => (this.homeAssistantSettings = { ...this.homeAssistantSettings, host: (event.target as HTMLInputElement).value })} />
+            </label>
+            <label>
+              <input type="checkbox" .checked=${this.homeAssistantSettings.useSupervisorProxy} @change=${(event: Event) => (this.homeAssistantSettings = { ...this.homeAssistantSettings, useSupervisorProxy: (event.target as HTMLInputElement).checked })} />
+              Use Supervisor proxy
+            </label>
+            <label>
+              <input type="checkbox" .checked=${Boolean(this.homeAssistantSettings.allowInsecureTls)} @change=${(event: Event) => (this.homeAssistantSettings = { ...this.homeAssistantSettings, allowInsecureTls: (event.target as HTMLInputElement).checked })} />
+              Allow insecure TLS (self-signed certs)
+            </label>
+            <label>
+              <input type="checkbox" .checked=${this.replaceHomeAssistantToken} @change=${(event: Event) => {
+                this.replaceHomeAssistantToken = (event.target as HTMLInputElement).checked;
+                this.homeAssistantTokenDraft = this.replaceHomeAssistantToken ? "" : maskToken(this.homeAssistantSettings.hasToken, "");
+              }} />
+              Replace token
+            </label>
+            <label>
+              Token
+              <input type="password" .value=${this.homeAssistantTokenDraft} @input=${(event: Event) => (this.homeAssistantTokenDraft = (event.target as HTMLInputElement).value)} />
+            </label>
+            <div class="row">
+              <button @click=${() => void this.testConnection()}>Test</button>
+              <button class="primary" @click=${() => void this.saveConnection()}>Save</button>
+            </div>
+            ${this.homeAssistantStatus ? html`<div class=${this.homeAssistantStatus.ok ? "status-ok" : "status-error"}>${this.homeAssistantStatus.message}</div>` : nothing}
+          </div>
+          <div class="section">
+            <h2>OpenEPaperLink Access Point</h2>
+            <label>
+              URL
+              <input
+                .value=${this.openEpaperLinkAccessPointSettings.url}
+                placeholder="http://192.168.1.170"
+                @input=${(event: Event) =>
+                  (this.openEpaperLinkAccessPointSettings = {
+                    ...this.openEpaperLinkAccessPointSettings,
+                    url: (event.target as HTMLInputElement).value
+                  })}
+              />
+            </label>
+            <div class="row">
+              <button @click=${() => void this.testAccessPointConnection()}>Test</button>
+              <button class="primary" @click=${() => void this.saveAccessPointSettings()}>Save</button>
+            </div>
+            <label>
+              Default test display
+              <select
+                .value=${this.openEpaperLinkAccessPointSettings.defaultTestDisplayMac ?? ""}
+                @change=${(event: Event) =>
+                  (this.openEpaperLinkAccessPointSettings = {
+                    ...this.openEpaperLinkAccessPointSettings,
+                    defaultTestDisplayMac: (event.target as HTMLSelectElement).value
+                  })}
+              >
+                <option value="">None</option>
+                ${this.accessPointTagCandidates.map((candidate) => {
+                  const mac = candidateMac(candidate);
+                  const displayType = candidate.suggestedDisplayType;
+                  return html`
+                    <option value=${mac}>
+                      ${candidate.name} ${mac}${displayType ? ` (${displayType.width}x${displayType.height})` : ""}
+                    </option>
+                  `;
+                })}
+              </select>
+            </label>
+            ${this.openEpaperLinkAccessPointStatus
+              ? html`
+                  <div class=${this.openEpaperLinkAccessPointStatus.ok ? "status-ok" : "status-error"}>
+                    ${this.openEpaperLinkAccessPointStatus.message}
+                    ${typeof this.openEpaperLinkAccessPointStatus.tagCount === "number"
+                      ? html`<span class="muted"> (${this.openEpaperLinkAccessPointStatus.tagCount} tags on first page)</span>`
+                      : nothing}
+                  </div>
+                `
+              : nothing}
+          </div>
+          <div class="section">
+            <h2>Fonts</h2>
+            <div class="row">
+              <button @click=${() => void this.rescanFontDirectory()}>Rescan font dir</button>
+            </div>
+            <label>
+              Import font
+              <input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" @change=${(event: Event) => void this.uploadFont(event)} />
+            </label>
+            <label>
+              Sample text
+              <input .value=${this.fontSpecimenSampleText} @input=${(event: Event) => {
+                this.fontSpecimenSampleText = (event.target as HTMLInputElement).value;
+              }} />
+            </label>
+            <label>
+              <input type="checkbox" .checked=${this.showAllFontSpecimenSizes} @change=${(event: Event) => {
+                this.showAllFontSpecimenSizes = (event.target as HTMLInputElement).checked;
+                void this.refreshFontSpecimens();
+              }} />
+              Show all sizes
+            </label>
+            <div class="muted">Default: only currently selected sizes shown.</div>
+            <button @click=${() => void this.refreshFontSpecimens()}>Refresh font preview</button>
+            ${this.fontSpecimenLoading ? html`<div class="muted">Loading font preview...</div>` : nothing}
+            ${userFonts
+              .map((family) => {
+                const previewFamily = family.id === activeFontPreview?.family ? activeFontPreview : undefined;
+                const allowedSet = new Set(previewFamily?.allowedPixelSizes ?? family.allowedPixelSizes ?? []);
+                const sizeRows = Array.from(
+                  new Set(
+                    previewFamily
+                      ? previewFamily.variants.flatMap((variant) => variant.tiles.map((tile) => tile.size))
+                      : family.allowedPixelSizes ?? []
+                  )
+                ).sort((left, right) => left - right);
+                return html`
+                  <div class="section font-preview-card">
+                    <div class="row">
+                      <strong>${family.label}</strong>
+                      ${family.variants.map((variant) => html`<span class="muted">${variantLabel(...variantKeyToStyle(variant))}</span>`)}
+                      ${family.importSource === "dafont" ? html`<span class="pill">DaFont</span>` : html`<span class="pill">Upload</span>`}
+                      ${family.declaredPixelSize ? html`<span class="pill">${family.declaredPixelSize}px base</span>` : nothing}
+                      ${family.licenseCategory ? html`<span class="pill">${family.licenseCategory}</span>` : nothing}
+                      ${this.selectedFontPreviewFamilyId === family.id
+                        ? html`<button class="primary" @click=${() => void this.refreshFontSpecimens()}>Reload preview</button>`
+                        : html`<button @click=${() => {
+                            this.selectedFontPreviewFamilyId = family.id;
+                            void this.refreshFontSpecimens();
+                          }}>Show preview</button>`}
+                      ${this.confirmDeleteFontId === family.id
+                        ? html`
+                            <span class="muted">Delete ${family.label}?</span>
+                            <button class="danger" @click=${() => void this.removeFontOption(family.id)}>Confirm</button>
+                            <button @click=${() => { this.confirmDeleteFontId = ""; }}>Cancel</button>
+                          `
+                        : html`<button @click=${() => { this.confirmDeleteFontId = family.id; }}>Delete font</button>`}
+                    </div>
+                    ${family.sourceUrl ? html`<div class="muted"><a href=${family.sourceUrl} target="_blank" rel="noreferrer">Source</a></div>` : nothing}
+                    <div class="muted">Allowed sizes chosen visually. Shared across whole family.</div>
+                    ${previewFamily
+                      ? html`
+                          <div class="font-size-grid">
+                            ${sizeRows.map((size) => html`
+                              <div class="font-size-row">
+                                <div class="font-size-row-head">
+                                  <label>
+                                    <input
+                                      type="checkbox"
+                                      .checked=${allowedSet.has(size)}
+                                      @change=${(event: Event) => void this.toggleFontAllowedSize(family.id, size, (event.target as HTMLInputElement).checked)}
+                                    />
+                                    ${size}px
+                                  </label>
+                                </div>
+                                <div class="font-variant-grid">
+                                  ${previewFamily.variants.map((variant) => {
+                                    const tile = variant.tiles.find((entry) => entry.size === size);
+                                    return html`
+                                      <div class="font-variant-card">
+                                        <div class="font-variant-title">${variantLabel(variant.weight, variant.slope)}</div>
+                                        ${tile
+                                          ? html`
+                                              <div class="preview-stage">
+                                                <img
+                                                  class="font-specimen"
+                                                  width=${tile.width}
+                                                  height=${tile.height}
+                                                  src=${`data:image/png;base64,${tile.pngBase64}`}
+                                                />
+                                              </div>
+                                            `
+                                          : html`<div class="muted">No variant</div>`}
+                                      </div>
+                                    `;
+                                  })}
+                                </div>
+                              </div>
+                            `)}
+                          </div>
+                        `
+                      : html`<div class="muted">Preview not loaded.</div>`}
+                  </div>
+                `;
+              })}
+            ${this.fontSpecimenError ? html`<div class="status-error">${this.fontSpecimenError}</div>` : nothing}
+            ${userFonts.length
+              ? nothing
+              : html`<div class="muted">No imported font previews yet.</div>`}
+          </div>
+        </div>
+      `;
+    }
+
+    if (this.activePage === "dafont") {
+      const entry = this.selectedDaFontEntry;
+      return html`
+        <div class="detail">
+          <div class="section">
+            <h2>DaFont Browser</h2>
+            <div class="muted">Bitmap page import. ZIP/direct font handled server-side.</div>
+          </div>
+          ${entry
+            ? html`
+                <div class="dafont-card">
+                  <h3>${entry.name}</h3>
+                  ${entry.author ? html`<div class="muted">by ${entry.author}</div>` : nothing}
+                  <div class="row">
+                    ${typeof entry.pixelSize === "number" ? html`<span class="pill">${entry.pixelSize}px base</span>` : nothing}
+                    ${entry.licenseCategory ? html`<span class="pill">${entry.licenseCategory}</span>` : nothing}
+                    ${entry.downloadSizeLabel ? html`<span class="pill">${entry.downloadSizeLabel}</span>` : nothing}
+                  </div>
+                  <div class="row">
+                    <a href=${entry.detailUrl} target="_blank" rel="noreferrer">Open detail</a>
+                    <a href=${entry.downloadUrl} target="_blank" rel="noreferrer">Open download</a>
+                  </div>
+                  <div class="muted">
+                    Import whitelists ${entry.pixelSize ? `${entry.pixelSize}px multiples` : "all sizes"} up to 200.
+                  </div>
+                  <div class="row">
+                    <button
+                      class="primary"
+                      ?disabled=${this.dafontImportingId === entry.id}
+                      @click=${() => void this.importSelectedDaFont(entry)}
+                    >
+                      ${this.dafontImportingId === entry.id ? "Importing…" : "Import"}
+                    </button>
+                  </div>
+                  ${this.dafontImportMessage ? html`<div class="muted">${this.dafontImportMessage}</div>` : nothing}
+                </div>
+              `
+            : html`<div class="muted">Select DaFont entry.</div>`}
+        </div>
+      `;
+    }
+
+    const assignment = this.selectedAssignment;
+    return html`
+      <div class="detail">
+        <div class="section">
+          <h2>Assignment</h2>
+          ${assignment
+            ? html`
+                <label>
+                  Display
+                  <select .value=${assignment.displayId} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({ ...current, displayId: (event.target as HTMLSelectElement).value }))}>
+                    ${(this.project.devices ?? []).map((device) => html`<option value=${device.id}>${device.name}</option>`)}
+                  </select>
+                </label>
+                <label>
+                  Default fullscreen
+                  <select .value=${assignment.defaultFullscreenLayoutId ?? ""} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({ ...current, defaultFullscreenLayoutId: (event.target as HTMLSelectElement).value }))}>
+                    ${(this.project.layoutDefinitions ?? []).filter((layout) => layout.kind === "fullscreen").map((layout) => html`<option value=${layout.id}>${layout.name}</option>`)}
+                  </select>
+                </label>
+                <label>
+                  Theme
+                  <select .value=${assignment.defaultThemeId ?? "inherit"} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({ ...current, defaultThemeId: (event.target as HTMLSelectElement).value }))}>
+                    ${this.project.themes.map((theme) => html`<option value=${theme.id}>${theme.name}</option>`)}
+                  </select>
+                </label>
+                <div class="section">
+                  <div class="row">
+                    <h3>Fullscreen Rules</h3>
+                    <button @click=${() => this.updateAssignment(assignment.id, (current) => ({ ...current, fullscreenRules: [...current.fullscreenRules, defaultRule("fullscreen_activation")] }))}>Add rule</button>
+                  </div>
+                  ${assignment.fullscreenRules.map((rule) => this.renderRuleEditor(rule, assignment, "fullscreen_activation"))}
+                </div>
+                <div class="section">
+                  <div class="row">
+                    <h3>Popup Rules</h3>
+                    <button @click=${() => this.updateAssignment(assignment.id, (current) => ({ ...current, popupRules: [...current.popupRules, defaultRule("popup_activation")] }))}>Add rule</button>
+                  </div>
+                  ${assignment.popupRules.map((rule) => this.renderRuleEditor(rule, assignment, "popup_activation"))}
+                </div>
+                <button @click=${() => this.removeAssignment(assignment.id)}>Delete assignment</button>
+              `
+            : html`<div class="muted">Select assignment.</div>`}
+        </div>
+      </div>
+    `;
+  }
+
+  render() {
+    return html`
+      <div class="shell">
+        ${this.renderNavigation()}
+        <section class="panel">${this.renderListPanel()}</section>
+        <section class="panel detail">${this.renderDetailPanel()}</section>
+        <section class="panel preview">${this.renderPreviewPanel()}</section>
+      </div>
+    `;
+  }
+}
+
+customElements.define("epaper-editor-app", EpPaperEditorApp);

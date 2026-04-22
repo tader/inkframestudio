@@ -1,0 +1,30 @@
+{
+  "name": "openepaperlink-codex",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:editor": "node scripts/build.mjs editor",
+    "build:backend": "node scripts/build.mjs backend",
+    "dev:backend": "tsx packages/addon-backend/src/server.ts",
+    "import:pixel-fonts": "node scripts/import-pixel-fonts.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "fontkit": "^2.0.4",
+    "lit": "^3.2.1",
+    "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.1",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.5",
+    "jsdom": "^26.1.0",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
