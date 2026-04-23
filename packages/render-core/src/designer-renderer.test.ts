@@ -3,7 +3,7 @@ import { inspectLayoutDefinition, renderAssignedDisplay, renderLayoutDefinition 
 import { layoutText } from "./bitmap-font.js";
 import { normalizeProject } from "./themes.js";
 import { SAMPLE_DATA, SAMPLE_PROJECT } from "./sample-project.js";
-import type { Project } from "./types.js";
+import type { LayoutDefinition, Project } from "./types.js";
 
 function pixelBounds(rendered: { width: number; height: number; pixels: Uint8Array }, x0: number, y0: number, w: number, h: number) {
   let minX = x0 + w;
@@ -25,6 +25,16 @@ function pixelBounds(rendered: { width: number; height: number; pixels: Uint8Arr
   return maxX >= 0
     ? { minX, minY, maxX, maxY, width: maxX - minX + 1, height: maxY - minY + 1 }
     : null;
+}
+
+function regionPixels(rendered: { width: number; pixels: Uint8Array }, x0: number, y0: number, w: number, h: number): number[] {
+  const pixels: number[] = [];
+  for (let y = y0; y < y0 + h; y += 1) {
+    for (let x = x0; x < x0 + w; x += 1) {
+      pixels.push(rendered.pixels[y * rendered.width + x] ?? 0);
+    }
+  }
+  return pixels;
 }
 
 describe("designer renderer", () => {
@@ -229,6 +239,530 @@ describe("designer renderer", () => {
       pixelSize: theme.fontRoles?.header?.pixelSize ?? project.fontPresets.header
     }, project.fontPresets);
     expect(child?.frame.h).toBe(textMetrics.lineHeight + 8);
+  });
+
+  it("sizes horizontal stacks with fit-content height from tallest child", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [{
+        id: "layout-hstack-fit-content-height",
+        name: "HStack Fit Content Height",
+        kind: "fullscreen",
+        displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+        rootNode: {
+          id: "root",
+          type: "stack",
+          axis: "vertical",
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          children: [{
+            id: "hstack",
+            type: "stack",
+            axis: "horizontal",
+            width: { mode: "fill" },
+            height: { mode: "fit_content" },
+            children: [{
+              id: "text",
+              type: "primitive_instance",
+              primitiveType: "text",
+              width: { mode: "fill" },
+              height: { mode: "fit_content" },
+              props: {
+                text: "Header",
+                fontRole: "header",
+                paddingPx: 4,
+                borderToken: "thin"
+              }
+            }]
+          }]
+        }
+      }]
+    });
+    const inspection = inspectLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const hstack = inspection.root?.children[0];
+    const child = hstack?.children[0];
+    expect(hstack?.frame.h).toBe(child?.frame.h);
+    expect(hstack?.frame.h).toBeGreaterThan(0);
+  });
+
+  it("sizes horizontal stacks with fit-content width children before fill children", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [{
+        id: "layout-hstack-fit-content-width",
+        name: "HStack Fit Content Width",
+        kind: "fullscreen",
+        displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+        rootNode: {
+          id: "root",
+          type: "stack",
+          axis: "vertical",
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          children: [{
+            id: "hstack",
+            type: "stack",
+            axis: "horizontal",
+            width: { mode: "fixed_px", value: 80 },
+            height: { mode: "fit_content" },
+            children: [{
+              id: "a",
+              type: "primitive_instance",
+              primitiveType: "text",
+              width: { mode: "fit_content" },
+              height: { mode: "fit_content" },
+              props: {
+                text: "A",
+                fixedPixelSize: 8,
+                paddingPx: 0,
+                borderToken: "none"
+              }
+            }, {
+              id: "b",
+              type: "primitive_instance",
+              primitiveType: "text",
+              width: { mode: "fit_content" },
+              height: { mode: "fit_content" },
+              props: {
+                text: "B",
+                fixedPixelSize: 8,
+                paddingPx: 0,
+                borderToken: "none"
+              }
+            }, {
+              id: "c",
+              type: "primitive_instance",
+              primitiveType: "text",
+              width: { mode: "fill" },
+              height: { mode: "fit_content" },
+              props: {
+                text: "C",
+                fixedPixelSize: 8,
+                paddingPx: 0,
+                borderToken: "none",
+                horizontalAlign: "right"
+              }
+            }]
+          }]
+        }
+      }]
+    });
+    const inspection = inspectLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const hstack = inspection.root?.children[0];
+    const [a, b, c] = hstack?.children ?? [];
+    expect(a?.frame.w).toBeGreaterThan(0);
+    expect(b?.frame.w).toBeGreaterThan(0);
+    expect(c?.frame.w).toBeGreaterThan(0);
+    expect(b?.frame.x).toBe((a?.frame.x ?? 0) + (a?.frame.w ?? 0));
+    expect(c?.frame.x).toBe((b?.frame.x ?? 0) + (b?.frame.w ?? 0));
+    expect((a?.frame.w ?? 0) + (b?.frame.w ?? 0) + (c?.frame.w ?? 0)).toBe(hstack?.frame.w);
+
+    const rendered = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    expect(pixelBounds(rendered, 60, 0, 20, rendered.height)).not.toBeNull();
+  });
+
+  it("wraps text and grows fit-content height to include all lines", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [{
+        id: "layout-text-wrap-overflow",
+        name: "Text Wrap Overflow",
+        kind: "fullscreen",
+        displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+        rootNode: {
+          id: "root",
+          type: "stack",
+          axis: "vertical",
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          children: [{
+            id: "text",
+            type: "primitive_instance",
+            primitiveType: "text",
+            width: { mode: "fixed_px", value: 30 },
+            height: { mode: "fit_content" },
+            props: {
+              text: "ALPHA BETA",
+              overflow: "wrap",
+              fixedPixelSize: 8,
+              paddingPx: 0,
+              borderToken: "none"
+            }
+          }]
+        }
+      }]
+    });
+    const inspection = inspectLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const child = inspection.root?.children[0];
+    const lineMetrics = layoutText("Hg", {
+      family: "px-sans",
+      weight: "regular",
+      slope: "roman",
+      size: "normal",
+      pixelSize: 8
+    }, project.fontPresets);
+    expect(child?.frame.h).toBeGreaterThan(lineMetrics.lineHeight);
+    const rendered = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    expect(pixelBounds(rendered, 0, lineMetrics.lineHeight, 30, rendered.height - lineMetrics.lineHeight)).not.toBeNull();
+  });
+
+  it("wraps fill-width text and grows fit-content height inside a constrained vstack", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [{
+        id: "layout-text-fill-wrap-overflow",
+        name: "Text Fill Wrap Overflow",
+        kind: "fullscreen",
+        displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+        rootNode: {
+          id: "root",
+          type: "stack",
+          axis: "vertical",
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          children: [{
+            id: "container",
+            type: "stack",
+            axis: "vertical",
+            width: { mode: "fixed_px", value: 40 },
+            height: { mode: "fit_content" },
+            children: [{
+              id: "text",
+              type: "primitive_instance",
+              primitiveType: "text",
+              width: { mode: "fill" },
+              height: { mode: "fit_content" },
+              props: {
+                text: "Some very long text that should wrap over multiple lines in this widget",
+                overflow: "wrap",
+                fixedPixelSize: 8,
+                paddingPx: 0,
+                borderToken: "none"
+              }
+            }]
+          }]
+        }
+      }]
+    });
+    const inspection = inspectLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const container = inspection.root?.children[0];
+    const child = container?.children[0];
+    const lineMetrics = layoutText("Hg", {
+      family: "px-sans",
+      weight: "regular",
+      slope: "roman",
+      size: "normal",
+      pixelSize: 8
+    }, project.fontPresets);
+    expect(child?.frame.w).toBe(40);
+    expect(child?.frame.h).toBeGreaterThan(lineMetrics.lineHeight);
+    expect(container?.frame.h).toBe(child?.frame.h);
+  });
+
+  it("supports tighter line spacing for wrapped text", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const makeProject = (lineSpacingPx: number): Project => normalizeProject({
+      ...normalized,
+      themes: normalized.themes.map((theme) => (
+        theme.id === "classic-outline"
+          ? {
+              ...theme,
+              fontRoles: {
+                ...theme.fontRoles,
+                normal: {
+                  ...theme.fontRoles?.normal,
+                  lineSpacingPx
+                }
+              }
+            }
+          : theme
+      )),
+      layoutDefinitions: [{
+        id: `layout-text-line-spacing-${lineSpacingPx}`,
+        name: "Text Line Spacing",
+        kind: "fullscreen",
+        displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+        rootNode: {
+          id: "root",
+          type: "stack",
+          axis: "vertical",
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          children: [{
+            id: "text",
+            type: "primitive_instance",
+            primitiveType: "text",
+            width: { mode: "fixed_px", value: 40 },
+            height: { mode: "fit_content" },
+            props: {
+              text: "Some very long text that should wrap",
+              overflow: "wrap",
+              fixedPixelSize: 8,
+              paddingPx: 0,
+              borderToken: "none"
+            }
+          }]
+        }
+      }]
+    });
+    const normal = inspectLayoutDefinition(makeProject(0), makeProject(0).layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const tightProject = makeProject(-2);
+    const tight = inspectLayoutDefinition(tightProject, tightProject.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    expect(tight.root?.children[0]?.frame.h).toBeLessThan(normal.root?.children[0]?.frame.h ?? 0);
+  });
+
+  it("supports theme top padding for tighter fit-content text", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const makeProject = (topPaddingPx: number): Project => normalizeProject({
+      ...normalized,
+      themes: normalized.themes.map((theme) => (
+        theme.id === "classic-outline"
+          ? {
+              ...theme,
+              fontRoles: {
+                ...theme.fontRoles,
+                normal: {
+                  ...theme.fontRoles?.normal,
+                  topPaddingPx
+                }
+              }
+            }
+          : theme
+      )),
+      layoutDefinitions: [{
+        id: `layout-text-top-padding-${topPaddingPx}`,
+        name: "Text Top Padding",
+        kind: "fullscreen",
+        displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+        rootNode: {
+          id: "root",
+          type: "stack",
+          axis: "vertical",
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          children: [{
+            id: "text",
+            type: "primitive_instance",
+            primitiveType: "text",
+            width: { mode: "fixed_px", value: 80 },
+            height: { mode: "fit_content" },
+            props: {
+              text: "Header",
+              overflow: "wrap",
+              fixedPixelSize: 8,
+              paddingPx: 0,
+              borderToken: "none"
+            }
+          }]
+        }
+      }]
+    });
+    const normalProject = makeProject(0);
+    const tightProject = makeProject(-2);
+    const normal = inspectLayoutDefinition(normalProject, normalProject.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const tight = inspectLayoutDefinition(tightProject, tightProject.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    expect(tight.root?.children[0]?.frame.h).toBeLessThan(normal.root?.children[0]?.frame.h ?? 0);
+  });
+
+  it("measures foreach fit-content rows with each item's wrapped text", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [{
+        id: "layout-foreach-wrap-overflow",
+        name: "Foreach Wrap Overflow",
+        kind: "fullscreen",
+        displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+        rootNode: {
+          id: "query-node",
+          type: "data_query",
+          queryKind: "calendar_events",
+          variableName: "events",
+          calendarEntityIds: ["calendar.family"],
+          offsetDays: 0,
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          child: {
+            id: "container",
+            type: "stack",
+            axis: "vertical",
+            width: { mode: "fill" },
+            height: { mode: "fit_content" },
+            children: [{
+              id: "loop",
+              type: "foreach",
+              itemsRef: "events",
+              itemAlias: "event",
+              indexAlias: "index",
+              axis: "vertical",
+              width: { mode: "fill" },
+              height: { mode: "fill" },
+              child: {
+                id: "row",
+                type: "stack",
+                axis: "horizontal",
+                width: { mode: "fill" },
+                height: { mode: "fit_content" },
+                children: [{
+                  id: "time",
+                  type: "primitive_instance",
+                  primitiveType: "text",
+                  width: { mode: "fixed_px", value: 51 },
+                  height: { mode: "fit_glyph_bounds" },
+                  props: {
+                    text: "{{ event.start | format(\"HH:MM\") }}",
+                    fixedPixelSize: 8,
+                    paddingPx: 0,
+                    borderToken: "none"
+                  }
+                }, {
+                  id: "summary",
+                  type: "primitive_instance",
+                  primitiveType: "text",
+                  width: { mode: "fill" },
+                  height: { mode: "fit_content" },
+                  props: {
+                    text: "{{ event.summary }}",
+                    overflow: "wrap",
+                    fixedPixelSize: 8,
+                    paddingPx: 0,
+                    borderToken: "none"
+                  }
+                }]
+              }
+            }]
+          }
+        }
+      }]
+    });
+    const metaQueries = {
+      "query-node": {
+        kind: "calendar_events_meta",
+        meta: { date: "2026-04-17", dateVariableName: "date" },
+        items: [{
+          summary: "Very long meeting title with extra context and even more detail to force wrapping across multiple lines in the agenda row",
+          start: "2026-04-17T09:05:00.000Z",
+          end: "2026-04-17T09:30:00.000Z",
+          allDay: false,
+          allday: false,
+          calendarEntityId: "calendar.family",
+          raw: {}
+        }]
+      }
+    };
+    const inspection = inspectLayoutDefinition(project, project.layoutDefinitions?.[0]!, {
+      ...SAMPLE_DATA,
+      metaQueries
+    });
+    const row = inspection.root?.children[0]?.children[0]?.children[0];
+    const summary = row?.children[1];
+    const lineMetrics = layoutText("Hg", {
+      family: "px-sans",
+      weight: "regular",
+      slope: "roman",
+      size: "normal",
+      pixelSize: 8
+    }, project.fontPresets);
+    expect(summary?.frame.h).toBeGreaterThan(lineMetrics.lineHeight);
+    expect(row?.frame.h).toBeGreaterThan(lineMetrics.lineHeight);
+  });
+
+  it("renders ellipsis differently from hide overflow", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const makeProject = (overflow: "hide" | "ellipsis"): Project => normalizeProject({
+      ...normalized,
+      layoutDefinitions: [{
+        id: `layout-text-${overflow}-overflow`,
+        name: `Text ${overflow} Overflow`,
+        kind: "fullscreen",
+        displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+        rootNode: {
+          id: "root",
+          type: "stack",
+          axis: "vertical",
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          children: [{
+            id: "text",
+            type: "primitive_instance",
+            primitiveType: "text",
+            width: { mode: "fixed_px", value: 28 },
+            height: { mode: "fit_content" },
+            props: {
+              text: "WWWWWWWW",
+              overflow,
+              fixedPixelSize: 8,
+              paddingPx: 0,
+              borderToken: "none"
+            }
+          }]
+        }
+      }]
+    });
+    const hidden = makeProject("hide");
+    const ellipsis = makeProject("ellipsis");
+    const hiddenInspection = inspectLayoutDefinition(hidden, hidden.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const ellipsisInspection = inspectLayoutDefinition(ellipsis, ellipsis.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    expect(hiddenInspection.root?.children[0]?.frame.h).toBe(ellipsisInspection.root?.children[0]?.frame.h);
+
+    const hiddenRender = renderLayoutDefinition(hidden, hidden.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const ellipsisRender = renderLayoutDefinition(ellipsis, ellipsis.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    expect(regionPixels(hiddenRender, 0, 0, 28, hiddenInspection.root?.children[0]?.frame.h ?? 0)).not.toEqual(
+      regionPixels(ellipsisRender, 0, 0, 28, ellipsisInspection.root?.children[0]?.frame.h ?? 0)
+    );
+  });
+
+  it("uses tight glyph bounds for fit-glyph-bounds text sizing", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [{
+        id: "layout-fit-glyph-bounds",
+        name: "Fit Glyph Bounds",
+        kind: "fullscreen",
+        displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+        rootNode: {
+          id: "root",
+          type: "stack",
+          axis: "vertical",
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          children: [{
+            id: "text",
+            type: "primitive_instance",
+            primitiveType: "text",
+            width: { mode: "fixed_px", value: 160 },
+            height: { mode: "fit_glyph_bounds" },
+            props: {
+              text: "Blocked",
+              fontRole: "header",
+              fixedPixelSize: 8,
+              paddingPx: 0,
+              borderToken: "none"
+            }
+          }]
+        }
+      }]
+    });
+    const inspection = inspectLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const child = inspection.root?.children[0];
+    const rendered = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const bounds = pixelBounds(rendered, 0, 0, 160, rendered.height);
+    expect(bounds).not.toBeNull();
+    expect(bounds?.minY).toBe(0);
+    expect(child?.frame.h).toBe(bounds?.height);
+    const textMetrics = layoutText("Blocked", {
+      family: "px-sans",
+      weight: "regular",
+      slope: "roman",
+      size: "header",
+      pixelSize: 8
+    }, project.fontPresets);
+    expect(child?.frame.h).toBeLessThan(textMetrics.lineHeight);
   });
 
   it("uses theme pixel size for non-auto-fit text widgets", () => {
@@ -839,5 +1373,650 @@ describe("designer renderer", () => {
     });
     const plain = renderLayoutDefinition(withoutAffixes, withoutAffixes.layoutDefinitions?.[0]!, SAMPLE_DATA);
     expect(withAffixes.hash).not.toBe(plain.hash);
+  });
+
+  it("binds data query arrays lexically and resolves dotted templates", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const layout: LayoutDefinition = {
+      id: "layout-data-scope",
+      name: "Data Scope",
+      kind: "fullscreen" as const,
+      displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+      rootNode: {
+        id: "root",
+        type: "stack" as const,
+        axis: "vertical" as const,
+        width: { mode: "fill" as const },
+        height: { mode: "fill" as const },
+        children: [
+          {
+            id: "query-node",
+            type: "data_query" as const,
+            queryKind: "calendar_events" as const,
+            variableName: "events",
+            dateVariableName: "date",
+            calendarEntityIds: ["calendar.family"],
+            offsetDays: 0,
+            width: { mode: "fill" as const },
+            height: { mode: "fixed_px" as const, value: 20 },
+            child: {
+              id: "inside-text",
+              type: "primitive_instance" as const,
+              primitiveType: "text" as const,
+              width: { mode: "fill" as const },
+              height: { mode: "fill" as const },
+              props: { text: "{{events.0.summary}}", autoFit: false, fixedPixelSize: 8, paddingPx: 0 }
+            }
+          },
+          {
+            id: "outside-text",
+            type: "primitive_instance" as const,
+            primitiveType: "text" as const,
+            width: { mode: "fill" as const },
+            height: { mode: "fixed_px" as const, value: 20 },
+            props: { text: "{{events.0.summary}}", autoFit: false, fixedPixelSize: 8, paddingPx: 0 }
+          }
+        ]
+      }
+    };
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [layout]
+    });
+    const rendered = renderLayoutDefinition(project, layout, {
+      ...SAMPLE_DATA,
+      metaQueries: {
+        "query-node": {
+          kind: "calendar_events_meta",
+          meta: { date: "2026-04-17", dateVariableName: "date" },
+          items: [{
+            summary: "Scoped Event",
+            start: "2026-04-17T09:00:00.000Z",
+            end: "2026-04-17T09:30:00.000Z",
+            allDay: false,
+            allday: false,
+            calendarEntityId: "calendar.family",
+            raw: {}
+          }]
+        }
+      }
+    });
+
+    expect(pixelBounds(rendered, 0, 0, rendered.width, 20)).not.toBeNull();
+    expect(pixelBounds(rendered, 0, 20, rendered.width, 20)).toBeNull();
+  });
+
+  it("limits foreach items and picks if/else branches from event data", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const layout = {
+      id: "layout-foreach-if",
+      name: "Foreach If",
+      kind: "fullscreen" as const,
+      displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+      rootNode: {
+        id: "query-node",
+        type: "data_query" as const,
+        queryKind: "calendar_events" as const,
+        variableName: "events",
+        dateVariableName: "date",
+        calendarEntityIds: ["calendar.family"],
+        offsetDays: 0,
+        width: { mode: "fill" as const },
+        height: { mode: "fill" as const },
+        child: {
+          id: "foreach-node",
+          type: "foreach" as const,
+          itemsRef: "events",
+          itemAlias: "event",
+          indexAlias: "index",
+          axis: "vertical" as const,
+          maxItems: 2,
+          width: { mode: "fill" as const },
+          height: { mode: "fill" as const },
+          child: {
+            id: "if-node",
+            type: "if_else" as const,
+            condition: "event.allday == true",
+            width: { mode: "fill" as const },
+            height: { mode: "fixed_px" as const, value: 18 },
+            thenChild: {
+              id: "all-day-icon",
+              type: "primitive_instance" as const,
+              primitiveType: "icon" as const,
+              width: { mode: "fill" as const },
+              height: { mode: "fill" as const },
+              props: { icon: "warning" }
+            },
+            elseChild: {
+              id: "timed-text",
+              type: "primitive_instance" as const,
+              primitiveType: "text" as const,
+              width: { mode: "fill" as const },
+              height: { mode: "fill" as const },
+              props: { text: "{{index}} {{event.summary}}", autoFit: false, fixedPixelSize: 8, paddingPx: 0 }
+            }
+          }
+        }
+      }
+    };
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [layout]
+    });
+    const inspection = inspectLayoutDefinition(project, layout, {
+      ...SAMPLE_DATA,
+      metaQueries: {
+        "query-node": {
+          kind: "calendar_events_meta",
+          meta: { date: "2026-04-17", dateVariableName: "date" },
+          items: [
+            {
+              summary: "All Day",
+              start: "2026-04-17T00:00:00.000Z",
+              end: "2026-04-18T00:00:00.000Z",
+              allDay: true,
+              allday: true,
+              calendarEntityId: "calendar.family",
+              raw: {}
+            },
+            {
+              summary: "Timed A",
+              start: "2026-04-17T09:00:00.000Z",
+              end: "2026-04-17T09:30:00.000Z",
+              allDay: false,
+              allday: false,
+              calendarEntityId: "calendar.family",
+              raw: {}
+            },
+            {
+              summary: "Timed B",
+              start: "2026-04-17T10:00:00.000Z",
+              end: "2026-04-17T10:30:00.000Z",
+              allDay: false,
+              allday: false,
+              calendarEntityId: "calendar.family",
+              raw: {}
+            }
+          ]
+        }
+      }
+    });
+
+    const foreachNode = inspection.root?.children[0];
+    expect(foreachNode?.nodeType).toBe("foreach");
+    expect(foreachNode?.children).toHaveLength(2);
+    expect(foreachNode?.children[0]?.children[0]?.label).toBe("icon");
+    expect(foreachNode?.children[1]?.children[0]?.label).toBe("text");
+  });
+
+  it("filters arrays in meta nodes before foreach rendering", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const layout = {
+      id: "layout-filter-meta",
+      name: "Filter Meta",
+      kind: "fullscreen" as const,
+      displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+      rootNode: {
+        id: "query-node",
+        type: "data_query" as const,
+        queryKind: "calendar_events" as const,
+        variableName: "events",
+        dateVariableName: "date",
+        calendarEntityIds: ["calendar.family"],
+        offsetDays: 0,
+        width: { mode: "fill" as const },
+        height: { mode: "fill" as const },
+        child: {
+          id: "filter-node",
+          type: "filter" as const,
+          itemsRef: "events",
+          outputVariableName: "filteredEvents",
+          itemAlias: "event",
+          indexAlias: "index",
+          condition: 'event.summary != "Blocked"',
+          width: { mode: "fill" as const },
+          height: { mode: "fill" as const },
+          child: {
+            id: "foreach-node",
+            type: "foreach" as const,
+            itemsRef: "filteredEvents",
+            itemAlias: "event",
+            indexAlias: "index",
+            axis: "vertical" as const,
+            width: { mode: "fill" as const },
+            height: { mode: "fill" as const },
+            child: {
+              id: "text-node",
+              type: "primitive_instance" as const,
+              primitiveType: "text" as const,
+              width: { mode: "fill" as const },
+              height: { mode: "fit_content" as const },
+              props: { text: "{{ event.summary }}", autoFit: false, fixedPixelSize: 8, paddingPx: 0, borderToken: "none" as const }
+            }
+          }
+        }
+      }
+    };
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [layout]
+    });
+    const inspection = inspectLayoutDefinition(project, layout, {
+      ...SAMPLE_DATA,
+      metaQueries: {
+        "query-node": {
+          kind: "calendar_events_meta",
+          meta: { date: "2026-04-17", dateVariableName: "date" },
+          items: [
+            { summary: "Blocked", start: "2026-04-17T09:00:00.000Z", end: "2026-04-17T09:30:00.000Z", allDay: false, allday: false, calendarEntityId: "calendar.family", raw: {} },
+            { summary: "Standup", start: "2026-04-17T10:00:00.000Z", end: "2026-04-17T10:30:00.000Z", allDay: false, allday: false, calendarEntityId: "calendar.family", raw: {} }
+          ]
+        }
+      }
+    });
+    expect(inspection.root?.children[0]?.nodeType).toBe("filter");
+    expect(inspection.root?.children[0]?.children[0]?.children).toHaveLength(1);
+  });
+
+  it("deduplicates arrays by a template key in unique meta nodes", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const layout: LayoutDefinition = {
+      id: "layout-unique-meta",
+      name: "Unique Meta",
+      kind: "fullscreen" as const,
+      displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+      rootNode: {
+        id: "query-node",
+        type: "data_query" as const,
+        queryKind: "calendar_events" as const,
+        variableName: "events",
+        dateVariableName: "date",
+        calendarEntityIds: ["calendar.family"],
+        offsetDays: 0,
+        width: { mode: "fill" as const },
+        height: { mode: "fill" as const },
+        child: {
+          id: "unique-node",
+          type: "unique" as const,
+          itemsRef: "events",
+          outputVariableName: "uniqueEvents",
+          itemAlias: "event",
+          indexAlias: "index",
+          keyTemplate: '{{ event.start | format("HH:MM") }}--{{ event.summary }}',
+          width: { mode: "fill" as const },
+          height: { mode: "fill" as const },
+          child: {
+            id: "foreach-node",
+            type: "foreach" as const,
+            itemsRef: "uniqueEvents",
+            itemAlias: "event",
+            indexAlias: "index",
+            axis: "vertical" as const,
+            width: { mode: "fill" as const },
+            height: { mode: "fill" as const },
+            child: {
+              id: "text-node",
+              type: "primitive_instance" as const,
+              primitiveType: "text" as const,
+              width: { mode: "fill" as const },
+              height: { mode: "fit_content" as const },
+              props: { text: "{{ event.summary }}", autoFit: false, fixedPixelSize: 8, paddingPx: 0, borderToken: "none" as const }
+            }
+          }
+        }
+      }
+    };
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [layout]
+    });
+    const inspection = inspectLayoutDefinition(project, layout, {
+      ...SAMPLE_DATA,
+      metaQueries: {
+        "query-node": {
+          kind: "calendar_events_meta",
+          meta: { date: "2026-04-17", dateVariableName: "date" },
+          items: [
+            { summary: "Standup", start: "2026-04-17T10:00:00.000Z", end: "2026-04-17T10:30:00.000Z", allDay: false, allday: false, calendarEntityId: "calendar.family", raw: {} },
+            { summary: "Standup", start: "2026-04-17T10:00:00.000Z", end: "2026-04-17T10:30:00.000Z", allDay: false, allday: false, calendarEntityId: "calendar.family", raw: {} },
+            { summary: "Other", start: "2026-04-17T11:00:00.000Z", end: "2026-04-17T11:30:00.000Z", allDay: false, allday: false, calendarEntityId: "calendar.family", raw: {} }
+          ]
+        }
+      }
+    });
+    expect(inspection.root?.children[0]?.nodeType).toBe("unique");
+    expect(inspection.root?.children[0]?.children[0]?.children).toHaveLength(2);
+  });
+
+  it("supports array pipeline expressions in foreach itemsRef", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const layout: LayoutDefinition = {
+      id: "layout-foreach-array-expression",
+      name: "Foreach Array Expression",
+      kind: "fullscreen" as const,
+      displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+      rootNode: {
+        id: "query-node",
+        type: "data_query" as const,
+        queryKind: "calendar_events" as const,
+        variableName: "events",
+        dateVariableName: "date",
+        calendarEntityIds: ["calendar.family"],
+        offsetDays: 0,
+        width: { mode: "fill" as const },
+        height: { mode: "fill" as const },
+        child: {
+          id: "foreach-node",
+          type: "foreach" as const,
+          itemsRef: `events | filter($.summary != "Blocked") | unique($.start, $.summary)`,
+          itemAlias: "event",
+          indexAlias: "index",
+          axis: "vertical" as const,
+          width: { mode: "fill" as const },
+          height: { mode: "fill" as const },
+          child: {
+            id: "text-node",
+            type: "primitive_instance" as const,
+            primitiveType: "text" as const,
+            width: { mode: "fill" as const },
+            height: { mode: "fit_content" as const },
+            props: { text: "{{ event.summary }}", autoFit: false, fixedPixelSize: 8, paddingPx: 0, borderToken: "none" as const }
+          }
+        }
+      }
+    };
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [layout]
+    });
+    const inspection = inspectLayoutDefinition(project, layout, {
+      ...SAMPLE_DATA,
+      metaQueries: {
+        "query-node": {
+          kind: "calendar_events_meta",
+          meta: { date: "2026-04-17", dateVariableName: "date" },
+          items: [
+            { summary: "Blocked", start: "2026-04-17T09:00:00.000Z", end: "2026-04-17T09:30:00.000Z", allDay: false, allday: false, calendarEntityId: "calendar.family", raw: {} },
+            { summary: "Standup", start: "2026-04-17T10:00:00.000Z", end: "2026-04-17T10:30:00.000Z", allDay: false, allday: false, calendarEntityId: "calendar.family", raw: {} },
+            { summary: "Standup", start: "2026-04-17T10:00:00.000Z", end: "2026-04-17T10:30:00.000Z", allDay: false, allday: false, calendarEntityId: "calendar.family", raw: {} },
+            { summary: "Other", start: "2026-04-17T11:00:00.000Z", end: "2026-04-17T11:30:00.000Z", allDay: false, allday: false, calendarEntityId: "calendar.family", raw: {} }
+          ]
+        }
+      }
+    });
+    expect(inspection.root?.children[0]?.nodeType).toBe("foreach");
+    expect(inspection.root?.children[0]?.children).toHaveLength(2);
+  });
+
+  it("binds the query date into data query scope", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const layout = {
+      id: "layout-date-scope",
+      name: "Date Scope",
+      kind: "fullscreen" as const,
+      displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+      rootNode: {
+        id: "query-node",
+        type: "data_query" as const,
+        queryKind: "calendar_events" as const,
+        variableName: "events",
+        dateVariableName: "date",
+        calendarEntityIds: ["calendar.family"],
+        offsetDays: 0,
+        width: { mode: "fill" as const },
+        height: { mode: "fill" as const },
+        child: {
+          id: "if-node",
+          type: "if_else" as const,
+          condition: 'date == "2026-04-17"',
+          width: { mode: "fill" as const },
+          height: { mode: "fill" as const },
+          thenChild: {
+            id: "then-text",
+            type: "primitive_instance" as const,
+            primitiveType: "text" as const,
+            width: { mode: "fill" as const },
+            height: { mode: "fill" as const },
+            props: { text: '{{ date | format("dddd") }}', autoFit: false, fixedPixelSize: 8, paddingPx: 0 }
+          },
+          elseChild: {
+            id: "else-icon",
+            type: "primitive_instance" as const,
+            primitiveType: "icon" as const,
+            width: { mode: "fill" as const },
+            height: { mode: "fill" as const },
+            props: { icon: "warning" }
+          }
+        }
+      }
+    };
+    const inspection = inspectLayoutDefinition(normalizeProject({
+      ...normalized,
+      layoutDefinitions: [layout]
+    }), layout, {
+      ...SAMPLE_DATA,
+      metaQueries: {
+        "query-node": {
+          kind: "calendar_events_meta",
+          meta: { date: "2026-04-17", dateVariableName: "date" },
+          items: []
+        }
+      }
+    });
+    expect(inspection.root?.children[0]?.children[0]?.label).toBe("text");
+  });
+
+  it("renders formatted event start times in foreach text nodes", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const baseLayout = {
+      id: "layout-foreach-format",
+      name: "Foreach Format",
+      kind: "fullscreen" as const,
+      displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+      rootNode: {
+        id: "query-node",
+        type: "data_query" as const,
+        queryKind: "calendar_events" as const,
+        variableName: "events",
+        dateVariableName: "date",
+        calendarEntityIds: ["calendar.family"],
+        offsetDays: 0,
+        width: { mode: "fill" as const },
+        height: { mode: "fill" as const },
+        child: {
+          id: "foreach-node",
+          type: "foreach" as const,
+          itemsRef: "events",
+          itemAlias: "event",
+          indexAlias: "index",
+          axis: "vertical" as const,
+          maxItems: 1,
+          width: { mode: "fill" as const },
+          height: { mode: "fill" as const },
+          child: {
+            id: "text-node",
+            type: "primitive_instance" as const,
+            primitiveType: "text" as const,
+            width: { mode: "fill" as const },
+            height: { mode: "fixed_px" as const, value: 16 },
+            props: { text: '{{ event.start | format("HH:MM") }}', autoFit: false, fixedPixelSize: 8, paddingPx: 0 }
+          }
+        }
+      }
+    };
+    const templateProject: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [baseLayout]
+    });
+    const literalProject: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [{
+        id: "layout-foreach-format-literal",
+        name: "Foreach Format Literal",
+        kind: "fullscreen" as const,
+        displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+        rootNode: {
+          id: "query-node",
+          type: "data_query" as const,
+          queryKind: "calendar_events" as const,
+          variableName: "events",
+          dateVariableName: "date",
+          calendarEntityIds: ["calendar.family"],
+          offsetDays: 0,
+          width: { mode: "fill" as const },
+          height: { mode: "fill" as const },
+          child: {
+            id: "foreach-node",
+            type: "foreach" as const,
+            itemsRef: "events",
+            itemAlias: "event",
+            indexAlias: "index",
+            axis: "vertical" as const,
+            maxItems: 1,
+            width: { mode: "fill" as const },
+            height: { mode: "fill" as const },
+            child: {
+              id: "text-node",
+              type: "primitive_instance" as const,
+              primitiveType: "text" as const,
+              width: { mode: "fill" as const },
+              height: { mode: "fixed_px" as const, value: 16 },
+              props: { text: "09:05", autoFit: false, fixedPixelSize: 8, paddingPx: 0 }
+            }
+          }
+        }
+      }]
+    });
+    const metaQueries = {
+      "query-node": {
+        kind: "calendar_events_meta",
+        meta: { date: "2026-04-17", dateVariableName: "date" },
+        items: [{
+          summary: "Timed A",
+          start: { dateTime: "2026-04-17T09:05:00.000Z" },
+          end: "2026-04-17T09:30:00.000Z",
+          allDay: false,
+          allday: false,
+          calendarEntityId: "calendar.family",
+          raw: {}
+        }]
+      }
+    };
+    const renderedTemplate = renderLayoutDefinition(templateProject, templateProject.layoutDefinitions?.[0]!, {
+      ...SAMPLE_DATA,
+      metaQueries
+    });
+    const renderedLiteral = renderLayoutDefinition(literalProject, literalProject.layoutDefinitions?.[0]!, {
+      ...SAMPLE_DATA,
+      metaQueries
+    });
+    expect([...renderedTemplate.pixels]).toEqual([...renderedLiteral.pixels]);
+  });
+
+  it("uses project locale for formatted template output", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const project: Project = normalizeProject({
+      ...normalized,
+      locale: "nl-NL",
+      layoutDefinitions: [{
+        id: "layout-locale-format",
+        name: "Locale Format",
+        kind: "fullscreen",
+        displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+        rootNode: {
+          id: "query-node",
+          type: "data_query",
+          queryKind: "calendar_events",
+          variableName: "events",
+          dateVariableName: "date",
+          calendarEntityIds: ["calendar.family"],
+          offsetDays: 0,
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          child: {
+            id: "text-node",
+            type: "primitive_instance",
+            primitiveType: "text",
+            width: { mode: "fill" },
+            height: { mode: "fixed_px", value: 16 },
+            props: { text: '{{ date | format("dddd") }}', autoFit: false, fixedPixelSize: 8, paddingPx: 0 }
+          }
+        }
+      }]
+    });
+    const dutch = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, {
+      ...SAMPLE_DATA,
+      metaQueries: {
+        "query-node": {
+          kind: "calendar_events_meta",
+          meta: { date: "2026-04-23", dateVariableName: "date" },
+          items: []
+        }
+      }
+    });
+    const englishProject = normalizeProject({
+      ...project,
+      locale: "en-US"
+    });
+    const english = renderLayoutDefinition(englishProject, englishProject.layoutDefinitions?.[0]!, {
+      ...SAMPLE_DATA,
+      metaQueries: {
+        "query-node": {
+          kind: "calendar_events_meta",
+          meta: { date: "2026-04-23", dateVariableName: "date" },
+          items: []
+        }
+      }
+    });
+    expect([...dutch.pixels]).not.toEqual([...english.pixels]);
+  });
+
+  it("clips primitive drawing to container bounds", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const layout = {
+      id: "layout-clip-bounds",
+      name: "Clip Bounds",
+      kind: "fullscreen" as const,
+      displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+      rootNode: {
+        id: "root",
+        type: "stack" as const,
+        axis: "vertical" as const,
+        width: { mode: "fill" as const },
+        height: { mode: "fill" as const },
+        children: [
+          {
+            id: "clip-container",
+            type: "stack" as const,
+            axis: "vertical" as const,
+            width: { mode: "fill" as const },
+            height: { mode: "fixed_px" as const, value: 8 },
+            children: [{
+              id: "clip-text",
+              type: "primitive_instance" as const,
+              primitiveType: "text" as const,
+              width: { mode: "fill" as const },
+              height: { mode: "fill" as const },
+              props: {
+                text: "CLIPPED",
+                autoFit: false,
+                fixedPixelSize: 24,
+                paddingPx: 0,
+                horizontalAlign: "left" as const,
+                verticalAlign: "top" as const
+              }
+            }]
+          }
+        ]
+      }
+    };
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [layout]
+    });
+    const rendered = renderLayoutDefinition(project, layout, SAMPLE_DATA);
+
+    expect(pixelBounds(rendered, 0, 0, rendered.width, 8)).not.toBeNull();
+    expect(pixelBounds(rendered, 0, 8, rendered.width, rendered.height - 8)).toBeNull();
   });
 });

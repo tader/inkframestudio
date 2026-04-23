@@ -118,4 +118,47 @@ describe("tree model", () => {
       expect(grid.children[0]?.placement).toEqual({ row: 1, column: 1, rowSpan: 1, columnSpan: 1 });
     }
   });
+
+  it("tracks meta-node branch and template slots in the tree", () => {
+    const root: LayoutNode = {
+      id: "root",
+      type: "data_query",
+      queryKind: "calendar_events",
+      variableName: "events",
+      dateVariableName: "date",
+      calendarEntityIds: ["calendar.family"],
+      offsetDays: 0,
+      child: {
+        id: "loop",
+        type: "foreach",
+        itemsRef: "events",
+        itemAlias: "event",
+        indexAlias: "index",
+        axis: "vertical",
+        child: {
+          id: "branch",
+          type: "if_else",
+          condition: "event.allday == true",
+          thenChild: {
+            id: "then-text",
+            type: "primitive_instance",
+            primitiveType: "text"
+          },
+          elseChild: {
+            id: "else-icon",
+            type: "primitive_instance",
+            primitiveType: "icon"
+          }
+        }
+      }
+    };
+    const entries = buildNodeTree(root);
+    expect(entries.map((entry) => `${entry.depth}:${entry.slotLabel ?? "-"}:${entry.node.id}`)).toEqual([
+      "0:-:root",
+      "1:Child:loop",
+      "2:Template:branch",
+      "3:Then:then-text",
+      "3:Else:else-icon"
+    ]);
+  });
 });

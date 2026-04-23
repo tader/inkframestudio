@@ -1,6 +1,6 @@
 import { BUILT_IN_WIDGET_DEFINITIONS, defaultDisplayTypes, defaultVirtualDevices, migrateLegacyAssignments, migrateLegacyLayouts } from "./designer-defaults.js";
 import { DEFAULT_FONT_PRESETS, normalizeFontPresets } from "./font-presets.js";
-import type { Project, Screen, ThemeRef, WidgetInstance, WidgetTheme, WidgetThemeId } from "./types.js";
+import type { LayoutNode, Project, Screen, ThemeRef, WidgetInstance, WidgetTheme, WidgetThemeId } from "./types.js";
 
 export const DEFAULT_WIDGET_THEME_ID = "classic-outline";
 
@@ -117,6 +117,71 @@ export const DEFAULT_WIDGET_THEMES: WidgetTheme[] = [
   }
 ];
 
+function normalizeLegacyOffsetDays(node: LayoutNode & { offsetHours?: unknown }): number {
+  if (typeof (node as { offsetDays?: unknown }).offsetDays === "number" && Number.isFinite((node as { offsetDays?: number }).offsetDays)) {
+    return Number((node as { offsetDays?: number }).offsetDays);
+  }
+  if (typeof node.offsetHours === "number" && Number.isFinite(node.offsetHours)) {
+    if (node.offsetHours === 0) {
+      return 0;
+    }
+    return node.offsetHours > 0 ? Math.ceil(node.offsetHours / 24) : Math.floor(node.offsetHours / 24);
+  }
+  return 0;
+}
+
+function normalizeLayoutNode(node: LayoutNode | undefined): LayoutNode | undefined {
+  if (!node) {
+    return undefined;
+  }
+  if (node.type === "stack" || node.type === "zstack") {
+    return {
+      ...node,
+      children: node.children.map((child) => normalizeLayoutNode(child) ?? child)
+    };
+  }
+  if (node.type === "grid") {
+    return {
+      ...node,
+      children: node.children.map((child) => ({
+        ...child,
+        node: normalizeLayoutNode(child.node) ?? child.node
+      }))
+    };
+  }
+  if (node.type === "data_query") {
+    const current = node as LayoutNode & { offsetHours?: unknown };
+    return {
+      ...node,
+      dateVariableName: node.dateVariableName ?? "date",
+      offsetDays: normalizeLegacyOffsetDays(current),
+      rolloverTime: typeof node.rolloverTime === "string" && node.rolloverTime.trim() ? node.rolloverTime : undefined,
+      child: normalizeLayoutNode(node.child)
+    };
+  }
+  if (node.type === "foreach" || node.type === "filter" || node.type === "unique") {
+    return {
+      ...node,
+      child: normalizeLayoutNode(node.child)
+    };
+  }
+  if (node.type === "if_else") {
+    return {
+      ...node,
+      thenChild: normalizeLayoutNode(node.thenChild),
+      elseChild: normalizeLayoutNode(node.elseChild)
+    };
+  }
+  if (node.type === "primitive_instance" && node.primitiveType === "text" && node.props && Number(node.props.lineSpacingPx ?? 0) === 0) {
+    const { lineSpacingPx: _lineSpacingPx, ...props } = node.props;
+    return {
+      ...node,
+      props
+    };
+  }
+  return node;
+}
+
 export function normalizeProject(project: Project): Project {
   const themes = (project.themes?.length ? project.themes : DEFAULT_WIDGET_THEMES).map((theme) => ({
     ...theme,
@@ -124,7 +189,11 @@ export function normalizeProject(project: Project): Project {
   }));
   const displayTypes = project.displayTypes?.length ? project.displayTypes : defaultDisplayTypes();
   const devices = project.devices?.length ? project.devices : defaultVirtualDevices(displayTypes);
-  const layoutDefinitions = project.layoutDefinitions?.length ? project.layoutDefinitions : migrateLegacyLayouts(project);
+  const layoutDefinitions = (project.layoutDefinitions?.length ? project.layoutDefinitions : migrateLegacyLayouts(project))
+    .map((layout) => ({
+      ...layout,
+      rootNode: normalizeLayoutNode(layout.rootNode)
+    }));
   const widgetDefinitions = project.widgetDefinitions?.length
     ? project.widgetDefinitions
     : BUILT_IN_WIDGET_DEFINITIONS;
@@ -133,11 +202,14 @@ export function normalizeProject(project: Project): Project {
     : migrateLegacyAssignments(project, devices, layoutDefinitions);
   return {
     ...project,
+    locale: project.locale?.trim() || "en-US",
     fontPresets: normalizeFontPresets(project.fontPresets ?? DEFAULT_FONT_PRESETS),
     themes,
     displayTypes,
     devices,
-    widgetDefinitions,
+    widgetDefinitions: widgetDefinitions.map((definition) => definition.kind === "compound"
+      ? { ...definition, rootNode: normalizeLayoutNode(definition.rootNode) }
+      : definition),
     layoutDefinitions,
     deviceAssignments,
     screens: project.screens.map((screen) => ({

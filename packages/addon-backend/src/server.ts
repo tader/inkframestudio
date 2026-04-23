@@ -117,7 +117,7 @@ async function resolvePreviewData(
   };
   if (requestedSource === "sample") {
     return {
-      data: SAMPLE_DATA,
+      data: await homeAssistantClient.resolveSampleProjectData(project, SAMPLE_DATA),
       source: "sample",
       message: "Sample preview selected"
     };

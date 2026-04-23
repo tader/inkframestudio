@@ -4,10 +4,19 @@ export interface NodeTreeEntry {
   node: LayoutNode;
   parentId?: string;
   depth: number;
+  slotLabel?: string;
 }
 
 export function isContainerNode(node: LayoutNode | undefined): boolean {
-  return Boolean(node && (node.type === "stack" || node.type === "zstack" || node.type === "grid"));
+  return Boolean(node && (
+    node.type === "stack" ||
+    node.type === "zstack" ||
+    node.type === "grid" ||
+    node.type === "data_query" ||
+    node.type === "filter" ||
+    node.type === "unique" ||
+    node.type === "foreach"
+  ));
 }
 
 export function getNodeById(node: LayoutNode | undefined, nodeId: string): LayoutNode | undefined {
@@ -33,6 +42,12 @@ export function getNodeById(node: LayoutNode | undefined, nodeId: string): Layou
       }
     }
   }
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach") {
+    return getNodeById(node.child, nodeId);
+  }
+  if (node.type === "if_else") {
+    return getNodeById(node.thenChild, nodeId) ?? getNodeById(node.elseChild, nodeId);
+  }
   return undefined;
 }
 
@@ -46,13 +61,33 @@ export function isDescendant(root: LayoutNode | undefined, ancestorId: string, c
 
 export function buildNodeTree(root: LayoutNode | undefined): NodeTreeEntry[] {
   const entries: NodeTreeEntry[] = [];
-  const visit = (node: LayoutNode, depth: number, parentId?: string): void => {
-    entries.push({ node, depth, parentId });
+  const visit = (node: LayoutNode, depth: number, parentId?: string, slotLabel?: string): void => {
+    entries.push({ node, depth, parentId, slotLabel });
     if (node.type === "stack" || node.type === "zstack") {
       node.children.forEach((child) => visit(child, depth + 1, node.id));
     }
     if (node.type === "grid") {
       node.children.forEach((child) => visit(child.node, depth + 1, node.id));
+    }
+    if (node.type === "data_query" && node.child) {
+      visit(node.child, depth + 1, node.id, "Child");
+    }
+    if (node.type === "filter" && node.child) {
+      visit(node.child, depth + 1, node.id, "Child");
+    }
+    if (node.type === "unique" && node.child) {
+      visit(node.child, depth + 1, node.id, "Child");
+    }
+    if (node.type === "foreach" && node.child) {
+      visit(node.child, depth + 1, node.id, "Template");
+    }
+    if (node.type === "if_else") {
+      if (node.thenChild) {
+        visit(node.thenChild, depth + 1, node.id, "Then");
+      }
+      if (node.elseChild) {
+        visit(node.elseChild, depth + 1, node.id, "Else");
+      }
     }
   };
   if (root) {
@@ -75,6 +110,19 @@ function mapChildren(node: LayoutNode, mapper: (child: LayoutNode) => LayoutNode
         ...child,
         node: mapper(child.node)
       }))
+    };
+  }
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach") {
+    return {
+      ...node,
+      child: node.child ? mapper(node.child) : undefined
+    };
+  }
+  if (node.type === "if_else") {
+    return {
+      ...node,
+      thenChild: node.thenChild ? mapper(node.thenChild) : undefined,
+      elseChild: node.elseChild ? mapper(node.elseChild) : undefined
     };
   }
   return node;
@@ -112,6 +160,41 @@ export function removeNode(root: LayoutNode, nodeId: string): { root: LayoutNode
             ...child,
             node: walk(child.node)
           }))
+      };
+    }
+    if (node.type === "data_query" || node.type === "filter" || node.type === "unique") {
+      if (node.child?.id === nodeId) {
+        removed = node.child;
+        return { ...node, child: undefined };
+      }
+      return {
+        ...node,
+        child: node.child ? walk(node.child) : undefined
+      };
+    }
+    if (node.type === "foreach") {
+      if (node.child?.id === nodeId) {
+        removed = node.child;
+        return { ...node, child: undefined };
+      }
+      return {
+        ...node,
+        child: node.child ? walk(node.child) : undefined
+      };
+    }
+    if (node.type === "if_else") {
+      if (node.thenChild?.id === nodeId) {
+        removed = node.thenChild;
+        return { ...node, thenChild: undefined };
+      }
+      if (node.elseChild?.id === nodeId) {
+        removed = node.elseChild;
+        return { ...node, elseChild: undefined };
+      }
+      return {
+        ...node,
+        thenChild: node.thenChild ? walk(node.thenChild) : undefined,
+        elseChild: node.elseChild ? walk(node.elseChild) : undefined
       };
     }
     return node;
@@ -155,6 +238,9 @@ export function insertNode(root: LayoutNode, parentId: string, child: LayoutNode
     }
     if (root.type === "grid") {
       return { ...root, children: appendIntoGrid(root.children, child, index) };
+    }
+    if (root.type === "data_query" || root.type === "filter" || root.type === "unique" || root.type === "foreach") {
+      return { ...root, child };
     }
     return root;
   }

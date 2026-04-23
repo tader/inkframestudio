@@ -278,4 +278,281 @@ describe("home assistant integration", () => {
     expect(data.queries["agenda-today"]?.items).toEqual([]);
     expect(data.queries["garage-temp-history"]?.points).toEqual([]);
   });
+
+  it("resolves and normalizes multi-calendar meta queries while isolating one failing calendar", async () => {
+    const client = new HomeAssistantClient();
+    const project = {
+      ...SAMPLE_PROJECT,
+      queries: [],
+      layoutDefinitions: [{
+        id: "layout-meta-query",
+        name: "Meta Query",
+        kind: "fullscreen" as const,
+        displayTypeId: "tri296x128-red",
+        rootNode: {
+          id: "meta-events",
+          type: "data_query" as const,
+          queryKind: "calendar_events" as const,
+          variableName: "events",
+          dateVariableName: "date",
+          calendarEntityIds: ["calendar.family", "calendar.work", "calendar.broken"],
+          offsetDays: 0,
+          child: {
+            id: "meta-child",
+            type: "spacer" as const
+          }
+        }
+      }]
+    };
+
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/states")) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      if (url.includes("/api/calendars/calendar.family")) {
+        return new Response(JSON.stringify([
+          {
+            summary: "Family Lunch",
+            start: { dateTime: "2026-04-17T12:00:00.000Z" },
+            end: { dateTime: "2026-04-17T13:00:00.000Z" }
+          }
+        ]), { status: 200 });
+      }
+      if (url.includes("/api/calendars/calendar.work")) {
+        return new Response(JSON.stringify([
+          {
+            summary: "All Day Planning",
+            start: "2026-04-17",
+            end: "2026-04-18"
+          },
+          {
+            summary: "Review",
+            start: "2026-04-17T09:00:00.000Z",
+            end: "2026-04-17T09:30:00.000Z",
+            location: "Studio"
+          }
+        ]), { status: 200 });
+      }
+      if (url.includes("/api/calendars/calendar.broken")) {
+        return new Response("broken", { status: 500 });
+      }
+      throw new Error(`Unhandled fetch: ${url}`);
+    }) as typeof fetch;
+
+    vi.useFakeTimers();
+    let data;
+    try {
+      vi.setSystemTime(new Date("2026-04-17T12:34:00.000Z"));
+      data = await client.resolveProjectData(project, {
+        host: "https://ha.local",
+        token: "abc123",
+        mode: "custom",
+        useSupervisorProxy: false,
+        allowInsecureTls: false
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const events = data.metaQueries?.["meta-events"]?.items as Array<Record<string, unknown>>;
+    expect(events).toHaveLength(3);
+    expect(events.map((event) => `${event.start}:${event.summary}`)).toEqual([
+      "2026-04-17:All Day Planning",
+      "2026-04-17T09:00:00.000Z:Review",
+      "2026-04-17T12:00:00.000Z:Family Lunch"
+    ]);
+    expect(events[0]?.allDay).toBe(true);
+    expect(events[0]?.allday).toBe(true);
+    expect(events[1]?.calendarEntityId).toBe("calendar.work");
+    expect(events[1]?.raw).toEqual({
+      summary: "Review",
+      start: "2026-04-17T09:00:00.000Z",
+      end: "2026-04-17T09:30:00.000Z",
+      location: "Studio"
+    });
+    expect(events[2]?.raw).toEqual({
+      summary: "Family Lunch",
+      start: { dateTime: "2026-04-17T12:00:00.000Z" },
+      end: { dateTime: "2026-04-17T13:00:00.000Z" }
+    });
+    expect(data.metaQueries?.["meta-events"]?.meta).toMatchObject({
+      date: "2026-04-17",
+      dateVariableName: "date",
+      offsetDays: 0
+    });
+  });
+
+  it("anchors meta query offsets relative to local midnight with day offsets", async () => {
+    const client = new HomeAssistantClient();
+    const project = {
+      ...SAMPLE_PROJECT,
+      queries: [],
+      layoutDefinitions: [{
+        id: "layout-meta-offsets",
+        name: "Meta Offsets",
+        kind: "fullscreen" as const,
+        displayTypeId: "tri296x128-red",
+        rootNode: {
+          id: "root",
+          type: "stack" as const,
+          axis: "vertical" as const,
+          children: [
+            {
+              id: "offset-yesterday",
+              type: "data_query" as const,
+              queryKind: "calendar_events" as const,
+              variableName: "yesterdayEvents",
+              calendarEntityIds: ["calendar.family"],
+              offsetDays: -1,
+              child: { id: "child-yesterday", type: "spacer" as const }
+            },
+            {
+              id: "offset-today",
+              type: "data_query" as const,
+              queryKind: "calendar_events" as const,
+              variableName: "todayEvents",
+              calendarEntityIds: ["calendar.family"],
+              offsetDays: 0,
+              child: { id: "child-today", type: "spacer" as const }
+            },
+            {
+              id: "offset-tomorrow",
+              type: "data_query" as const,
+              queryKind: "calendar_events" as const,
+              variableName: "tomorrowEvents",
+              calendarEntityIds: ["calendar.family"],
+              offsetDays: 1,
+              child: { id: "child-tomorrow", type: "spacer" as const }
+            }
+          ]
+        }
+      }]
+    };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/states")) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      if (url.includes("/api/calendars/")) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      throw new Error(`Unhandled fetch: ${url}`);
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-04-17T12:34:00.000Z"));
+      await client.resolveProjectData(project, {
+        host: "https://ha.local",
+        token: "abc123",
+        mode: "custom",
+        useSupervisorProxy: false,
+        allowInsecureTls: false
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const starts = fetchMock.mock.calls
+      .map(([input]) => String(input))
+      .filter((url) => url.includes("/api/calendars/"))
+      .map((url) => new URL(url).searchParams.get("start"))
+      .filter((value): value is string => Boolean(value))
+      .map((value) => new Date(value).getTime())
+      .sort((left, right) => left - right);
+
+    expect(starts).toHaveLength(3);
+    expect(starts[1] - starts[0]).toBe(24 * 60 * 60 * 1000);
+    expect(starts[2] - starts[1]).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it("advances the day offset after the configured rollover time", async () => {
+    const client = new HomeAssistantClient();
+    const project = {
+      ...SAMPLE_PROJECT,
+      queries: [],
+      layoutDefinitions: [{
+        id: "layout-meta-rollover",
+        name: "Meta Rollover",
+        kind: "fullscreen" as const,
+        displayTypeId: "tri296x128-red",
+        rootNode: {
+          id: "root",
+          type: "stack" as const,
+          axis: "vertical" as const,
+          children: [
+            {
+              id: "today-base",
+              type: "data_query" as const,
+              queryKind: "calendar_events" as const,
+              variableName: "todayEvents",
+              calendarEntityIds: ["calendar.family"],
+              offsetDays: 0,
+              child: { id: "child-today", type: "spacer" as const }
+            },
+            {
+              id: "today-rollover",
+              type: "data_query" as const,
+              queryKind: "calendar_events" as const,
+              variableName: "rolloverEvents",
+              dateVariableName: "date",
+              calendarEntityIds: ["calendar.family"],
+              offsetDays: 0,
+              rolloverTime: "00:00",
+              child: { id: "child-rollover", type: "spacer" as const }
+            }
+          ]
+        }
+      }]
+    };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/states")) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      if (url.includes("/api/calendars/")) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
+      throw new Error(`Unhandled fetch: ${url}`);
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-04-17T12:34:00.000Z"));
+      const data = await client.resolveProjectData(project, {
+        host: "https://ha.local",
+        token: "abc123",
+        mode: "custom",
+        useSupervisorProxy: false,
+        allowInsecureTls: false
+      });
+      expect(data.metaQueries?.["today-base"]?.meta).toMatchObject({
+        date: "2026-04-17",
+        effectiveOffsetDays: 0
+      });
+      expect(data.metaQueries?.["today-rollover"]?.meta).toMatchObject({
+        date: "2026-04-18",
+        effectiveOffsetDays: 1,
+        rolloverTime: "00:00"
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const starts = fetchMock.mock.calls
+      .map(([input]) => String(input))
+      .filter((url) => url.includes("/api/calendars/"))
+      .map((url) => new URL(url).searchParams.get("start"))
+      .filter((value): value is string => Boolean(value))
+      .map((value) => new Date(value).getTime())
+      .sort((left, right) => left - right);
+
+    expect(starts).toHaveLength(2);
+    expect(starts[1] - starts[0]).toBe(24 * 60 * 60 * 1000);
+  });
 });

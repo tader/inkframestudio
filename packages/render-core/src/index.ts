@@ -5,6 +5,7 @@ export * from "./bitmap-font.js";
 export * from "./font-presets.js";
 export * from "./font-specimens.js";
 export * from "./icons.js";
+export * from "./layout-meta.js";
 export * from "./quantize.js";
 export * from "./renderer.js";
 export * from "./resolve.js";

@@ -2,10 +2,45 @@ import { DEFAULT_WIDGET_THEMES } from "./themes.js";
 import { DEFAULT_FONT_PRESETS } from "./font-presets.js";
 import type { Project, RenderData } from "./types.js";
 
+export const SAMPLE_CALENDAR_EVENTS_BY_ENTITY: Record<string, Array<Record<string, unknown>>> = {
+  "calendar.family": [
+    {
+      summary: "Dentist",
+      start: "2026-04-17T15:00:00.000Z",
+      end: "2026-04-17T16:00:00.000Z"
+    },
+    {
+      summary: "Hockey Training",
+      start: "2026-04-17T17:15:00.000Z",
+      end: "2026-04-17T18:30:00.000Z"
+    },
+    {
+      summary: "Take Bins Out",
+      start: "2026-04-17T20:00:00.000Z",
+      end: "2026-04-17T20:10:00.000Z"
+    }
+  ],
+  "calendar.work": [
+    {
+      summary: "Architecture Review",
+      start: "2026-04-17T09:30:00.000Z",
+      end: "2026-04-17T10:00:00.000Z",
+      location: "Studio"
+    },
+    {
+      summary: "Ship Calendar Meta Nodes",
+      start: "2026-04-17T00:00:00.000Z",
+      end: "2026-04-18T00:00:00.000Z",
+      description: "All-day sample event"
+    }
+  ]
+};
+
 export const SAMPLE_PROJECT: Project = {
   id: "demo-home",
   name: "Home Demo",
   version: 1,
+  locale: "en-US",
   fontPresets: DEFAULT_FONT_PRESETS,
   themes: DEFAULT_WIDGET_THEMES,
   queries: [

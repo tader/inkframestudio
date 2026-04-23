@@ -67,7 +67,12 @@ type NodeCreateKind =
   | "stack"
   | "grid"
   | "zstack"
-  | "compound_ref";
+  | "compound_ref"
+  | "data_query"
+  | "filter"
+  | "unique"
+  | "foreach"
+  | "if_else";
 
 function maskToken(hasToken: boolean, token: string): string {
   if (token) {
@@ -108,7 +113,7 @@ function defaultPrimitiveNode(kind: PrimitiveWidgetKind): PrimitiveInstanceNode 
     bindings: kind === "graph" ? { query: "" } : kind === "text" || kind === "number" ? { entity: "" } : {},
     props:
       kind === "text"
-        ? { text: "Text", autoFit: true, placeholderText: "Placeholder", horizontalAlign: "left", verticalAlign: "top", renderEntityState: false, paddingPx: 4 }
+        ? { text: "Text", autoFit: true, placeholderText: "Placeholder", horizontalAlign: "left", verticalAlign: "top", overflow: "wrap", renderEntityState: false, paddingPx: 4 }
         : kind === "number"
           ? { digits: 1, autoFit: true, placeholderValue: "88.8", horizontalAlign: "center", verticalAlign: "middle", paddingPx: 4 }
           : kind === "icon"
@@ -134,12 +139,97 @@ function defaultCompoundRefNode(definitionId = ""): LayoutNode {
   };
 }
 
+function defaultDataQueryNode(): LayoutNode {
+  return {
+    id: nextId("node"),
+    type: "data_query",
+    queryKind: "calendar_events",
+    variableName: "events",
+    dateVariableName: "date",
+    calendarEntityIds: [],
+    offsetDays: 0,
+    width: defaultSizeSpec("fill"),
+    height: defaultSizeSpec("fill"),
+    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+  };
+}
+
+function defaultForEachNode(): LayoutNode {
+  return {
+    id: nextId("node"),
+    type: "foreach",
+    itemsRef: "events",
+    itemAlias: "event",
+    indexAlias: "index",
+    axis: "vertical",
+    width: defaultSizeSpec("fill"),
+    height: defaultSizeSpec("fill"),
+    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+  };
+}
+
+function defaultFilterNode(): LayoutNode {
+  return {
+    id: nextId("node"),
+    type: "filter",
+    itemsRef: "events",
+    outputVariableName: "filteredEvents",
+    itemAlias: "event",
+    indexAlias: "index",
+    condition: 'event.summary != "Blocked"',
+    width: defaultSizeSpec("fill"),
+    height: defaultSizeSpec("fill"),
+    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+  };
+}
+
+function defaultUniqueNode(): LayoutNode {
+  return {
+    id: nextId("node"),
+    type: "unique",
+    itemsRef: "events",
+    outputVariableName: "uniqueEvents",
+    itemAlias: "event",
+    indexAlias: "index",
+    keyTemplate: '{{ event.start | format("HH:MM") }}--{{ event.summary }}',
+    width: defaultSizeSpec("fill"),
+    height: defaultSizeSpec("fill"),
+    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+  };
+}
+
+function defaultIfElseNode(): LayoutNode {
+  return {
+    id: nextId("node"),
+    type: "if_else",
+    condition: "event.allday == true",
+    width: defaultSizeSpec("fill"),
+    height: defaultSizeSpec("fill"),
+    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+  };
+}
+
 function defaultNodeForKind(kind: NodeCreateKind, project: Project): LayoutNode {
   if (kind === "stack" || kind === "grid" || kind === "zstack") {
     return defaultRootNode(kind);
   }
   if (kind === "compound_ref") {
     return defaultCompoundRefNode((project.widgetDefinitions ?? []).find((entry) => entry.kind === "compound")?.id ?? "");
+  }
+  if (kind === "data_query") {
+    return defaultDataQueryNode();
+  }
+  if (kind === "filter") {
+    return defaultFilterNode();
+  }
+  if (kind === "unique") {
+    return defaultUniqueNode();
+  }
+  if (kind === "foreach") {
+    return defaultForEachNode();
+  }
+  if (kind === "if_else") {
+    return defaultIfElseNode();
   }
   return defaultPrimitiveNode(kind);
 }
@@ -150,6 +240,21 @@ function labelForNode(node: LayoutNode): string {
   }
   if (node.type === "compound_ref") {
     return "compound";
+  }
+  if (node.type === "data_query") {
+    return `query ${node.variableName || "data"}`;
+  }
+  if (node.type === "filter") {
+    return `filter ${node.outputVariableName || "items"}`;
+  }
+  if (node.type === "unique") {
+    return `unique ${node.outputVariableName || "items"}`;
+  }
+  if (node.type === "foreach") {
+    return `foreach ${node.itemAlias || "item"}`;
+  }
+  if (node.type === "if_else") {
+    return "if/else";
   }
   return node.type;
 }
@@ -259,6 +364,19 @@ function updateNode(node: LayoutNode, nodeId: string, updater: (current: LayoutN
       }))
     };
   }
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach") {
+    return {
+      ...node,
+      child: node.child ? updateNode(node.child, nodeId, updater) : undefined
+    };
+  }
+  if (node.type === "if_else") {
+    return {
+      ...node,
+      thenChild: node.thenChild ? updateNode(node.thenChild, nodeId, updater) : undefined,
+      elseChild: node.elseChild ? updateNode(node.elseChild, nodeId, updater) : undefined
+    };
+  }
   return node;
 }
 
@@ -280,6 +398,25 @@ function removeNodeById(node: LayoutNode, nodeId: string): LayoutNode {
           ...child,
           node: removeNodeById(child.node, nodeId)
         }))
+    };
+  }
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique") {
+    return {
+      ...node,
+      child: node.child?.id === nodeId ? undefined : node.child ? removeNodeById(node.child, nodeId) : undefined
+    };
+  }
+  if (node.type === "foreach") {
+    return {
+      ...node,
+      child: node.child?.id === nodeId ? undefined : node.child ? removeNodeById(node.child, nodeId) : undefined
+    };
+  }
+  if (node.type === "if_else") {
+    return {
+      ...node,
+      thenChild: node.thenChild?.id === nodeId ? undefined : node.thenChild ? removeNodeById(node.thenChild, nodeId) : undefined,
+      elseChild: node.elseChild?.id === nodeId ? undefined : node.elseChild ? removeNodeById(node.elseChild, nodeId) : undefined
     };
   }
   return node;
@@ -306,6 +443,21 @@ function stripCompoundRefs(node: LayoutNode, definitionId: string): LayoutNode |
           return stripped ? { ...child, node: stripped } : undefined;
         })
         .filter((child): child is typeof node.children[number] => Boolean(child))
+    };
+  }
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique") {
+    const child = node.child ? stripCompoundRefs(node.child, definitionId) : undefined;
+    return { ...node, child };
+  }
+  if (node.type === "foreach") {
+    const child = node.child ? stripCompoundRefs(node.child, definitionId) : undefined;
+    return { ...node, child };
+  }
+  if (node.type === "if_else") {
+    return {
+      ...node,
+      thenChild: node.thenChild ? stripCompoundRefs(node.thenChild, definitionId) : undefined,
+      elseChild: node.elseChild ? stripCompoundRefs(node.elseChild, definitionId) : undefined
     };
   }
   return node;
@@ -337,6 +489,21 @@ function clearThemeRefs(node: LayoutNode, themeId: string): LayoutNode {
       }))
     };
   }
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach") {
+    return {
+      ...node,
+      style: cleanedStyle,
+      child: node.child ? clearThemeRefs(node.child, themeId) : undefined
+    };
+  }
+  if (node.type === "if_else") {
+    return {
+      ...node,
+      style: cleanedStyle,
+      thenChild: node.thenChild ? clearThemeRefs(node.thenChild, themeId) : undefined,
+      elseChild: node.elseChild ? clearThemeRefs(node.elseChild, themeId) : undefined
+    };
+  }
   return { ...node, style: cleanedStyle };
 }
 
@@ -362,6 +529,18 @@ function appendChild(node: LayoutNode, parentId: string, child: LayoutNode): Lay
       ]
     };
   }
+  if (node.id === parentId && (node.type === "data_query" || node.type === "filter" || node.type === "unique")) {
+    return {
+      ...node,
+      child
+    };
+  }
+  if (node.id === parentId && node.type === "foreach") {
+    return {
+      ...node,
+      child
+    };
+  }
   if (node.type === "stack" || node.type === "zstack") {
     return {
       ...node,
@@ -375,6 +554,19 @@ function appendChild(node: LayoutNode, parentId: string, child: LayoutNode): Lay
         ...entry,
         node: appendChild(entry.node, parentId, child)
       }))
+    };
+  }
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach") {
+    return {
+      ...node,
+      child: node.child ? appendChild(node.child, parentId, child) : node.child
+    };
+  }
+  if (node.type === "if_else") {
+    return {
+      ...node,
+      thenChild: node.thenChild ? appendChild(node.thenChild, parentId, child) : undefined,
+      elseChild: node.elseChild ? appendChild(node.elseChild, parentId, child) : undefined
     };
   }
   return node;
@@ -410,6 +602,19 @@ function moveLayer(node: LayoutNode, parentId: string, childId: string, delta: -
       }))
     };
   }
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach") {
+    return {
+      ...node,
+      child: node.child ? moveLayer(node.child, parentId, childId, delta) : undefined
+    };
+  }
+  if (node.type === "if_else") {
+    return {
+      ...node,
+      thenChild: node.thenChild ? moveLayer(node.thenChild, parentId, childId, delta) : undefined,
+      elseChild: node.elseChild ? moveLayer(node.elseChild, parentId, childId, delta) : undefined
+    };
+  }
   return node;
 }
 
@@ -423,9 +628,9 @@ function defaultTheme(): WidgetTheme {
     accentRole: "accent",
     autoFitFontFamily: "px-sans",
     fontRoles: {
-      tiny: { family: "px-sans", weight: "regular", slope: "roman", size: "tiny", pixelSize: 8 },
-      normal: { family: "px-sans", weight: "regular", slope: "roman", size: "normal", pixelSize: 12 },
-      header: { family: "px-sans", weight: "bold", slope: "roman", size: "header", pixelSize: 18 }
+      tiny: { family: "px-sans", weight: "regular", slope: "roman", size: "tiny", pixelSize: 8, lineSpacingPx: 0, topPaddingPx: 0 },
+      normal: { family: "px-sans", weight: "regular", slope: "roman", size: "normal", pixelSize: 12, lineSpacingPx: 0, topPaddingPx: 0 },
+      header: { family: "px-sans", weight: "bold", slope: "roman", size: "header", pixelSize: 18, lineSpacingPx: 0, topPaddingPx: 0 }
     },
     borderTokens: {
       thin: { thicknessPx: 1, colorRole: "fg" },
@@ -902,6 +1107,7 @@ export class EpPaperEditorApp extends LitElement {
   declare private fontSpecimenLoading: boolean;
   declare private selectedFontPreviewFamilyId: string;
   private fontSpecimenRequestId = 0;
+  private previewRequestId = 0;
   declare private confirmDeleteFontId: string;
   declare private previewViewportWidth: number;
   declare private previewViewportHeight: number;
@@ -1138,10 +1344,14 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private async refreshPreview(): Promise<void> {
+    const requestId = ++this.previewRequestId;
     const [preview, inspection] = await Promise.all([
       this.fetchPagePreview().catch(() => undefined),
       this.fetchPageInspection().catch(() => undefined)
     ]);
+    if (requestId !== this.previewRequestId) {
+      return;
+    }
     if (!preview) {
       this.previewRgba = new Uint8ClampedArray();
       this.previewHash = "";
@@ -1788,6 +1998,40 @@ export class EpPaperEditorApp extends LitElement {
     const nextNode = defaultNodeForKind(kind, this.project);
     this.setRootNode(owner, appendChild(owner.rootNode, parentId, nextNode));
     this.selectedNodeId = nextNode.id;
+  }
+
+  private setMetaChildNode(
+    owner: { id: string; rootNode?: LayoutNode },
+    nodeId: string,
+    child: LayoutNode | undefined
+  ): void {
+    this.updateRootNode(owner, (root) => updateNode(root, nodeId, (current) => {
+      if (current.type === "data_query" || current.type === "filter" || current.type === "unique" || current.type === "foreach") {
+        return {
+          ...current,
+          child
+        };
+      }
+      return current;
+    }));
+    this.selectedNodeId = child?.id ?? nodeId;
+  }
+
+  private setConditionalBranchNode(
+    owner: { id: string; rootNode?: LayoutNode },
+    nodeId: string,
+    branch: "thenChild" | "elseChild",
+    child: LayoutNode | undefined
+  ): void {
+    this.updateRootNode(owner, (root) => updateNode(root, nodeId, (current) => (
+      current.type === "if_else"
+        ? {
+            ...current,
+            [branch]: child
+          }
+        : current
+    )));
+    this.selectedNodeId = child?.id ?? nodeId;
   }
 
   private moveDraggedNodeToParent(owner: { id: string; rootNode?: LayoutNode }, targetParentId: string): void {
@@ -2515,6 +2759,22 @@ export class EpPaperEditorApp extends LitElement {
           <option value="italic" ?disabled=${!italicAvailable}>Italic</option>
         </select>
       </label>
+      <label>
+        Line spacing
+        <input
+          type="number"
+          .value=${String(style?.lineSpacingPx ?? 0)}
+          @input=${(event: Event) => onChange({ lineSpacingPx: Number((event.target as HTMLInputElement).value) })}
+        />
+      </label>
+      <label>
+        Top padding
+        <input
+          type="number"
+          .value=${String(style?.topPaddingPx ?? 0)}
+          @input=${(event: Event) => onChange({ topPaddingPx: Number((event.target as HTMLInputElement).value) })}
+        />
+      </label>
     `;
   }
 
@@ -2605,6 +2865,7 @@ export class EpPaperEditorApp extends LitElement {
             <option value="fixed_px">Fixed px</option>
             <option value="fraction">Fraction</option>
             <option value="fit_content">Fit content</option>
+            <option value="fit_glyph_bounds">Fit glyph bounds</option>
           </select>
         </label>
         ${current.mode === "fixed_px" || current.mode === "fraction"
@@ -2620,7 +2881,12 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private primitiveAutoFitDisabled(node: PrimitiveInstanceNode): boolean {
-    return node.width?.mode === "fit_content" || node.height?.mode === "fit_content";
+    return (
+      node.width?.mode === "fit_content" ||
+      node.height?.mode === "fit_content" ||
+      node.width?.mode === "fit_glyph_bounds" ||
+      node.height?.mode === "fit_glyph_bounds"
+    );
   }
 
   private renderContentAlignmentControls(
@@ -2686,6 +2952,14 @@ export class EpPaperEditorApp extends LitElement {
             <label>
               Placeholder
               <input ?disabled=${autoFitDisabled} .value=${String(node.props?.placeholderText ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, placeholderText: (event.target as HTMLInputElement).value } })))} />
+            </label>
+            <label>
+              Overflow
+              <select .value=${String(node.props?.overflow ?? "wrap")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, overflow: (event.target as HTMLSelectElement).value as "wrap" | "hide" | "ellipsis" } })))}>
+                <option value="wrap">Wrap</option>
+                <option value="hide">Hide</option>
+                <option value="ellipsis">Ellipsis</option>
+              </select>
             </label>
             ${autoFitDisabled ? html`<div class="muted">Auto fit unavailable when width or height uses Fit content.</div>` : nothing}
             <label>
@@ -2804,6 +3078,12 @@ export class EpPaperEditorApp extends LitElement {
         ${entries.length
           ? entries.map((entry) => {
               const canDropInside = isContainerNode(entry.node);
+              const parent = entry.parentId ? getNodeById(owner.rootNode, entry.parentId) : undefined;
+              const canDropAfter = Boolean(
+                entry.parentId &&
+                parent &&
+                (parent.type === "stack" || parent.type === "zstack" || parent.type === "grid")
+              );
               return html`
                 <div class="tree-row" style=${`padding-left:${entry.depth * 14}px;`}>
                   <button
@@ -2828,9 +3108,9 @@ export class EpPaperEditorApp extends LitElement {
                       }
                     }}
                   >
-                    ${labelForNode(entry.node)}
+                    ${entry.slotLabel ? `${entry.slotLabel}: ` : ""}${labelForNode(entry.node)}
                   </button>
-                  ${entry.parentId
+                  ${canDropAfter
                     ? html`
                         <button
                           class="tree-drop"
@@ -2889,6 +3169,11 @@ export class EpPaperEditorApp extends LitElement {
                 <button @click=${() => this.createChildNode(owner, node.id, "stack")}>Stack</button>
                 <button @click=${() => this.createChildNode(owner, node.id, "grid")}>Grid</button>
                 <button @click=${() => this.createChildNode(owner, node.id, "zstack")}>ZStack</button>
+                <button @click=${() => this.createChildNode(owner, node.id, "data_query")}>Data Query</button>
+                <button @click=${() => this.createChildNode(owner, node.id, "filter")}>Filter</button>
+                <button @click=${() => this.createChildNode(owner, node.id, "unique")}>Unique</button>
+                <button @click=${() => this.createChildNode(owner, node.id, "foreach")}>Foreach</button>
+                <button @click=${() => this.createChildNode(owner, node.id, "if_else")}>If/Else</button>
               </div>
             `
           : nothing}
@@ -2917,7 +3202,7 @@ export class EpPaperEditorApp extends LitElement {
             ${this.project.themes.map((theme) => html`<option value=${theme.id}>${theme.name}</option>`)}
           </select>
         </label>
-        ${node.type === "stack"
+        ${node.type === "stack" || node.type === "foreach"
           ? html`
               <label>
                 Axis
@@ -2959,6 +3244,156 @@ export class EpPaperEditorApp extends LitElement {
                   })));
                 }} />
               </label>
+            `
+          : nothing}
+        ${node.type === "data_query"
+          ? html`
+              <label>
+                Query kind
+                <input .value=${node.queryKind} disabled />
+              </label>
+              <label>
+                Variable name
+                <input .value=${node.variableName} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), variableName: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <label>
+                Date variable name
+                <input .value=${node.dateVariableName ?? "date"} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), dateVariableName: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <label>
+                Offset days from local midnight
+                <input type="number" .value=${String(node.offsetDays ?? 0)} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), offsetDays: Number((event.target as HTMLInputElement).value) } )))} />
+              </label>
+              <label>
+                Rollover time
+                <input placeholder="23:00" .value=${node.rolloverTime ?? ""} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), rolloverTime: (event.target as HTMLInputElement).value || undefined } )))} />
+              </label>
+              <label>
+                Calendar entities
+                <select
+                  multiple
+                  size="6"
+                  @change=${(event: Event) => {
+                    const selected = Array.from((event.target as HTMLSelectElement).selectedOptions).map((option) => option.value);
+                    this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), calendarEntityIds: selected } )));
+                  }}
+                >
+                  ${this.entityCatalog
+                    .filter((entry) => entry.domain === "calendar")
+                    .map((entry) => html`<option value=${entry.entityId} ?selected=${node.calendarEntityIds.includes(entry.entityId)}>${entry.friendlyName}</option>`)}
+                </select>
+              </label>
+              <div class="row">
+                <button @click=${() => this.setMetaChildNode(owner, node.id, emptyStackRoot())}>${node.child ? "Replace" : "Add"} child stack</button>
+                <button @click=${() => this.setMetaChildNode(owner, node.id, defaultFilterNode())}>${node.child ? "Replace" : "Add"} filter</button>
+                <button @click=${() => this.setMetaChildNode(owner, node.id, defaultUniqueNode())}>${node.child ? "Replace" : "Add"} unique</button>
+                <button @click=${() => this.setMetaChildNode(owner, node.id, defaultForEachNode())}>${node.child ? "Replace" : "Add"} foreach</button>
+              </div>
+              ${node.child ? nothing : html`<div class="muted">No child subtree.</div>`}
+            `
+          : nothing}
+        ${node.type === "filter"
+          ? html`
+              <label>
+                Items expression
+                <input .value=${node.itemsRef} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), itemsRef: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <label>
+                Output variable
+                <input .value=${node.outputVariableName} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), outputVariableName: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <label>
+                Item alias
+                <input .value=${node.itemAlias} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), itemAlias: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <label>
+                Index alias
+                <input .value=${node.indexAlias} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), indexAlias: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <label>
+                Condition
+                <input .value=${node.condition} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), condition: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <div class="row">
+                <button @click=${() => this.setMetaChildNode(owner, node.id, emptyStackRoot())}>${node.child ? "Replace" : "Add"} child stack</button>
+                <button @click=${() => this.setMetaChildNode(owner, node.id, defaultUniqueNode())}>${node.child ? "Replace" : "Add"} unique</button>
+                <button @click=${() => this.setMetaChildNode(owner, node.id, defaultForEachNode())}>${node.child ? "Replace" : "Add"} foreach</button>
+              </div>
+              ${node.child ? nothing : html`<div class="muted">No child subtree.</div>`}
+            `
+          : nothing}
+        ${node.type === "unique"
+          ? html`
+              <label>
+                Items expression
+                <input .value=${node.itemsRef} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), itemsRef: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <label>
+                Output variable
+                <input .value=${node.outputVariableName} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), outputVariableName: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <label>
+                Item alias
+                <input .value=${node.itemAlias} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), itemAlias: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <label>
+                Index alias
+                <input .value=${node.indexAlias} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), indexAlias: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <label>
+                Key template
+                <input .value=${node.keyTemplate} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), keyTemplate: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <div class="row">
+                <button @click=${() => this.setMetaChildNode(owner, node.id, emptyStackRoot())}>${node.child ? "Replace" : "Add"} child stack</button>
+                <button @click=${() => this.setMetaChildNode(owner, node.id, defaultForEachNode())}>${node.child ? "Replace" : "Add"} foreach</button>
+              </div>
+              ${node.child ? nothing : html`<div class="muted">No child subtree.</div>`}
+            `
+          : nothing}
+        ${node.type === "foreach"
+          ? html`
+              <label>
+                Items expression
+                <input .value=${node.itemsRef} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), itemsRef: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <label>
+                Item alias
+                <input .value=${node.itemAlias} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), itemAlias: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <label>
+                Index alias
+                <input .value=${node.indexAlias} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), indexAlias: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <label>
+                Max items
+                <input type="number" .value=${node.maxItems === undefined ? "" : String(node.maxItems)} @input=${(event: Event) => {
+                  const value = (event.target as HTMLInputElement).value.trim();
+                  this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), maxItems: value ? Number(value) : undefined } )));
+                }} />
+              </label>
+              <div class="row">
+                <button @click=${() => this.setMetaChildNode(owner, node.id, emptyStackRoot())}>${node.child ? "Replace" : "Add"} template stack</button>
+                <button @click=${() => this.setMetaChildNode(owner, node.id, defaultPrimitiveNode("text"))}>${node.child ? "Replace" : "Add"} template text</button>
+              </div>
+              ${node.child ? nothing : html`<div class="muted">No template child.</div>`}
+            `
+          : nothing}
+        ${node.type === "if_else"
+          ? html`
+              <label>
+                Condition
+                <input .value=${node.condition} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), condition: (event.target as HTMLInputElement).value } )))} />
+              </label>
+              <div class="row">
+                <button @click=${() => this.setConditionalBranchNode(owner, node.id, "thenChild", emptyStackRoot())}>${node.thenChild ? "Replace" : "Add"} then</button>
+                <button @click=${() => this.setConditionalBranchNode(owner, node.id, "elseChild", emptyStackRoot())}>${node.elseChild ? "Replace" : "Add"} else</button>
+              </div>
+              <div class="row">
+                <button @click=${() => this.setConditionalBranchNode(owner, node.id, "thenChild", defaultPrimitiveNode("text"))}>Then text</button>
+                <button @click=${() => this.setConditionalBranchNode(owner, node.id, "elseChild", defaultPrimitiveNode("text"))}>Else text</button>
+              </div>
+              ${!node.thenChild && !node.elseChild ? html`<div class="muted">No branches yet.</div>` : nothing}
             `
           : nothing}
         ${node.type === "primitive_instance" ? this.renderPrimitiveEditor(node, owner) : nothing}
@@ -3642,6 +4077,19 @@ export class EpPaperEditorApp extends LitElement {
       const activeFontPreview = this.fontSpecimens[0];
       return html`
         <div class="detail">
+          <div class="section">
+            <h2>Project</h2>
+            <label>
+              Locale
+              <input .value=${this.project.locale ?? "en-US"} @input=${(event: Event) => {
+                this.project = {
+                  ...this.project,
+                  locale: (event.target as HTMLInputElement).value
+                };
+              }} />
+            </label>
+            <div class="muted">Used by template format filters, for example en-US or nl-NL.</div>
+          </div>
           <div class="section">
             <h2>Home Assistant</h2>
             <label>

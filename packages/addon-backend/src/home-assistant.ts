@@ -1,4 +1,5 @@
 import https from "node:https";
+import { collectDataQueryNodes } from "../../render-core/src/layout-meta.js";
 import type {
   DiscoveredDisplayCandidate,
   EntityCatalogEntry,
@@ -8,9 +9,10 @@ import type {
   Project,
   QueryDefinition,
   QueryResult,
+  ResolvedCalendarEvent,
   RenderData
 } from "../../render-core/src/types.js";
-import { SAMPLE_DATA } from "../../render-core/src/sample-project.js";
+import { SAMPLE_CALENDAR_EVENTS_BY_ENTITY, SAMPLE_DATA } from "../../render-core/src/sample-project.js";
 import { emptyQueryResult } from "../../render-core/src/resolve.js";
 
 function supervisorToken(): string | undefined {
@@ -55,8 +57,118 @@ function unavailableRenderData(project: Project): RenderData {
   return {
     now: new Date().toISOString(),
     entities: {},
-    queries: Object.fromEntries(project.queries.map((query) => [query.id, emptyQueryResult(query.kind)]))
+    queries: Object.fromEntries(project.queries.map((query) => [query.id, emptyQueryResult(query.kind)])),
+    metaQueries: {}
   };
+}
+
+function zeroPad(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function formatLocalDate(date: Date): string {
+  return `${date.getFullYear()}-${zeroPad(date.getMonth() + 1)}-${zeroPad(date.getDate())}`;
+}
+
+function parseRolloverTime(value: string | undefined): { hours: number; minutes: number } | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const match = value.trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!match) {
+    return undefined;
+  }
+  return { hours: Number(match[1]), minutes: Number(match[2]) };
+}
+
+function buildLocalCalendarWindow(now: Date, offsetDays: number, rolloverTime?: string): { start: Date; end: Date; date: string; effectiveOffsetDays: number } {
+  const start = new Date(now);
+  const rollover = parseRolloverTime(rolloverTime);
+  let effectiveOffsetDays = Math.trunc(offsetDays);
+  if (
+    rollover &&
+    (now.getHours() > rollover.hours || (now.getHours() === rollover.hours && now.getMinutes() >= rollover.minutes))
+  ) {
+    effectiveOffsetDays += 1;
+  }
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() + effectiveOffsetDays);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { start, end, date: formatLocalDate(start), effectiveOffsetDays };
+}
+
+function asEventDate(value: unknown, fallback?: Date): Date {
+  if (typeof value === "string" && value) {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+  }
+  return fallback ? new Date(fallback) : new Date(0);
+}
+
+function extractEventDateString(value: unknown): string | undefined {
+  if (typeof value === "string" && value) {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const key of ["dateTime", "datetime", "date", "value", "start", "start_time", "end", "end_time"]) {
+      const nested = record[key];
+      if (typeof nested === "string" && nested) {
+        return nested;
+      }
+    }
+  }
+  return undefined;
+}
+
+function detectAllDayEvent(item: Record<string, unknown>, start: string, end: string): boolean {
+  const explicit = item.all_day ?? item.allDay ?? item.allday;
+  if (typeof explicit === "boolean") {
+    return explicit;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(start) || /^\d{4}-\d{2}-\d{2}$/.test(end)) {
+    return true;
+  }
+  return /T00:00:00/.test(start) && /T00:00:00/.test(end) && asEventDate(end).getTime() - asEventDate(start).getTime() >= 24 * 60 * 60 * 1000;
+}
+
+function normalizeCalendarEvent(entityId: string, item: Record<string, unknown>): ResolvedCalendarEvent {
+  const raw = { ...item };
+  const startValue = extractEventDateString(item.start ?? item.start_time) ?? "";
+  const fallbackStart = startValue ? asEventDate(startValue) : new Date(0);
+  const endValue = extractEventDateString(item.end ?? item.end_time ?? item.start ?? item.start_time) ?? "";
+  const fallbackEnd = asEventDate(endValue, new Date(fallbackStart.getTime() + 60 * 1000));
+  const start = startValue || fallbackStart.toISOString();
+  const end = endValue || fallbackEnd.toISOString();
+  const allDay = detectAllDayEvent(item, start, end);
+  return {
+    calendarEntityId: entityId,
+    summary: String(item.summary ?? item.message ?? item.title ?? ""),
+    start,
+    end,
+    allDay,
+    allday: allDay,
+    location: typeof item.location === "string" ? item.location : undefined,
+    description: typeof item.description === "string" ? item.description : undefined,
+    raw
+  };
+}
+
+function sortCalendarEvents(left: ResolvedCalendarEvent, right: ResolvedCalendarEvent): number {
+  return (
+    left.start.localeCompare(right.start) ||
+    left.end.localeCompare(right.end) ||
+    left.summary.localeCompare(right.summary) ||
+    left.calendarEntityId.localeCompare(right.calendarEntityId)
+  );
+}
+
+function eventOverlapsWindow(item: Record<string, unknown>, start: Date, end: Date): boolean {
+  const eventStart = asEventDate(item.start ?? item.start_time);
+  const eventEnd = asEventDate(item.end ?? item.end_time, new Date(eventStart.getTime() + 60 * 1000));
+  return eventStart < end && eventEnd > start;
 }
 
 function isTlsCertificateError(error: unknown): boolean {
@@ -76,6 +188,53 @@ function normalizeHomeAssistantError(error: unknown, path: string): Error {
 }
 
 export class HomeAssistantClient {
+  private async resolveLayoutMetaQueries(
+    project: Project,
+    now: Date,
+    fetchCalendarEvents: (entityId: string, start: Date, end: Date) => Promise<Array<Record<string, unknown>>>
+  ): Promise<Record<string, QueryResult>> {
+    const refs = collectDataQueryNodes(project);
+    const entries = await Promise.all(
+      refs.map(async ({ node }) => {
+        const window = buildLocalCalendarWindow(now, Number(node.offsetDays ?? 0), node.rolloverTime);
+        const items = (
+          await Promise.all(
+            (node.calendarEntityIds ?? []).map(async (entityId) => {
+              try {
+                const calendarItems = await fetchCalendarEvents(entityId, window.start, window.end);
+                return calendarItems.map((item) => normalizeCalendarEvent(entityId, item));
+              } catch (error) {
+                console.warn(
+                  `Meta query ${node.id} failed for ${entityId}: ${error instanceof Error ? error.message : String(error)}`
+                );
+                return [];
+              }
+            })
+          )
+        )
+          .flat()
+          .sort(sortCalendarEvents);
+        return [
+          node.id,
+          {
+            kind: "calendar_events_meta",
+            items: items as unknown as Array<Record<string, unknown>>,
+            meta: {
+              variableName: node.variableName,
+              dateVariableName: node.dateVariableName ?? "date",
+              date: window.date,
+              queryKind: node.queryKind,
+              offsetDays: node.offsetDays,
+              effectiveOffsetDays: window.effectiveOffsetDays,
+              rolloverTime: node.rolloverTime
+            }
+          }
+        ] as const;
+      })
+    );
+    return Object.fromEntries(entries);
+  }
+
   hasConfiguredConnection(settings: HomeAssistantConnectionSettings): boolean {
     return hasConfiguredConnection(settings);
   }
@@ -295,10 +454,41 @@ export class HomeAssistantClient {
       )
     );
 
+    const now = new Date();
+    const metaQueries = await this.resolveLayoutMetaQueries(
+      project,
+      now,
+      async (entityId, start, end) =>
+        await this.fetchJson<Array<Record<string, unknown>>>(
+          settings,
+          `/calendars/${entityId}?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`
+        )
+    );
+
     return {
-      now: new Date().toISOString(),
+      now: now.toISOString(),
       entities,
-      queries
+      queries,
+      metaQueries
+    };
+  }
+
+  async resolveSampleProjectData(
+    project: Project,
+    baseData: RenderData = SAMPLE_DATA,
+    sampleCalendarEventsByEntity: Record<string, Array<Record<string, unknown>>> = SAMPLE_CALENDAR_EVENTS_BY_ENTITY
+  ): Promise<RenderData> {
+    const now = asEventDate(baseData.now, new Date());
+    const metaQueries = await this.resolveLayoutMetaQueries(
+      project,
+      now,
+      async (entityId, start, end) =>
+        (sampleCalendarEventsByEntity[entityId] ?? []).filter((item) => eventOverlapsWindow(item, start, end))
+    );
+
+    return {
+      ...baseData,
+      metaQueries
     };
   }
 
@@ -393,10 +583,7 @@ export class HomeAssistantClient {
   ): Promise<QueryResult> {
     if (query.kind === "calendar_range") {
       const entityId = String(query.params.entityId ?? "");
-      const start = new Date();
-      start.setUTCHours(0, 0, 0, 0);
-      const end = new Date(start);
-      end.setUTCDate(end.getUTCDate() + 1);
+      const { start, end } = buildLocalCalendarWindow(new Date(), 0);
       const items = await this.fetchJson<Array<Record<string, unknown>>>(
         settings,
         `/calendars/${entityId}?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`

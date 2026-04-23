@@ -7,6 +7,20 @@ export const COLOR_BG = 0;
 export const COLOR_FG = 1;
 export const COLOR_ACCENT = 2;
 
+export interface PixelClipRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function clipContains(clip: PixelClipRect | undefined, x: number, y: number): boolean {
+  if (!clip) {
+    return true;
+  }
+  return x >= clip.x && y >= clip.y && x < clip.x + clip.w && y < clip.y + clip.h;
+}
+
 export class PixelBuffer {
   readonly pixels: Uint8Array;
 
@@ -30,8 +44,11 @@ export class PixelBuffer {
     this.pixels.fill(color);
   }
 
-  setPixel(x: number, y: number, color: number): void {
+  setPixel(x: number, y: number, color: number, clip?: PixelClipRect): void {
     if (x < 0 || y < 0 || x >= this.width || y >= this.height) {
+      return;
+    }
+    if (!clipContains(clip, x, y)) {
       return;
     }
     this.pixels[y * this.width + x] = color;
@@ -41,26 +58,41 @@ export class PixelBuffer {
     return this.pixels[y * this.width + x] ?? COLOR_BG;
   }
 
-  drawRect(x: number, y: number, w: number, h: number, color: number, filled = false): void {
+  drawRect(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    color: number,
+    filled = false,
+    clip?: PixelClipRect
+  ): void {
     if (filled) {
       for (let py = y; py < y + h; py += 1) {
         for (let px = x; px < x + w; px += 1) {
-          this.setPixel(px, py, color);
+          this.setPixel(px, py, color, clip);
         }
       }
       return;
     }
     for (let px = x; px < x + w; px += 1) {
-      this.setPixel(px, y, color);
-      this.setPixel(px, y + h - 1, color);
+      this.setPixel(px, y, color, clip);
+      this.setPixel(px, y + h - 1, color, clip);
     }
     for (let py = y; py < y + h; py += 1) {
-      this.setPixel(x, py, color);
-      this.setPixel(x + w - 1, py, color);
+      this.setPixel(x, py, color, clip);
+      this.setPixel(x + w - 1, py, color, clip);
     }
   }
 
-  drawText(text: string, x: number, y: number, style: Partial<TextStyle> | undefined, color: number): void {
+  drawText(
+    text: string,
+    x: number,
+    y: number,
+    style: Partial<TextStyle> | undefined,
+    color: number,
+    clip?: PixelClipRect
+  ): void {
     const resolved = resolveTextStyle(style);
     const run = layoutText(text, resolved, this.fontPresets);
     for (const glyph of run.glyphs) {
@@ -69,7 +101,7 @@ export class PixelBuffer {
           if (!glyph.pixels[gy]?.[gx]) {
             continue;
           }
-          this.setPixel(x + glyph.x + gx, y + glyph.y + gy, color);
+          this.setPixel(x + glyph.x + gx, y + glyph.y + gy, color, clip);
         }
       }
     }
@@ -93,7 +125,14 @@ export class PixelBuffer {
     };
   }
 
-  drawIcon(name: string, x: number, y: number, scale: number, color: number): void {
+  drawIcon(
+    name: string,
+    x: number,
+    y: number,
+    scale: number,
+    color: number,
+    clip?: PixelClipRect
+  ): void {
     const icon = ICONS[name];
     if (!icon) {
       return;
@@ -105,7 +144,7 @@ export class PixelBuffer {
         }
         for (let sy = 0; sy < scale; sy += 1) {
           for (let sx = 0; sx < scale; sx += 1) {
-            this.setPixel(x + px * scale + sx, y + py * scale + sy, color);
+            this.setPixel(x + px * scale + sx, y + py * scale + sy, color, clip);
           }
         }
       }

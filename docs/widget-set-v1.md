@@ -11,6 +11,46 @@ Grid sizes below use display-profile grid units, not pixels.
 - Accent color is reserved for the most important state, current bucket, or alert condition.
 - Widgets should avoid showing more precision than a human can use at a glance.
 
+## Layout Meta Nodes
+
+These are editor/layout helpers, not visible widgets.
+
+### `data_query`
+
+Purpose:
+- fetch and normalize calendar events into a named scoped variable
+
+Current query kinds:
+- `calendar_events`
+
+Rules:
+- supports multiple calendar entities
+- resolves a `24h` window from local midnight plus `offsetDays`
+- can advance the effective day after an optional local `rolloverTime`
+- exposes normalized event fields, raw payload, and a query date variable such as `date`
+
+### `foreach`
+
+Purpose:
+- repeat one template child for items in an array variable
+
+Rules:
+- works in horizontal or vertical mode
+- can limit processing with `maxItems`
+- binds item alias and zero-based index alias
+- skips drawing once the next item starts outside the container bounds
+
+### `if_else`
+
+Purpose:
+- choose one branch from a small expression
+
+Supported expression features:
+- dotted paths such as `event.summary` and `event.allday`
+- literals: string, number, boolean
+- operators: `==`, `!=`, `>`, `>=`, `<`, `<=`, `&&`, `||`, `!`
+- parentheses
+
 ## 1. `state_tile`
 
 Purpose:

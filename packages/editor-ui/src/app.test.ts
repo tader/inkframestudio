@@ -508,6 +508,33 @@ describe("epaper editor app", () => {
     expect(element.shadowRoot.textContent).toContain("Structure");
   });
 
+  it("offers meta-node creation controls in the node editor", async () => {
+    window.location.hash = "#/widgets";
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    const addButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Add compound"));
+    addButton?.click();
+    await flush();
+    await element.updateComplete;
+
+    const treeNodeButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.trim() === "stack");
+    treeNodeButton?.click();
+    await flush();
+    await element.updateComplete;
+
+    const createChildButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.trim() === "Create child");
+    createChildButton?.click();
+    await flush();
+    await element.updateComplete;
+
+    expect(element.shadowRoot.textContent).toContain("Data Query");
+    expect(element.shadowRoot.textContent).toContain("Foreach");
+    expect(element.shadowRoot.textContent).toContain("If/Else");
+  });
+
   it("removes virtual display from displays page", async () => {
     const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
     document.body.append(element);

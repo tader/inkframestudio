@@ -15,7 +15,7 @@ describe("render-core", () => {
     const rendered = renderProject(SAMPLE_PROJECT, "tri296x128-red", SAMPLE_DATA);
     expect(rendered.width).toBe(296);
     expect(rendered.height).toBe(128);
-    expect(rendered.hash).toBe("deef777aac80a7ac79487f8aec0464d3f5e5c98823782294f362485011c64ab3");
+    expect(rendered.hash).toBe("fc1b91f6c2697288cfee46d66e6be2510a521d61f7d9540ec31d15d245e32e3b");
   });
 
   it("renders a stable golden hash for 400 default screen", () => {

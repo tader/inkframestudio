@@ -58,6 +58,24 @@ Best as a dedicated utility display.
 +-------------------------------------+
 ```
 
+Example layout flow:
+
+```text
+data_query(variable=events, dateVariable=date, calendars=[family, work], offsetDays=0, rolloverTime=23:00)
+  -> foreach(items=events, item=event, maxItems=4, axis=vertical)
+      -> if_else(event.allday == true)
+           then: icon + title row
+           else: time + title row
+```
+
+Template text can format event timestamps:
+
+```text
+{{ event.start | format("HH:MM") }}  {{ event.summary }}
+{{ date | format("dddd") }}
+{{ date | format("d mmmm yyyy") }}
+```
+
 ### 4. Climate List
 
 ```text

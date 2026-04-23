@@ -10,8 +10,19 @@ export type ThemeRef = "inherit" | WidgetThemeId;
 export type NumericComparisonOp = "gt" | "gte" | "lt" | "lte" | "eq" | "neq";
 export type ProviderKind = "openepaperlink" | "openepaperlink-ap" | "virtual" | (string & {});
 export type BorderToken = "none" | "thin" | "thick";
-export type SizeSpecMode = "fixed_px" | "fill" | "fraction" | "fit_content" | "intrinsic_font_height";
-export type CompositionNodeType = "stack" | "grid" | "zstack" | "primitive_instance" | "compound_ref" | "spacer";
+export type SizeSpecMode = "fixed_px" | "fill" | "fraction" | "fit_content" | "fit_glyph_bounds" | "intrinsic_font_height";
+export type CompositionNodeType =
+  | "stack"
+  | "grid"
+  | "zstack"
+  | "primitive_instance"
+  | "compound_ref"
+  | "spacer"
+  | "data_query"
+  | "filter"
+  | "unique"
+  | "foreach"
+  | "if_else";
 export type PrimitiveWidgetKind =
   | "text"
   | "number"
@@ -40,6 +51,8 @@ export interface TextStyle {
   size: FontSize;
   tabularNumbers?: boolean;
   pixelSize?: number;
+  lineSpacingPx?: number;
+  topPaddingPx?: number;
   bypassAllowedPixelSizes?: boolean;
 }
 
@@ -280,13 +293,66 @@ export interface SpacerNode extends LayoutNodeBase {
   type: "spacer";
 }
 
+export interface DataQueryLayoutNode extends LayoutNodeBase {
+  type: "data_query";
+  queryKind: "calendar_events";
+  variableName: string;
+  dateVariableName?: string;
+  calendarEntityIds: string[];
+  offsetDays: number;
+  rolloverTime?: string;
+  child?: LayoutNode;
+}
+
+export interface ForEachLayoutNode extends LayoutNodeBase {
+  type: "foreach";
+  itemsRef: string;
+  itemAlias: string;
+  indexAlias: string;
+  axis: "horizontal" | "vertical";
+  maxItems?: number;
+  child?: LayoutNode;
+}
+
+export interface FilterLayoutNode extends LayoutNodeBase {
+  type: "filter";
+  itemsRef: string;
+  outputVariableName: string;
+  itemAlias: string;
+  indexAlias: string;
+  condition: string;
+  child?: LayoutNode;
+}
+
+export interface UniqueLayoutNode extends LayoutNodeBase {
+  type: "unique";
+  itemsRef: string;
+  outputVariableName: string;
+  itemAlias: string;
+  indexAlias: string;
+  keyTemplate: string;
+  child?: LayoutNode;
+}
+
+export interface IfElseLayoutNode extends LayoutNodeBase {
+  type: "if_else";
+  condition: string;
+  thenChild?: LayoutNode;
+  elseChild?: LayoutNode;
+}
+
 export type LayoutNode =
   | StackLayoutNode
   | GridLayoutNode
   | ZStackLayoutNode
   | PrimitiveInstanceNode
   | CompoundRefNode
-  | SpacerNode;
+  | SpacerNode
+  | DataQueryLayoutNode
+  | FilterLayoutNode
+  | UniqueLayoutNode
+  | ForEachLayoutNode
+  | IfElseLayoutNode;
 
 export interface DisplayType {
   id: string;
@@ -463,6 +529,8 @@ export interface WidgetProps {
   prefix?: string;
   suffix?: string;
   placeholderText?: string;
+  overflow?: "wrap" | "hide" | "ellipsis";
+  lineSpacingPx?: number;
   renderEntityState?: boolean;
   paddingPx?: number;
   borderToken?: BorderToken;
@@ -505,6 +573,7 @@ export interface Project {
   id: string;
   name: string;
   version: number;
+  locale?: string;
   fontPresets: FontPresetValues;
   themes: WidgetTheme[];
   displayTypes?: DisplayType[];
@@ -534,10 +603,23 @@ export interface QueryResult {
   meta?: Record<string, unknown>;
 }
 
+export interface ResolvedCalendarEvent {
+  calendarEntityId: string;
+  summary: string;
+  start: string;
+  end: string;
+  allDay: boolean;
+  allday: boolean;
+  location?: string;
+  description?: string;
+  raw: Record<string, unknown>;
+}
+
 export interface RenderData {
   now: string;
   entities: Record<string, EntityState>;
   queries: Record<string, QueryResult>;
+  metaQueries?: Record<string, QueryResult>;
 }
 
 export interface ResolvedProjectState {
