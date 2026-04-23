@@ -1,11 +1,12 @@
 import { createStableHash } from "./hash.js";
 import { layoutText } from "./bitmap-font.js";
-import { COLOR_ACCENT, COLOR_BG, COLOR_FG, PixelBuffer } from "./pixel-buffer.js";
+import { COLOR_ACCENT, COLOR_BG, COLOR_FG, PixelBuffer, type PixelPaint } from "./pixel-buffer.js";
 import { formatQuantizedNumber } from "./quantize.js";
 import { resolveProjectState } from "./resolve.js";
 import { getThemeByRef, getWidgetTheme } from "./themes.js";
 import type {
   DisplayProfile,
+  FillRole,
   NumericThemeRule,
   Overlay,
   PaletteRole,
@@ -35,7 +36,7 @@ interface ResolvedWidgetRender {
   valueColor: number;
   accentColor: number;
   borderColor: number;
-  surfaceColor?: number;
+  surfacePaint?: PixelPaint;
   borderVisible: boolean;
   borderMergeEnabled: boolean;
 }
@@ -86,11 +87,24 @@ function colorForRole(role: PaletteRole): number {
   return COLOR_FG;
 }
 
+function paintForFillRole(role: FillRole): PixelPaint {
+  if (role === "gray") {
+    return { kind: "checker", primary: COLOR_BG, secondary: COLOR_FG };
+  }
+  if (role === "light-accent") {
+    return { kind: "checker", primary: COLOR_BG, secondary: COLOR_ACCENT };
+  }
+  if (role === "dark-accent") {
+    return { kind: "checker", primary: COLOR_FG, secondary: COLOR_ACCENT };
+  }
+  return { kind: "solid", color: colorForRole(role) };
+}
+
 function drawHistoryBars(
   buffer: PixelBuffer,
   frame: PixelFrame,
   result: QueryResult | undefined,
-  color: number,
+  paint: PixelPaint,
   textColor: number
 ): void {
   const points = result?.points ?? [];
@@ -106,13 +120,12 @@ function drawHistoryBars(
   points.forEach((point, index) => {
     const normalized = (point.value - minValue) / spread;
     const height = Math.max(1, Math.round((frame.h - 2) * normalized));
-    buffer.drawRect(
+    buffer.drawPaintRect(
       frame.x + index * barWidth,
       frame.y + frame.h - height,
       Math.max(1, barWidth - 1),
       height,
-      color,
-      true
+      paint
     );
   });
 }
@@ -383,7 +396,7 @@ function resolveWidgetRender(
     valueColor: colorForRole(theme.text.value),
     accentColor: widget.props.accent === "fg" ? COLOR_FG : colorForRole(theme.accentRole),
     borderColor: colorForRole(theme.border.colorRole),
-    surfaceColor: theme.surface.fillRole ? colorForRole(theme.surface.fillRole) : undefined,
+    surfacePaint: theme.surface.fillRole ? paintForFillRole(theme.surface.fillRole) : undefined,
     borderVisible,
     borderMergeEnabled
   };
@@ -394,7 +407,7 @@ function drawWidgetContent(
   resolved: ResolvedWidgetRender,
   data: RenderData
 ): void {
-  const { widget, frame, surfaceColor, titleColor, bodyColor, valueColor, accentColor } = resolved;
+  const { widget, frame, theme, surfacePaint, titleColor, bodyColor, valueColor, accentColor } = resolved;
   const title = String(widget.props.title ?? widget.id);
   const titleStyle = mergeTextStyle({ size: "tiny", weight: "regular", family: "px-sans" }, widget.props.titleTextStyle);
   const bodyStyle = mergeTextStyle({ size: "tiny", weight: "regular", family: "px-sans" }, widget.props.bodyTextStyle);
@@ -403,8 +416,8 @@ function drawWidgetContent(
     widget.props.valueTextStyle
   );
 
-  if (surfaceColor !== undefined && surfaceColor !== COLOR_BG) {
-    buffer.drawRect(frame.x, frame.y, frame.w, frame.h, surfaceColor, true);
+  if (surfacePaint) {
+    buffer.drawPaintRect(frame.x, frame.y, frame.w, frame.h, surfacePaint);
   }
 
   switch (widget.type) {
@@ -631,11 +644,11 @@ function drawWidgetContent(
       break;
     }
     case "history_bars": {
-      const graphColor = widget.props.colorRole ? colorForRole(widget.props.colorRole) : accentColor;
+      const graphPaint = paintForFillRole(widget.props.colorRole ?? theme.accentRole);
       if (title) {
         buffer.drawText(title, frame.x + 2, frame.y + 2, titleStyle, titleColor);
       }
-      drawHistoryBars(buffer, frame, data.queries[widget.bindings.query], graphColor, bodyColor);
+      drawHistoryBars(buffer, frame, data.queries[widget.bindings.query], graphPaint, bodyColor);
       break;
     }
     case "placeholder":

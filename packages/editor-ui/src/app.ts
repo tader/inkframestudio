@@ -1,5 +1,5 @@
 import { LitElement, css, html, nothing, type TemplateResult } from "lit";
-import { BUILT_IN_WIDGET_DEFINITIONS, DISPLAY_PROFILES, ICON_DEFINITIONS, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type HomeAssistantConnectionSettings, type HomeAssistantConnectionStatus, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutInspectionResult, type LayoutNode, type ManagedDisplay, type OpenEpaperLinkAccessPointSettings, type OpenEpaperLinkAccessPointStatus, type PreviewDataSource, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
+import { BUILT_IN_WIDGET_DEFINITIONS, DISPLAY_PROFILES, ICON_DEFINITIONS, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FillRole, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type HomeAssistantConnectionSettings, type HomeAssistantConnectionStatus, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutInspectionResult, type LayoutNode, type ManagedDisplay, type OpenEpaperLinkAccessPointSettings, type OpenEpaperLinkAccessPointStatus, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
 import { SAMPLE_PROJECT } from "../../render-core/src/sample-project.js";
 import {
   deleteFont,
@@ -696,6 +696,15 @@ function textColorRoleLabel(role: TextStyle["colorRole"] | undefined): string {
   return "transparent";
 }
 
+function fillRoleLabel(role: FillRole | undefined): string {
+  if (role === "bg") return "white";
+  if (role === "fg" || role === undefined) return "black";
+  if (role === "accent") return "accent";
+  if (role === "gray") return "gray";
+  if (role === "light-accent") return "light accent";
+  return "dark accent";
+}
+
 function fontRoleThemeTextKey(role: FontRole): "title" | "body" | "value" | undefined {
   if (role === "tiny") {
     return "title";
@@ -718,7 +727,7 @@ function defaultDisplayType(): DisplayType {
     height: profile.height,
     palette: profile.palette,
     rotation: profile.rotation,
-    safeMarginPx: profile.safeMarginPx,
+    contentPadding: { ...profile.contentPadding },
     gridUnitPx: profile.gridUnitPx
   };
 }
@@ -806,7 +815,6 @@ export class EpPaperEditorApp extends LitElement {
     previewHash: { state: true },
     previewWidth: { state: true },
     previewHeight: { state: true },
-    previewDataSource: { state: true },
     previewMessage: { state: true },
     scale: { state: true },
     fontSpecimens: { state: true },
@@ -1167,7 +1175,6 @@ export class EpPaperEditorApp extends LitElement {
   declare private previewHash: string;
   declare private previewWidth: number;
   declare private previewHeight: number;
-  declare private previewDataSource: PreviewDataSource;
   declare private previewMessage: string;
   declare private scale: number;
   declare private fontSpecimens: FontSpecimenFamilyView[];
@@ -1225,9 +1232,8 @@ export class EpPaperEditorApp extends LitElement {
     this.previewHash = "";
     this.previewWidth = 0;
     this.previewHeight = 0;
-    this.previewDataSource = "live";
     this.previewMessage = "";
-    this.scale = 1;
+    this.scale = typeof window !== "undefined" && window.devicePixelRatio >= 1.75 ? 2 : 1;
     this.fontSpecimens = [];
     this.fontSpecimenSampleText = "Ag 09:45 21.5C";
     this.fontSpecimenError = "";
@@ -1614,7 +1620,7 @@ export class EpPaperEditorApp extends LitElement {
       if (!this.selectedDisplayId) {
         return undefined;
       }
-      return await fetchDevicePreview(this.project.id, this.selectedDisplayId, this.previewDataSource, this.project);
+      return await fetchDevicePreview(this.project.id, this.selectedDisplayId, this.project);
     }
     if (this.activePage === "layouts") {
       if (!this.selectedLayoutId) {
@@ -1624,7 +1630,6 @@ export class EpPaperEditorApp extends LitElement {
         this.project.id,
         this.selectedLayoutId,
         undefined,
-        this.previewDataSource,
         this.projectWithPreviewThemeForLayout(this.selectedLayoutId)
       );
     }
@@ -1639,7 +1644,7 @@ export class EpPaperEditorApp extends LitElement {
       }
       const tempLayoutId = "__widget-preview-layout";
       const tempProject = this.widgetPreviewProject(definition, displayTypeId);
-      return await fetchLayoutPreview(this.project.id, tempLayoutId, undefined, this.previewDataSource, tempProject);
+      return await fetchLayoutPreview(this.project.id, tempLayoutId, undefined, tempProject);
     }
     if (this.activePage === "themes") {
       const theme = this.selectedTheme;
@@ -1664,7 +1669,6 @@ export class EpPaperEditorApp extends LitElement {
         this.project.id,
         this.selectedLayoutId,
         undefined,
-        this.previewDataSource,
         this.projectWithPreviewThemeForLayout(this.selectedLayoutId),
         false
       );
@@ -1679,7 +1683,7 @@ export class EpPaperEditorApp extends LitElement {
     }
     const tempLayoutId = "__widget-preview-layout";
     const tempProject = this.widgetPreviewProject(definition, displayTypeId);
-    const inspection = await fetchLayoutInspectionPreview(this.project.id, tempLayoutId, undefined, this.previewDataSource, tempProject, true);
+    const inspection = await fetchLayoutInspectionPreview(this.project.id, tempLayoutId, undefined, tempProject, true);
     if (inspection.root?.nodeId === "__widget-preview-ref" && inspection.root.children[0]) {
       return {
         ...inspection,
@@ -2427,27 +2431,6 @@ export class EpPaperEditorApp extends LitElement {
           <div class="muted">v${this.project.version}</div>
           <button class="primary" @click=${() => void this.persistProject()}>Save project</button>
         </div>
-        <div class="section">
-          <h3>Preview</h3>
-          <div class="row">
-            <button class=${this.previewDataSource === "live" ? "primary" : ""} @click=${() => {
-              this.previewDataSource = "live";
-              void this.refreshPreview();
-            }}>Live HA</button>
-            <button class=${this.previewDataSource === "sample" ? "primary" : ""} @click=${() => {
-              this.previewDataSource = "sample";
-              void this.refreshPreview();
-            }}>Sample</button>
-          </div>
-          <label>
-            Scale
-            <select .value=${String(this.scale)} @change=${(event: Event) => (this.scale = Number((event.target as HTMLSelectElement).value))}>
-              <option value="1">1x</option>
-              <option value="2">2x</option>
-              <option value="3">3x</option>
-            </select>
-          </label>
-        </div>
       </nav>
     `;
   }
@@ -2700,9 +2683,11 @@ export class EpPaperEditorApp extends LitElement {
         </div>
       `;
     }
-    const effectiveScale = this.previewScaleBase() * this.scale;
+    const effectiveScale = this.previewCanvasScale();
     const uploadCandidates = this.previewUploadCandidates;
     const effectivePreviewTagMac = this.effectivePreviewTagMac;
+    const cssPreviewWidth = Math.max(1, this.previewWidth * effectiveScale);
+    const cssPreviewHeight = Math.max(1, this.previewHeight * effectiveScale);
     return html`
       <div class="section">
         <h2>Preview</h2>
@@ -2713,6 +2698,16 @@ export class EpPaperEditorApp extends LitElement {
           : nothing}
         <div class="row">
           <button @click=${() => void this.refreshPreview()}>Refresh preview</button>
+          <label>
+            Scale
+            <select .value=${String(this.scale)} @change=${(event: Event) => (this.scale = Number((event.target as HTMLSelectElement).value))}>
+              <option value="1">1x</option>
+              <option value="2">2x</option>
+              <option value="3">3x</option>
+              <option value="4">4x</option>
+              <option value="5">5x</option>
+            </select>
+          </label>
         </div>
         ${this.activePage === "widgets" || this.activePage === "themes"
           ? html`
@@ -2774,8 +2769,8 @@ export class EpPaperEditorApp extends LitElement {
       <div class="preview-body">
         ${this.previewWidth && this.previewHeight
           ? html`
-              <div class="preview-stage" style=${`width:${Math.max(1, Math.round(this.previewWidth * effectiveScale))}px;height:${Math.max(1, Math.round(this.previewHeight * effectiveScale))}px;`}>
-                <canvas class="preview-canvas" width=${this.previewWidth} height=${this.previewHeight} style=${`width:${Math.max(1, Math.round(this.previewWidth * effectiveScale))}px;height:${Math.max(1, Math.round(this.previewHeight * effectiveScale))}px;`}></canvas>
+              <div class="preview-stage" style=${`width:${cssPreviewWidth}px;height:${cssPreviewHeight}px;`}>
+                <canvas class="preview-canvas" width=${this.previewWidth} height=${this.previewHeight} style=${`width:${cssPreviewWidth}px;height:${cssPreviewHeight}px;`}></canvas>
               </div>
             `
           : html`<div class="muted">No preview for this page.</div>`}
@@ -2941,8 +2936,9 @@ export class EpPaperEditorApp extends LitElement {
     };
   }
 
-  private previewScaleBase(): number {
-    return typeof window !== "undefined" && window.devicePixelRatio >= 1.75 ? 2 : 1;
+  private previewCanvasScale(): number {
+    const deviceScale = typeof window !== "undefined" ? Math.max(1, window.devicePixelRatio || 1) : 1;
+    return this.scale / deviceScale;
   }
 
   private tonedPreviewRgba(): Uint8ClampedArray {
@@ -3158,11 +3154,21 @@ export class EpPaperEditorApp extends LitElement {
       ${node.primitiveType === "state_tile"
         ? this.renderContentAlignmentControls(node, owner, { horizontal: "center", vertical: "middle" })
         : nothing}
-      ${node.primitiveType === "graph"
+      ${node.primitiveType === "graph" || node.primitiveType === "history_bars"
         ? html`
             <label>
               Query id
               <input .value=${String(node.bindings?.query ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), bindings: { ...(current as PrimitiveInstanceNode).bindings, query: (event.target as HTMLInputElement).value } })))} />
+            </label>
+            <label>
+              Fill color
+              <select .value=${String(node.props?.colorRole ?? "accent")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, colorRole: (event.target as HTMLSelectElement).value as FillRole } })))}>
+                <option value="fg">black</option>
+                <option value="accent">accent</option>
+                <option value="gray">gray</option>
+                <option value="light-accent">light accent</option>
+                <option value="dark-accent">dark accent</option>
+              </select>
             </label>
           `
         : nothing}
@@ -3998,7 +4004,12 @@ export class EpPaperEditorApp extends LitElement {
                   </div>
                   <div class="row">
                     <label>Grid unit <input type="number" .value=${String(displayType.gridUnitPx)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { gridUnitPx: Number((event.target as HTMLInputElement).value) })} /></label>
-                    <label>Safe margin <input type="number" .value=${String(displayType.safeMarginPx)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { safeMarginPx: Number((event.target as HTMLInputElement).value) })} /></label>
+                    <label>Padding top <input type="number" .value=${String(displayType.contentPadding.top)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { contentPadding: { ...displayType.contentPadding, top: Number((event.target as HTMLInputElement).value) } })} /></label>
+                    <label>Padding right <input type="number" .value=${String(displayType.contentPadding.right)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { contentPadding: { ...displayType.contentPadding, right: Number((event.target as HTMLInputElement).value) } })} /></label>
+                  </div>
+                  <div class="row">
+                    <label>Padding bottom <input type="number" .value=${String(displayType.contentPadding.bottom)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { contentPadding: { ...displayType.contentPadding, bottom: Number((event.target as HTMLInputElement).value) } })} /></label>
+                    <label>Padding left <input type="number" .value=${String(displayType.contentPadding.left)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { contentPadding: { ...displayType.contentPadding, left: Number((event.target as HTMLInputElement).value) } })} /></label>
                   </div>
                   <label>Background <input .value=${displayType.palette.bg} @input=${(event: Event) => this.updateDisplayType(displayType.id, { palette: { ...displayType.palette, bg: (event.target as HTMLInputElement).value } })} /></label>
                   <label>Foreground <input .value=${displayType.palette.fg} @input=${(event: Event) => this.updateDisplayType(displayType.id, { palette: { ...displayType.palette, fg: (event.target as HTMLInputElement).value } })} /></label>
@@ -4197,13 +4208,16 @@ export class EpPaperEditorApp extends LitElement {
                         ...current.surface,
                         fillRole: (event.target as HTMLSelectElement).value === "none"
                           ? undefined
-                          : (event.target as HTMLSelectElement).value as "bg" | "fg" | "accent"
+                          : (event.target as HTMLSelectElement).value as FillRole
                       }
                     }))}>
                       <option value="none">None</option>
-                      <option value="bg">Background</option>
-                      <option value="fg">Foreground</option>
-                      <option value="accent">Accent</option>
+                      <option value="bg">${fillRoleLabel("bg")}</option>
+                      <option value="fg">${fillRoleLabel("fg")}</option>
+                      <option value="accent">${fillRoleLabel("accent")}</option>
+                      <option value="gray">${fillRoleLabel("gray")}</option>
+                      <option value="light-accent">${fillRoleLabel("light-accent")}</option>
+                      <option value="dark-accent">${fillRoleLabel("dark-accent")}</option>
                     </select>
                   </label>
                   ${(["tiny", "normal", "normalEmphasis", "header"] as const).map(

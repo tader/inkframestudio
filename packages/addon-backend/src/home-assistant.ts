@@ -12,7 +12,6 @@ import type {
   ResolvedCalendarEvent,
   RenderData
 } from "../../render-core/src/types.js";
-import { SAMPLE_CALENDAR_EVENTS_BY_ENTITY, SAMPLE_DATA } from "../../render-core/src/sample-project.js";
 import { emptyQueryResult } from "../../render-core/src/resolve.js";
 
 function supervisorToken(): string | undefined {
@@ -473,25 +472,6 @@ export class HomeAssistantClient {
     };
   }
 
-  async resolveSampleProjectData(
-    project: Project,
-    baseData: RenderData = SAMPLE_DATA,
-    sampleCalendarEventsByEntity: Record<string, Array<Record<string, unknown>>> = SAMPLE_CALENDAR_EVENTS_BY_ENTITY
-  ): Promise<RenderData> {
-    const now = asEventDate(baseData.now, new Date());
-    const metaQueries = await this.resolveLayoutMetaQueries(
-      project,
-      now,
-      async (entityId, start, end) =>
-        (sampleCalendarEventsByEntity[entityId] ?? []).filter((item) => eventOverlapsWindow(item, start, end))
-    );
-
-    return {
-      ...baseData,
-      metaQueries
-    };
-  }
-
   async listEntities(settings: HomeAssistantConnectionSettings): Promise<EntityCatalogEntry[]> {
     if (!hasConfiguredConnection(settings)) {
       return [];
@@ -625,16 +605,6 @@ export class HomeAssistantClient {
           attributeValue === null
             ? attributeValue
             : entity.state ?? null
-      };
-    }
-
-    if (query.kind === "template_derived") {
-      const sourceQueryId = String(query.params.sourceQueryId ?? "");
-      const items = SAMPLE_DATA.queries[sourceQueryId]?.items ?? [];
-      return {
-        kind: query.kind,
-        value: items.length,
-        meta: { count: items.length }
       };
     }
 

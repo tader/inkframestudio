@@ -498,6 +498,27 @@ function formatScopeValue(value: ScopeValue, pattern: string, locale: string): S
   return pattern.replace(/dddd|ddd|mmmm|mmm|yyyy|yy|HH|H|hh|h|MM|M|ss|s|mm|m|dd|d/g, (token) => parts[token] ?? token);
 }
 
+function applyStringCaseTransform(
+  value: ScopeValue,
+  mode: "downcase" | "upcase" | "title",
+  locale: string
+): ScopeValue {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  const text = String(value);
+  if (mode === "downcase") {
+    return text.toLocaleLowerCase(locale);
+  }
+  if (mode === "upcase") {
+    return text.toLocaleUpperCase(locale);
+  }
+  const lowered = text.toLocaleLowerCase(locale);
+  return lowered.replace(/\p{L}[\p{L}\p{M}'-]*/gu, (word) => (
+    word[0]?.toLocaleUpperCase(locale) + word.slice(1)
+  ));
+}
+
 function applyTemplateFilter(value: ScopeValue, filterExpression: string, options: ScopeTemplateOptions): ScopeValue {
   const match = filterExpression.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)\s*(?:\((.*)\))?$/);
   if (!match) {
@@ -526,6 +547,9 @@ function applyTemplateFilter(value: ScopeValue, filterExpression: string, option
     }
     return 1;
   }
+  if (filterName === "downcase" || filterName === "upcase" || filterName === "title") {
+    return applyStringCaseTransform(value, filterName, options.locale ?? "en-US");
+  }
   return value;
 }
 
@@ -534,7 +558,7 @@ function resolveTemplateExpression(scope: ScopeContext, expression: string, opti
   if (!segments.length) {
     return undefined;
   }
-  let current = resolveScopePath(scope, segments[0]);
+  let current = resolveScopeOrLiteralExpression(segments[0], scope);
   for (let index = 1; index < segments.length; index += 1) {
     current = applyTemplateFilter(current, segments[index] ?? "", options);
   }

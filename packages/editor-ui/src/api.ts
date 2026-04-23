@@ -8,7 +8,6 @@ import type {
   IconDefinition,
   OpenEpaperLinkAccessPointSettings,
   OpenEpaperLinkAccessPointStatus,
-  PreviewDataSource,
   Project,
   RenderData,
   Scenario,
@@ -21,7 +20,6 @@ export interface PreviewResponse {
   hash: string;
   activeScreenId: string;
   activeOverlayId?: string;
-  dataSource: PreviewDataSource;
   dataSourceMessage?: string;
   rgba: number[];
 }
@@ -264,12 +262,11 @@ export function fetchPreview(
   displayProfileId: string,
   scenarioId?: string,
   scenario?: Scenario,
-  previewDataSource: PreviewDataSource = "live",
   project?: Project
 ): Promise<PreviewResponse> {
   return requestJson(`/api/projects/${projectId}/preview`, {
     method: "POST",
-    body: JSON.stringify({ displayProfileId, scenarioId, scenario, previewDataSource, project })
+    body: JSON.stringify({ displayProfileId, scenarioId, scenario, project })
   });
 }
 
@@ -293,12 +290,11 @@ export function fetchLayoutPreview(
   projectId: string,
   layoutId: string,
   popupLayoutId: string | undefined,
-  previewDataSource: PreviewDataSource,
   project: Project
 ): Promise<PreviewResponse> {
   return requestJson(`/api/projects/${projectId}/layout-preview`, {
     method: "POST",
-    body: JSON.stringify({ layoutId, popupLayoutId, previewDataSource, project })
+    body: JSON.stringify({ layoutId, popupLayoutId, project })
   });
 }
 
@@ -306,25 +302,23 @@ export function fetchLayoutInspectionPreview(
   projectId: string,
   layoutId: string,
   popupLayoutId: string | undefined,
-  previewDataSource: PreviewDataSource,
   project: Project,
   expandCompoundRefs = false
 ): Promise<LayoutInspectionPreviewResponse> {
   return requestJson(`/api/projects/${projectId}/layout-inspection-preview`, {
     method: "POST",
-    body: JSON.stringify({ layoutId, popupLayoutId, previewDataSource, project, expandCompoundRefs })
+    body: JSON.stringify({ layoutId, popupLayoutId, project, expandCompoundRefs })
   });
 }
 
 export function fetchDevicePreview(
   projectId: string,
   displayId: string,
-  previewDataSource: PreviewDataSource,
   project: Project
 ): Promise<PreviewResponse> {
   return requestJson(`/api/projects/${projectId}/device-preview`, {
     method: "POST",
-    body: JSON.stringify({ displayId, previewDataSource, project })
+    body: JSON.stringify({ displayId, project })
   });
 }
 
@@ -350,13 +344,12 @@ export function publishProject(projectId: string, displayProfileId: string, scen
 export function uploadDeviceImage(
   projectId: string,
   displayId: string,
-  previewDataSource: PreviewDataSource,
   project: Project,
   dither = 0
-): Promise<{ uploaded: boolean; hash: string; width: number; height: number; dataSource: PreviewDataSource; dataSourceMessage?: string }> {
+): Promise<{ uploaded: boolean; hash: string; width: number; height: number; dataSourceMessage?: string }> {
   return requestJson(`/api/projects/${projectId}/devices/${displayId}/upload`, {
     method: "POST",
-    body: JSON.stringify({ previewDataSource, project, dither })
+    body: JSON.stringify({ project, dither })
   });
 }
 

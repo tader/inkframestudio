@@ -15,13 +15,11 @@ import {
 } from "../../render-core/src/index.js";
 import { renderThemePreviewImage } from "../../render-core/src/theme-preview.js";
 import { emptyQueryResult } from "../../render-core/src/resolve.js";
-import { SAMPLE_DATA } from "../../render-core/src/sample-project.js";
 import { normalizeProject } from "../../render-core/src/themes.js";
 import type {
   FontVariantKey,
   HomeAssistantConnectionSettings,
   OpenEpaperLinkAccessPointSettings,
-  PreviewDataSource,
   Project,
   RenderData,
   Scenario
@@ -113,39 +111,28 @@ function buildProjectOverride(projectId: string, body: unknown): Project | undef
 
 async function resolvePreviewData(
   project: Project,
-  settings: HomeAssistantConnectionSettings,
-  requestedSource: PreviewDataSource | undefined
-): Promise<{ data: RenderData; source: PreviewDataSource; message?: string }> {
+  settings: HomeAssistantConnectionSettings
+): Promise<{ data: RenderData; message?: string }> {
   const unavailableData: RenderData = {
     now: new Date().toISOString(),
     entities: {},
     queries: Object.fromEntries(project.queries.map((query) => [query.id, emptyQueryResult(query.kind)]))
   };
-  if (requestedSource === "sample") {
-    return {
-      data: await homeAssistantClient.resolveSampleProjectData(project, SAMPLE_DATA),
-      source: "sample",
-      message: "Sample preview selected"
-    };
-  }
 
   if (!homeAssistantClient.hasConfiguredConnection(settings)) {
     return {
       data: unavailableData,
-      source: "live",
       message: "Live HA unavailable. Configure and save Home Assistant settings."
     };
   }
 
   try {
     return {
-      data: await homeAssistantClient.resolveProjectData(project, settings),
-      source: "live"
+      data: await homeAssistantClient.resolveProjectData(project, settings)
     };
   } catch (error) {
     return {
       data: unavailableData,
-      source: "live",
       message: error instanceof Error ? `Live HA failed. ${error.message}` : "Live HA failed. Using unknown state."
     };
   }
@@ -447,9 +434,7 @@ async function createApp() {
         ? { ...project, scenarios: [...project.scenarios.filter((entry) => entry.id !== adHocScenario.id), adHocScenario] }
         : project;
       const settings = await storage.getHomeAssistantSettings();
-      const requestedSource =
-        request.body?.previewDataSource === "sample" ? "sample" : "live";
-      const previewData = await resolvePreviewData(augmentedProject, settings, requestedSource);
+      const previewData = await resolvePreviewData(augmentedProject, settings);
       const rendered = renderProject(
         augmentedProject,
         displayProfileId,
@@ -462,7 +447,6 @@ async function createApp() {
         hash: rendered.hash,
         activeScreenId: rendered.activeScreenId,
         activeOverlayId: rendered.activeOverlayId,
-        dataSource: previewData.source,
         dataSourceMessage: previewData.message,
         rgba: Array.from(rendered.rgba)
       });
@@ -478,8 +462,7 @@ async function createApp() {
       const layoutId = String(request.body?.layoutId ?? "");
       const popupLayoutId = typeof request.body?.popupLayoutId === "string" ? String(request.body.popupLayoutId) : undefined;
       const settings = await storage.getHomeAssistantSettings();
-      const requestedSource = request.body?.previewDataSource === "sample" ? "sample" : "live";
-      const previewData = await resolvePreviewData(project, settings, requestedSource);
+      const previewData = await resolvePreviewData(project, settings);
       const layout = project.layoutDefinitions?.find((entry) => entry.id === layoutId);
       const popup = popupLayoutId ? project.layoutDefinitions?.find((entry) => entry.id === popupLayoutId) : undefined;
       if (!layout) {
@@ -493,7 +476,6 @@ async function createApp() {
         hash: rendered.hash,
         activeScreenId: rendered.activeScreenId,
         activeOverlayId: rendered.activeOverlayId,
-        dataSource: previewData.source,
         dataSourceMessage: previewData.message,
         rgba: Array.from(rendered.rgba)
       });
@@ -509,8 +491,7 @@ async function createApp() {
       const layoutId = String(request.body?.layoutId ?? "");
       const popupLayoutId = typeof request.body?.popupLayoutId === "string" ? String(request.body.popupLayoutId) : undefined;
       const settings = await storage.getHomeAssistantSettings();
-      const requestedSource = request.body?.previewDataSource === "sample" ? "sample" : "live";
-      const previewData = await resolvePreviewData(project, settings, requestedSource);
+      const previewData = await resolvePreviewData(project, settings);
       const layout = project.layoutDefinitions?.find((entry) => entry.id === layoutId);
       const popup = popupLayoutId ? project.layoutDefinitions?.find((entry) => entry.id === popupLayoutId) : undefined;
       if (!layout) {
@@ -538,8 +519,7 @@ async function createApp() {
       const project = buildProjectOverride(request.params.id, request.body) ?? (await storage.getProject(request.params.id));
       const displayId = String(request.body?.displayId ?? "");
       const settings = await storage.getHomeAssistantSettings();
-      const requestedSource = request.body?.previewDataSource === "sample" ? "sample" : "live";
-      const previewData = await resolvePreviewData(project, settings, requestedSource);
+      const previewData = await resolvePreviewData(project, settings);
       const rendered = renderAssignedDisplay(project, displayId, previewData.data);
       response.json({
         width: rendered.width,
@@ -547,7 +527,6 @@ async function createApp() {
         hash: rendered.hash,
         activeScreenId: rendered.activeScreenId,
         activeOverlayId: rendered.activeOverlayId,
-        dataSource: previewData.source,
         dataSourceMessage: previewData.message,
         rgba: Array.from(rendered.rgba)
       });
@@ -626,7 +605,6 @@ async function createApp() {
         height: rendered.height,
         hash: `theme:${theme.id}:${displayType.id}`,
         activeScreenId: `theme-preview:${theme.id}`,
-        dataSource: "sample",
         dataSourceMessage: "Theme preview",
         rgba: Array.from(rendered.rgba)
       });
@@ -700,9 +678,7 @@ async function createApp() {
         response.status(400).json({ error: "OpenEPaperLink access point URL is not configured" });
         return;
       }
-      const requestedSource =
-        request.body?.previewDataSource === "sample" ? "sample" : "live";
-      const previewData = await resolvePreviewData(project, haSettings, requestedSource);
+      const previewData = await resolvePreviewData(project, haSettings);
       const rendered = renderAssignedDisplay(project, displayId, previewData.data);
       const jpeg = await rgbaToJpegBuffer(rendered.width, rendered.height, rendered.rgba);
       await openEpaperLinkClient.uploadImage(
@@ -716,7 +692,6 @@ async function createApp() {
         hash: rendered.hash,
         width: rendered.width,
         height: rendered.height,
-        dataSource: previewData.source,
         dataSourceMessage: previewData.message
       });
     } catch (error) {

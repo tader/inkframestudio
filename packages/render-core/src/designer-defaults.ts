@@ -42,7 +42,7 @@ export function defaultDisplayTypes(): DisplayType[] {
     height: profile.height,
     palette: profile.palette,
     rotation: profile.rotation,
-    safeMarginPx: profile.safeMarginPx,
+    contentPadding: { ...profile.contentPadding },
     gridUnitPx: profile.gridUnitPx
   }));
 }

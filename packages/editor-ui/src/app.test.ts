@@ -167,16 +167,16 @@ describe("epaper editor app", () => {
             providerKind: "openepaperlink-ap",
             providerRef: "00000219BC483B18",
             discoverySource: "access-point",
-            suggestedDisplayType: {
-              id: "oel-ap-hw-01-296x128",
-              name: "M2 2.9\"",
-              width: 296,
-              height: 128,
-              rotation: 0,
-              safeMarginPx: 4,
-              gridUnitPx: 8,
-              palette: { bg: "#ffffff", fg: "#000000", accent: "#ff0000" }
-            },
+              suggestedDisplayType: {
+                id: "oel-ap-hw-01-296x128",
+                name: "M2 2.9\"",
+                width: 296,
+                height: 128,
+                rotation: 0,
+                contentPadding: { top: 4, right: 4, bottom: 4, left: 4 },
+                gridUnitPx: 8,
+                palette: { bg: "#ffffff", fg: "#000000", accent: "#ff0000" }
+              },
             metadata: { mac: "00000219BC483B18" }
           },
           {
@@ -215,8 +215,6 @@ describe("epaper editor app", () => {
           height: 128,
           hash: "device-preview",
           activeScreenId: "layout-calendar",
-          dataSource: "sample",
-          dataSourceMessage: "Sample preview selected",
           rgba: new Array(296 * 128 * 4).fill(255)
         }), { status: 200 });
       }
@@ -226,8 +224,6 @@ describe("epaper editor app", () => {
           height: 128,
           hash: "layout-preview",
           activeScreenId: "layout-widget",
-          dataSource: "sample",
-          dataSourceMessage: "Sample preview selected",
           rgba: new Array(296 * 128 * 4).fill(255)
         }), { status: 200 });
       }
@@ -265,9 +261,7 @@ describe("epaper editor app", () => {
           uploaded: true,
           hash: "uploaded-hash",
           width: 296,
-          height: 128,
-          dataSource: "sample",
-          dataSourceMessage: "Sample preview selected"
+          height: 128
         }), { status: 200 });
       }
       if (url.endsWith("/api/openepaperlink-access-point/upload-preview")) {

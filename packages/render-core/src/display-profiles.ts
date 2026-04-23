@@ -7,7 +7,7 @@ export const DISPLAY_PROFILES: DisplayProfile[] = [
     height: 128,
     rotation: 0,
     palette: { bg: "#ffffff", fg: "#111111", accent: "#d7261b" },
-    safeMarginPx: 4,
+    contentPadding: { top: 4, right: 4, bottom: 4, left: 4 },
     gridUnitPx: 8,
     recommendedFontScale: 2
   },
@@ -17,7 +17,7 @@ export const DISPLAY_PROFILES: DisplayProfile[] = [
     height: 128,
     rotation: 0,
     palette: { bg: "#ffffff", fg: "#111111", accent: "#d5a000" },
-    safeMarginPx: 4,
+    contentPadding: { top: 4, right: 4, bottom: 4, left: 4 },
     gridUnitPx: 8,
     recommendedFontScale: 2
   },
@@ -27,7 +27,7 @@ export const DISPLAY_PROFILES: DisplayProfile[] = [
     height: 300,
     rotation: 0,
     palette: { bg: "#ffffff", fg: "#111111", accent: "#d7261b" },
-    safeMarginPx: 8,
+    contentPadding: { top: 8, right: 8, bottom: 8, left: 8 },
     gridUnitPx: 10,
     recommendedFontScale: 3
   },
@@ -37,7 +37,7 @@ export const DISPLAY_PROFILES: DisplayProfile[] = [
     height: 300,
     rotation: 0,
     palette: { bg: "#ffffff", fg: "#111111", accent: "#d5a000" },
-    safeMarginPx: 8,
+    contentPadding: { top: 8, right: 8, bottom: 8, left: 8 },
     gridUnitPx: 10,
     recommendedFontScale: 3
   }

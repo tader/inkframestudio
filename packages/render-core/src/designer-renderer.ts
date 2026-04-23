@@ -1,7 +1,7 @@
 import { createStableHash } from "./hash.js";
 import { ICONS } from "./icons.js";
 import { applyScopeTemplate, evaluateArrayExpression, evaluateScopeExpression, resolveScopePath, stringifyScopeValue, type ScopeContext } from "./layout-meta.js";
-import { COLOR_ACCENT, COLOR_BG, COLOR_FG, PixelBuffer, type PixelClipRect } from "./pixel-buffer.js";
+import { COLOR_ACCENT, COLOR_BG, COLOR_FG, PixelBuffer, type PixelClipRect, type PixelPaint } from "./pixel-buffer.js";
 import { formatQuantizedNumber } from "./quantize.js";
 import { evaluateCondition } from "./resolve.js";
 import { DEFAULT_WIDGET_THEME_ID, DEFAULT_WIDGET_THEMES } from "./themes.js";
@@ -10,6 +10,8 @@ import type {
   DataQueryLayoutNode,
   DeviceAssignment,
   DisplayType,
+  EdgeInsets,
+  FillRole,
   FontRole,
   FilterLayoutNode,
   FontPresetValues,
@@ -68,6 +70,22 @@ function roleToColor(role: "bg" | "fg" | "accent"): number {
   return COLOR_FG;
 }
 
+function fillRoleToPaint(role: FillRole | undefined): PixelPaint | undefined {
+  if (!role) {
+    return undefined;
+  }
+  if (role === "gray") {
+    return { kind: "checker", primary: COLOR_BG, secondary: COLOR_FG };
+  }
+  if (role === "light-accent") {
+    return { kind: "checker", primary: COLOR_BG, secondary: COLOR_ACCENT };
+  }
+  if (role === "dark-accent") {
+    return { kind: "checker", primary: COLOR_FG, secondary: COLOR_ACCENT };
+  }
+  return { kind: "solid", color: roleToColor(role) };
+}
+
 function textRoleToColor(role: TextStyle["colorRole"] | undefined, fallback: "bg" | "fg" | "accent"): number | undefined {
   if (role === "transparent") {
     return undefined;
@@ -111,6 +129,19 @@ function insetFrame(frame: PixelFrame, pixels: number): PixelFrame {
     y: frame.y + pixels,
     w: Math.max(0, frame.w - pixels * 2),
     h: Math.max(0, frame.h - pixels * 2)
+  };
+}
+
+function insetFrameByEdges(frame: PixelFrame, insets?: Partial<EdgeInsets>): PixelFrame {
+  const top = Math.max(0, Math.trunc(Number(insets?.top ?? 0) || 0));
+  const right = Math.max(0, Math.trunc(Number(insets?.right ?? 0) || 0));
+  const bottom = Math.max(0, Math.trunc(Number(insets?.bottom ?? 0) || 0));
+  const left = Math.max(0, Math.trunc(Number(insets?.left ?? 0) || 0));
+  return {
+    x: frame.x + left,
+    y: frame.y + top,
+    w: Math.max(0, frame.w - left - right),
+    h: Math.max(0, frame.h - top - bottom)
   };
 }
 
@@ -1255,7 +1286,7 @@ function uniqueNodeScope(node: UniqueLayoutNode, inputContext: ScopeContext, loc
   };
 }
 
-function drawGraph(buffer: PixelBuffer, frame: PixelFrame, data: RenderData, queryId: string | undefined, color: number): void {
+function drawGraph(buffer: PixelBuffer, frame: PixelFrame, data: RenderData, queryId: string | undefined, paint: PixelPaint): void {
   const points = data.queries[queryId ?? ""]?.points ?? [];
   if (!points.length) {
     return;
@@ -1267,7 +1298,7 @@ function drawGraph(buffer: PixelBuffer, frame: PixelFrame, data: RenderData, que
   const barWidth = Math.max(1, Math.floor(frame.w / points.length));
   points.forEach((point, index) => {
     const height = Math.max(1, Math.round(((point.value - min) / spread) * Math.max(1, frame.h - 1)));
-    buffer.drawRect(frame.x + index * barWidth, frame.y + frame.h - height, Math.max(1, barWidth - 1), height, color, true);
+    buffer.drawPaintRect(frame.x + index * barWidth, frame.y + frame.h - height, Math.max(1, barWidth - 1), height, paint);
   });
 }
 
@@ -1279,14 +1310,16 @@ function drawPrimitiveNode(
   data: RenderData,
   theme: WidgetTheme,
   inputContext: ScopeContext,
-  clip?: PixelFrame
+  clip?: PixelFrame,
+  contentInsets?: Partial<EdgeInsets>
 ): void {
   const token = node.props?.borderToken ?? node.style?.borderToken;
   const thickness = borderThickness(theme, token);
-  const innerFrame = insetFrame(frame, thickness + getNodePadding(node));
+  const baseInnerFrame = insetFrame(frame, thickness + getNodePadding(node));
+  const innerFrame = insetFrameByEdges(baseInnerFrame, contentInsets);
   const visibleFrame = clip ? intersectFrame(frame, clip) : frame;
   const visibleInnerFrame = clip ? intersectFrame(innerFrame, clip) : innerFrame;
-  if (!hasArea(visibleFrame) || !hasArea(visibleInnerFrame)) {
+  if (!hasArea(visibleFrame)) {
     return;
   }
   if (thickness > 0) {
@@ -1295,9 +1328,15 @@ function drawPrimitiveNode(
       buffer.drawRect(frame.x + 1, frame.y + 1, frame.w - 2, frame.h - 2, borderColor(theme, token), false, toClipRect(visibleFrame));
     }
   }
-  const fillColor = theme.surface.fillRole ? roleToColor(theme.surface.fillRole) : undefined;
-  if (fillColor !== undefined && innerFrame.w > 0 && innerFrame.h > 0) {
-    buffer.drawRect(innerFrame.x, innerFrame.y, innerFrame.w, innerFrame.h, fillColor, true, toClipRect(visibleInnerFrame));
+  const fillPaint = fillRoleToPaint(theme.surface.fillRole);
+  if (fillPaint && baseInnerFrame.w > 0 && baseInnerFrame.h > 0) {
+    const visibleBaseInnerFrame = clip ? intersectFrame(baseInnerFrame, clip) : baseInnerFrame;
+    if (hasArea(visibleBaseInnerFrame)) {
+      buffer.drawPaintRect(baseInnerFrame.x, baseInnerFrame.y, baseInnerFrame.w, baseInnerFrame.h, fillPaint, toClipRect(visibleBaseInnerFrame));
+    }
+  }
+  if (!hasArea(visibleInnerFrame)) {
+    return;
   }
 
   const outlineColor = theme.textOutline?.enabled ? roleToColor(theme.textOutline.colorRole) : undefined;
@@ -1400,7 +1439,7 @@ function drawPrimitiveNode(
   }
 
   if (node.primitiveType === "graph") {
-    drawGraph(buffer, visibleInnerFrame, data, node.bindings?.query, roleToColor(theme.accentRole));
+    drawGraph(buffer, visibleInnerFrame, data, node.bindings?.query, fillRoleToPaint(node.props?.colorRole ?? theme.accentRole) ?? { kind: "solid", color: roleToColor(theme.accentRole) });
     return;
   }
 
@@ -1455,7 +1494,8 @@ function renderNode(
   inputContext: ScopeContext = {},
   collectInspection = false,
   expandCompoundRefs = false,
-  clipFrame?: PixelFrame
+  clipFrame?: PixelFrame,
+  contentInsets?: Partial<EdgeInsets>
 ): LayoutInspectionNode | undefined {
   const resolvedThemeId = node.style?.themeId && node.style.themeId !== "inherit" ? node.style.themeId : inheritedThemeId;
   const theme = resolveTheme(project, resolvedThemeId);
@@ -1464,9 +1504,13 @@ function renderNode(
     return undefined;
   }
   if (node.type === "primitive_instance") {
-    drawPrimitiveNode(buffer, project, node, frame, data, theme, inputContext, visibleFrame);
+    const primitiveContentFrame = insetFrameByEdges(
+      insetFrame(frame, borderThickness(theme, node.props?.borderToken ?? node.style?.borderToken) + getNodePadding(node)),
+      contentInsets
+    );
+    drawPrimitiveNode(buffer, project, node, frame, data, theme, inputContext, visibleFrame, contentInsets);
     return collectInspection
-      ? buildInspectionNode(project, node, frame, insetFrame(frame, borderThickness(theme, node.props?.borderToken ?? node.style?.borderToken) + getNodePadding(node)), resolvedThemeId, [])
+      ? buildInspectionNode(project, node, frame, primitiveContentFrame, resolvedThemeId, [])
       : undefined;
   }
   if (node.type === "compound_ref") {
@@ -1502,7 +1546,8 @@ function renderNode(
         nestedContext,
         false,
         expandCompoundRefs,
-        visibleFrame
+        visibleFrame,
+        contentInsets
       );
       const nestedInspection =
         collectInspection && expandCompoundRefs
@@ -1516,7 +1561,8 @@ function renderNode(
               nestedContext,
               true,
               true,
-              visibleFrame
+              visibleFrame,
+              contentInsets
             )
           : undefined;
       return collectInspection
@@ -1539,11 +1585,12 @@ function renderNode(
       buffer.drawRect(frame.x + 1, frame.y + 1, frame.w - 2, frame.h - 2, borderColor(theme, token), false, toClipRect(visibleFrame));
     }
   }
-  const containerFillColor = theme.surface.fillRole ? roleToColor(theme.surface.fillRole) : undefined;
-  if (containerFillColor !== undefined && contentFrame.w > 0 && contentFrame.h > 0) {
-    buffer.drawRect(contentFrame.x, contentFrame.y, contentFrame.w, contentFrame.h, containerFillColor, true, toClipRect(visibleContentFrame));
+  const containerFillPaint = fillRoleToPaint(theme.surface.fillRole);
+  if (containerFillPaint && contentFrame.w > 0 && contentFrame.h > 0) {
+    buffer.drawPaintRect(contentFrame.x, contentFrame.y, contentFrame.w, contentFrame.h, containerFillPaint, toClipRect(visibleContentFrame));
   }
-  const innerFrame = insetFrame(contentFrame, getNodePadding(node));
+  const baseInnerFrame = insetFrame(contentFrame, getNodePadding(node));
+  const innerFrame = insetFrameByEdges(baseInnerFrame, contentInsets);
   const visibleInnerFrame = intersectFrame(innerFrame, visibleFrame);
   const gap = Math.max(0, Number(node.style?.gapPx ?? 0));
   if (!hasArea(innerFrame) || !hasArea(visibleInnerFrame)) {
@@ -1828,10 +1875,23 @@ export function renderLayoutDefinition(
     return renderLegacyProject(legacyProject, layout.displayTypeId, data, forcedScenarioId);
   }
   const displayType = resolveDisplayType(project, layout.displayTypeId);
+  const rootContentPadding = layout.kind === "fullscreen" ? displayType.contentPadding : undefined;
   const buffer = new PixelBuffer(displayType.width, displayType.height, COLOR_BG, project.fontPresets);
   buffer.fill(COLOR_BG);
   if (layout.rootNode) {
-    renderNode(buffer, project, layout.rootNode, { x: 0, y: 0, w: displayType.width, h: displayType.height }, data, themeId, {}, false);
+    renderNode(
+      buffer,
+      project,
+      layout.rootNode,
+      { x: 0, y: 0, w: displayType.width, h: displayType.height },
+      data,
+      themeId,
+      {},
+      false,
+      false,
+      undefined,
+      rootContentPadding
+    );
   }
   if (popup) {
     const popupWidth = Math.min(displayType.width, popup.popupDefaults?.widthPx ?? Math.floor(displayType.width * 0.8));
@@ -1868,6 +1928,7 @@ export function inspectLayoutDefinition(
   expandCompoundRefs = false
 ): LayoutInspectionResult {
   const displayType = resolveDisplayType(project, layout.displayTypeId);
+  const rootContentPadding = layout.kind === "fullscreen" ? displayType.contentPadding : undefined;
   const buffer = new PixelBuffer(displayType.width, displayType.height, COLOR_BG, project.fontPresets);
   const root = layout.rootNode
     ? renderNode(
@@ -1879,7 +1940,9 @@ export function inspectLayoutDefinition(
         themeId,
         {},
         true,
-        expandCompoundRefs
+        expandCompoundRefs,
+        undefined,
+        rootContentPadding
       )
     : undefined;
   let popupInspection: LayoutInspectionNode | undefined;

@@ -77,7 +77,7 @@ function buildDisplayType(tagType: AccessPointTagType, hwType: number | undefine
     width,
     height,
     rotation: 0,
-    safeMarginPx: 4,
+    contentPadding: { top: 4, right: 4, bottom: 4, left: 4 },
     gridUnitPx: 8,
     palette: {
       bg: rgbToHex(colorTable.white, "#ffffff"),
@@ -216,7 +216,7 @@ export class OpenEpaperLinkAccessPointClient {
       const bytes = image instanceof ArrayBuffer ? new Uint8Array(image) : Uint8Array.from(image);
       form.set("mac", mac);
       form.set("contentmode", "25");
-      form.set("dither", "2");
+      form.set("dither", "0");
       form.set("ttl", "1");
       form.set("lut", "0");
       form.set("file", new Blob([bytes], { type: "image/jpeg" }), filename);

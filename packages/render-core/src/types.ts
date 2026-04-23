@@ -1,4 +1,6 @@
 export type PaletteRole = "bg" | "fg" | "accent";
+export type HalftoneRole = "gray" | "light-accent" | "dark-accent";
+export type FillRole = PaletteRole | HalftoneRole;
 export type TextColorRole = PaletteRole | "transparent";
 export type FontFamily = "px-sans" | "px-mono-special" | "ui-sans" | (string & {});
 export type FontWeight = "regular" | "bold";
@@ -84,8 +86,6 @@ export interface EntityCatalogEntry {
   unit?: string;
 }
 
-export type PreviewDataSource = "live" | "sample";
-
 export interface HomeAssistantConnectionSettings {
   host: string;
   token: string;
@@ -129,9 +129,16 @@ export interface DisplayProfile {
   height: number;
   rotation: 0 | 90 | 180 | 270;
   palette: Record<PaletteRole, string>;
-  safeMarginPx: number;
+  contentPadding: EdgeInsets;
   gridUnitPx: number;
   recommendedFontScale: number;
+}
+
+export interface EdgeInsets {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
 }
 
 export interface WidgetTheme {
@@ -143,7 +150,7 @@ export interface WidgetTheme {
     mergeAdjacentBorders: boolean;
   };
   surface: {
-    fillRole?: PaletteRole;
+    fillRole?: FillRole;
   };
   text: {
     title: PaletteRole;
@@ -365,7 +372,7 @@ export interface DisplayType {
   height: number;
   palette: Record<PaletteRole, string>;
   rotation: 0 | 90 | 180 | 270;
-  safeMarginPx: number;
+  contentPadding: EdgeInsets;
   gridUnitPx: number;
 }
 
@@ -549,7 +556,7 @@ export interface WidgetProps {
   highlightFirst?: boolean;
   dateFormat?: "iso" | "day-month" | "weekday-date";
   timeFormat?: "24h" | "12h";
-  colorRole?: PaletteRole;
+  colorRole?: FillRole;
   titleTextStyle?: Partial<TextStyle>;
   bodyTextStyle?: Partial<TextStyle>;
   valueTextStyle?: Partial<TextStyle>;
@@ -559,7 +566,7 @@ export interface WidgetProps {
 
 export interface QueryDefinition {
   id: string;
-  kind: "entity" | "history_range" | "calendar_range" | "template_derived";
+  kind: "entity" | "history_range" | "calendar_range";
   params: Record<string, unknown>;
   refreshPolicy: {
     mode: "poll" | "event";

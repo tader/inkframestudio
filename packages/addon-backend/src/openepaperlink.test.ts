@@ -42,7 +42,7 @@ describe("openepaperlink access point integration", () => {
         expect(init?.body).toBeInstanceOf(FormData);
         const form = init?.body as FormData;
         expect(form.get("contentmode")).toBe("25");
-        expect(form.get("dither")).toBe("2");
+        expect(form.get("dither")).toBe("0");
         expect(form.get("ttl")).toBe("1");
         expect(form.get("lut")).toBe("0");
         return new Response("ok", { status: 200 });

@@ -1,5 +1,5 @@
-import { PixelBuffer, COLOR_BG, COLOR_FG, COLOR_ACCENT } from "./pixel-buffer.js";
-import type { DisplayType, FontPresetValues, PaletteRole, TextColorRole, TextStyle, WidgetTheme } from "./types.js";
+import { PixelBuffer, COLOR_BG, COLOR_FG, COLOR_ACCENT, type PixelPaint } from "./pixel-buffer.js";
+import type { DisplayType, FillRole, FontPresetValues, PaletteRole, TextColorRole, TextStyle, WidgetTheme } from "./types.js";
 
 export interface ThemePreviewImage {
   width: number;
@@ -17,6 +17,19 @@ function colorForRole(role: PaletteRole): number {
   if (role === "bg") return COLOR_BG;
   if (role === "accent") return COLOR_ACCENT;
   return COLOR_FG;
+}
+
+function paintForFillRole(role: FillRole | undefined): PixelPaint {
+  if (role === "gray") {
+    return { kind: "checker", primary: COLOR_BG, secondary: COLOR_FG };
+  }
+  if (role === "light-accent") {
+    return { kind: "checker", primary: COLOR_BG, secondary: COLOR_ACCENT };
+  }
+  if (role === "dark-accent") {
+    return { kind: "checker", primary: COLOR_FG, secondary: COLOR_ACCENT };
+  }
+  return { kind: "solid", color: colorForRole((role ?? "bg") as PaletteRole) };
 }
 
 function textColorForRole(role: TextColorRole | undefined, fallback: PaletteRole): number | undefined {
@@ -110,7 +123,7 @@ export function renderThemePreviewImage(
   height = displayType.height
 ): ThemePreviewImage {
   const buffer = new PixelBuffer(width, height, COLOR_BG, fontPresets);
-  const background = theme.surface.fillRole ? colorForRole(theme.surface.fillRole) : COLOR_BG;
+  const background = paintForFillRole(theme.surface.fillRole ?? "bg");
   const border = colorForRole(theme.border.colorRole);
   const title = textColorForRole(theme.fontRoles?.tiny?.colorRole, theme.text.title);
   const body = textColorForRole(theme.fontRoles?.normal?.colorRole, theme.text.body);
@@ -120,7 +133,7 @@ export function renderThemePreviewImage(
   const outline = theme.textOutline?.enabled ? colorForRole(theme.textOutline.colorRole) : undefined;
   const outlineThickness = theme.textOutline?.enabled ? Math.max(1, theme.textOutline.thicknessPx ?? 1) : 0;
 
-  buffer.fill(background);
+  buffer.drawPaintRect(0, 0, width, height, background);
   if (theme.border.visible) {
     const thickness = theme.borderTokens?.thin?.thicknessPx ?? 1;
     for (let offset = 0; offset < thickness; offset += 1) {

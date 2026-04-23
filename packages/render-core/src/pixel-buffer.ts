@@ -14,6 +14,10 @@ export interface PixelClipRect {
   h: number;
 }
 
+export type PixelPaint =
+  | { kind: "solid"; color: number }
+  | { kind: "checker"; primary: number; secondary: number };
+
 function clipContains(clip: PixelClipRect | undefined, x: number, y: number): boolean {
   if (!clip) {
     return true;
@@ -82,6 +86,25 @@ export class PixelBuffer {
     for (let py = y; py < y + h; py += 1) {
       this.setPixel(x, py, color, clip);
       this.setPixel(x + w - 1, py, color, clip);
+    }
+  }
+
+  drawPaintRect(
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    paint: PixelPaint,
+    clip?: PixelClipRect
+  ): void {
+    if (paint.kind === "solid") {
+      this.drawRect(x, y, w, h, paint.color, true, clip);
+      return;
+    }
+    for (let py = y; py < y + h; py += 1) {
+      for (let px = x; px < x + w; px += 1) {
+        this.setPixel(px, py, (px + py) % 2 === 0 ? paint.primary : paint.secondary, clip);
+      }
     }
   }
 

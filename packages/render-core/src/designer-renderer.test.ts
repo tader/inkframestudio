@@ -44,6 +44,68 @@ describe("designer renderer", () => {
     expect(normalized.devices?.length).toBeGreaterThan(0);
     expect(normalized.layoutDefinitions?.length).toBeGreaterThan(0);
     expect(normalized.deviceAssignments?.length).toBeGreaterThan(0);
+    expect(normalized.displayTypes?.[0]?.contentPadding).toBeDefined();
+  });
+
+  it("uses display content padding for root layout while keeping root fill bleeding into padded area", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const project = normalizeProject({
+      ...normalized,
+      themes: normalized.themes.map((theme) => (
+        theme.id === "soft-fill"
+          ? {
+              ...theme,
+              text: {
+                ...theme.text,
+                body: "fg"
+              }
+            }
+          : theme
+      )),
+      displayTypes: [{
+        id: "tri296x128-red",
+        name: "Padded",
+        width: 40,
+        height: 24,
+        rotation: 0,
+        contentPadding: { top: 5, right: 6, bottom: 7, left: 8 },
+        gridUnitPx: 8,
+        palette: { bg: "#ffffff", fg: "#111111", accent: "#d7261b" }
+      }],
+      layoutDefinitions: [{
+        id: "layout-padded-root",
+        name: "Padded Root",
+        kind: "fullscreen",
+        displayTypeId: "tri296x128-red",
+        rootNode: {
+          id: "root",
+          type: "stack",
+          axis: "vertical",
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          style: { paddingPx: 0, gapPx: 0, borderToken: "none" },
+          children: [{
+            id: "box",
+            type: "primitive_instance",
+            primitiveType: "box",
+            width: { mode: "fill" },
+            height: { mode: "fill" },
+            props: { paddingPx: 0, borderToken: "none" }
+          }]
+        }
+      }]
+    });
+    const layout = project.layoutDefinitions?.[0]!;
+
+    const inspection = inspectLayoutDefinition(project, layout, SAMPLE_DATA, undefined, "soft-fill");
+    expect(inspection.root?.frame).toEqual({ x: 0, y: 0, w: 40, h: 24 });
+    expect(inspection.root?.contentFrame).toEqual({ x: 8, y: 5, w: 26, h: 12 });
+    expect(inspection.root?.children[0]?.frame).toEqual({ x: 8, y: 5, w: 26, h: 12 });
+
+    const rendered = renderLayoutDefinition(project, layout, SAMPLE_DATA, undefined, "soft-fill");
+    expect(rendered.pixels[1 * rendered.width + 1]).toBe(2);
+    expect(rendered.pixels[4 * rendered.width + 8]).toBe(2);
+    expect(rendered.pixels[5 * rendered.width + 8]).toBe(1);
   });
 
   it("renders composition layouts with zstack text over graph", () => {
@@ -392,7 +454,7 @@ describe("designer renderer", () => {
     expect((a?.frame.w ?? 0) + (b?.frame.w ?? 0) + (c?.frame.w ?? 0)).toBe(hstack?.frame.w);
 
     const rendered = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
-    expect(pixelBounds(rendered, 60, 0, 20, rendered.height)).not.toBeNull();
+    expect(pixelBounds(rendered, c?.frame.x ?? 0, c?.frame.y ?? 0, c?.frame.w ?? 0, c?.frame.h ?? 0)).not.toBeNull();
   });
 
   it("wraps text and grows fit-content height to include all lines", () => {
@@ -743,9 +805,19 @@ describe("designer renderer", () => {
 
     const hiddenRender = renderLayoutDefinition(hidden, hidden.layoutDefinitions?.[0]!, SAMPLE_DATA);
     const ellipsisRender = renderLayoutDefinition(ellipsis, ellipsis.layoutDefinitions?.[0]!, SAMPLE_DATA);
-    expect(regionPixels(hiddenRender, 0, 0, 28, hiddenInspection.root?.children[0]?.frame.h ?? 0)).not.toEqual(
-      regionPixels(ellipsisRender, 0, 0, 28, ellipsisInspection.root?.children[0]?.frame.h ?? 0)
-    );
+    expect(regionPixels(
+      hiddenRender,
+      hiddenInspection.root?.children[0]?.frame.x ?? 0,
+      hiddenInspection.root?.children[0]?.frame.y ?? 0,
+      hiddenInspection.root?.children[0]?.frame.w ?? 0,
+      hiddenInspection.root?.children[0]?.frame.h ?? 0
+    )).not.toEqual(regionPixels(
+      ellipsisRender,
+      ellipsisInspection.root?.children[0]?.frame.x ?? 0,
+      ellipsisInspection.root?.children[0]?.frame.y ?? 0,
+      ellipsisInspection.root?.children[0]?.frame.w ?? 0,
+      ellipsisInspection.root?.children[0]?.frame.h ?? 0
+    ));
   });
 
   it("uses tight glyph bounds for fit-glyph-bounds text sizing", () => {
@@ -783,9 +855,9 @@ describe("designer renderer", () => {
     const inspection = inspectLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
     const child = inspection.root?.children[0];
     const rendered = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
-    const bounds = pixelBounds(rendered, 0, 0, 160, rendered.height);
+    const bounds = pixelBounds(rendered, child?.frame.x ?? 0, child?.frame.y ?? 0, child?.frame.w ?? 0, child?.frame.h ?? 0);
     expect(bounds).not.toBeNull();
-    expect(bounds?.minY).toBe(0);
+    expect(bounds?.minY).toBe(child?.frame.y);
     expect(child?.frame.h).toBe(bounds?.height);
     const textMetrics = layoutText("Blocked", {
       family: "px-sans",
@@ -1047,7 +1119,102 @@ describe("designer renderer", () => {
     });
 
     const rendered = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
-    expect(rendered.pixels[14 * rendered.width + 10]).toBe(2);
+    expect(rendered.pixels[18 * rendered.width + 10]).toBe(2);
+  });
+
+  it("supports halftone gray surface fill", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const project: Project = normalizeProject({
+      ...normalized,
+      themes: normalized.themes.map((theme) => (
+        theme.id === "classic-outline"
+          ? {
+              ...theme,
+              surface: { fillRole: "gray" }
+            }
+          : theme
+      )),
+      layoutDefinitions: [{
+        id: "layout-surface-halftone",
+        name: "Surface Halftone",
+        kind: "fullscreen",
+        displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+        rootNode: {
+          id: "root",
+          type: "stack",
+          axis: "vertical",
+          width: { mode: "fixed_px", value: 24 },
+          height: { mode: "fixed_px", value: 16 },
+          style: { paddingPx: 0, gapPx: 0, borderToken: "none" },
+          children: []
+        }
+      }]
+    });
+
+    const rendered = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    expect(rendered.pixels[8 * rendered.width + 8]).toBe(0);
+    expect(rendered.pixels[8 * rendered.width + 9]).toBe(1);
+    expect(rendered.pixels[9 * rendered.width + 8]).toBe(1);
+  });
+
+  it("supports halftone graph fills", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [{
+        id: "layout-graph-halftone",
+        name: "Graph Halftone",
+        kind: "fullscreen",
+        displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+        rootNode: {
+          id: "root",
+          type: "stack",
+          axis: "vertical",
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          children: [{
+            id: "graph",
+            type: "primitive_instance",
+            primitiveType: "graph",
+            width: { mode: "fixed_px", value: 20 },
+            height: { mode: "fixed_px", value: 12 },
+            bindings: { query: "bars" },
+            props: { colorRole: "light-accent", paddingPx: 0, borderToken: "none" }
+          }]
+        }
+      }]
+    });
+
+    const inspection = inspectLayoutDefinition(project, project.layoutDefinitions?.[0]!, {
+      ...SAMPLE_DATA,
+      queries: {
+        ...SAMPLE_DATA.queries,
+        bars: {
+          kind: "history_range",
+          points: [
+            { timestamp: "2026-04-17T09:00:00.000Z", value: 0 },
+            { timestamp: "2026-04-17T10:00:00.000Z", value: 10 }
+          ]
+        }
+      }
+    });
+    const graphFrame = inspection.root?.children[0]?.frame;
+    const rendered = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, {
+      ...SAMPLE_DATA,
+      queries: {
+        ...SAMPLE_DATA.queries,
+        bars: {
+          kind: "history_range",
+          points: [
+            { timestamp: "2026-04-17T09:00:00.000Z", value: 0 },
+            { timestamp: "2026-04-17T10:00:00.000Z", value: 10 }
+          ]
+        }
+      }
+    });
+    const first = rendered.pixels[(graphFrame!.y + graphFrame!.h - 1) * rendered.width + (graphFrame!.x + 10)];
+    const second = rendered.pixels[(graphFrame!.y + graphFrame!.h - 1) * rendered.width + (graphFrame!.x + 11)];
+    expect([first, second].sort()).toEqual([0, 2]);
   });
 
   it("resolves compound input templates in text widgets", () => {
@@ -2107,9 +2274,17 @@ describe("designer renderer", () => {
       ...normalized,
       layoutDefinitions: [layout]
     });
+    const inspection = inspectLayoutDefinition(project, layout, SAMPLE_DATA);
+    const clipFrame = inspection.root?.children[0]?.frame;
     const rendered = renderLayoutDefinition(project, layout, SAMPLE_DATA);
 
-    expect(pixelBounds(rendered, 0, 0, rendered.width, 8)).not.toBeNull();
-    expect(pixelBounds(rendered, 0, 8, rendered.width, rendered.height - 8)).toBeNull();
+    expect(pixelBounds(rendered, clipFrame?.x ?? 0, clipFrame?.y ?? 0, clipFrame?.w ?? 0, clipFrame?.h ?? 0)).not.toBeNull();
+    expect(pixelBounds(
+      rendered,
+      0,
+      (clipFrame?.y ?? 0) + (clipFrame?.h ?? 0),
+      rendered.width,
+      rendered.height - ((clipFrame?.y ?? 0) + (clipFrame?.h ?? 0))
+    )).toBeNull();
   });
 });

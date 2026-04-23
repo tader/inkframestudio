@@ -1,6 +1,6 @@
 import { BUILT_IN_WIDGET_DEFINITIONS, defaultDisplayTypes, defaultVirtualDevices, migrateLegacyAssignments, migrateLegacyLayouts } from "./designer-defaults.js";
 import { DEFAULT_FONT_PRESETS, normalizeFontPresets } from "./font-presets.js";
-import type { DeviceAssignment, LayoutDefinition, LayoutNode, ManagedDisplay, Project, Screen, ThemeRef, WidgetInstance, WidgetTheme, WidgetThemeId } from "./types.js";
+import type { DeviceAssignment, DisplayType, EdgeInsets, LayoutDefinition, LayoutNode, ManagedDisplay, Project, Screen, ThemeRef, WidgetInstance, WidgetTheme, WidgetThemeId } from "./types.js";
 
 export const DEFAULT_WIDGET_THEME_ID = "classic-outline";
 
@@ -189,6 +189,26 @@ function normalizeAssignmentSchedule(schedule: DeviceAssignment["schedule"] | un
   };
 }
 
+function normalizeContentPadding(
+  padding: Partial<EdgeInsets> | undefined,
+  legacySafeMarginPx?: unknown
+): EdgeInsets {
+  const fallback = Number.isFinite(Number(legacySafeMarginPx)) ? Math.max(0, Math.trunc(Number(legacySafeMarginPx))) : 0;
+  return {
+    top: Math.max(0, Math.trunc(Number(padding?.top ?? fallback) || 0)),
+    right: Math.max(0, Math.trunc(Number(padding?.right ?? fallback) || 0)),
+    bottom: Math.max(0, Math.trunc(Number(padding?.bottom ?? fallback) || 0)),
+    left: Math.max(0, Math.trunc(Number(padding?.left ?? fallback) || 0))
+  };
+}
+
+function normalizeDisplayType(displayType: DisplayType & { safeMarginPx?: unknown }): DisplayType {
+  return {
+    ...displayType,
+    contentPadding: normalizeContentPadding(displayType.contentPadding, displayType.safeMarginPx)
+  };
+}
+
 function defaultFullscreenLayoutIdForDisplay(layouts: LayoutDefinition[], display: ManagedDisplay, preferredId?: string): string | undefined {
   if (preferredId && layouts.some((entry) => entry.id === preferredId)) {
     return preferredId;
@@ -224,7 +244,8 @@ export function normalizeProject(project: Project): Project {
     ...theme,
     autoFitFontFamily: theme.autoFitFontFamily ?? "px-sans"
   }));
-  const displayTypes = project.displayTypes?.length ? project.displayTypes : defaultDisplayTypes();
+  const displayTypes = (project.displayTypes?.length ? project.displayTypes : defaultDisplayTypes())
+    .map((displayType) => normalizeDisplayType(displayType as DisplayType & { safeMarginPx?: unknown }));
   const devices = project.devices?.length ? project.devices : defaultVirtualDevices(displayTypes);
   const layoutDefinitions = (project.layoutDefinitions?.length ? project.layoutDefinitions : migrateLegacyLayouts(project))
     .map((layout) => ({

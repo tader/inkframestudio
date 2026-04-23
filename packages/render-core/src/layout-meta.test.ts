@@ -78,6 +78,20 @@ describe("layout meta templates", () => {
     ).toBe("2 2 0");
   });
 
+  it("applies string case filters to scope values", () => {
+    expect(
+      applyScopeTemplate('{{ label | title }} {{ label | upcase }} {{ label | downcase }}', {
+        label: "donderdag middag"
+      }, { locale: "nl-NL" })
+    ).toBe("Donderdag Middag DONDERDAG MIDDAG donderdag middag");
+  });
+
+  it("applies string case filters to literal expressions", () => {
+    expect(
+      applyScopeTemplate('{{ "donderdag middag" | title }}', {}, { locale: "nl-NL" })
+    ).toBe("Donderdag Middag");
+  });
+
   it("keeps dotted lookups working without filters", () => {
     expect(
       applyScopeTemplate("{{events.0.summary}}", {
