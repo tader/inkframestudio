@@ -1,9 +1,11 @@
 export type PaletteRole = "bg" | "fg" | "accent";
+export type TextColorRole = PaletteRole | "transparent";
 export type FontFamily = "px-sans" | "px-mono-special" | "ui-sans" | (string & {});
 export type FontWeight = "regular" | "bold";
 export type FontSlope = "roman" | "italic";
 export type FontVariantKey = "regular" | "italic" | "bold" | "boldItalic";
 export type FontSize = "tiny" | "normal" | "header";
+export type FontRole = "tiny" | "normal" | "normalEmphasis" | "header";
 export type WidgetThemeId = string;
 export type BorderMergeMode = "inherit" | "always" | "never";
 export type ThemeRef = "inherit" | WidgetThemeId;
@@ -49,6 +51,7 @@ export interface TextStyle {
   weight: FontWeight;
   slope: FontSlope;
   size: FontSize;
+  colorRole?: TextColorRole;
   tabularNumbers?: boolean;
   pixelSize?: number;
   lineSpacingPx?: number;
@@ -152,6 +155,7 @@ export interface WidgetTheme {
   fontRoles?: {
     tiny?: Partial<TextStyle>;
     normal?: Partial<TextStyle>;
+    normalEmphasis?: Partial<TextStyle>;
     header?: Partial<TextStyle>;
   };
   borderTokens?: Record<
@@ -449,6 +453,10 @@ export interface DeviceAssignment {
   displayId: string;
   defaultFullscreenLayoutId?: string;
   defaultThemeId?: ThemeRef;
+  schedule?: {
+    enabled?: boolean;
+    intervalMinutes?: number;
+  };
   fullscreenRules: Rule[];
   popupRules: Rule[];
 }
@@ -534,7 +542,7 @@ export interface WidgetProps {
   renderEntityState?: boolean;
   paddingPx?: number;
   borderToken?: BorderToken;
-  fontRole?: "tiny" | "normal" | "header";
+  fontRole?: FontRole;
   fixedPixelSize?: number;
   unavailableThemeId?: ThemeRef;
   numericThemeRules?: NumericThemeRule[];

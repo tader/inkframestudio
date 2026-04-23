@@ -1,6 +1,5 @@
 import express from "express";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import * as fontkit from "fontkit";
 import {
   BUILT_IN_FONT_OPTIONS,
@@ -28,20 +27,27 @@ import type {
   Scenario
 } from "../../render-core/src/types.js";
 import { fetchDaFontPage, importDaFontFont } from "./dafont.js";
+import { AssignmentScheduler } from "./assignment-scheduler.js";
 import { HomeAssistantClient } from "./home-assistant.js";
 import { rgbaToJpegBuffer } from "./jpeg.js";
 import { OpenEpaperLinkAccessPointClient } from "./openepaperlink.js";
 import { NoopPublisher } from "./publisher.js";
 import { rgbaToPngBuffer } from "./png.js";
 import { RenderRuntime } from "./runtime.js";
+import { installRustTextLayoutAdapter } from "./rust-text-engine.js";
 import { ProjectStorage } from "./storage.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const rootDir = path.resolve(__dirname, "../../..");
+const rootDir = process.cwd();
 const storage = new ProjectStorage(path.join(rootDir, "data"));
 const homeAssistantClient = new HomeAssistantClient();
 const openEpaperLinkClient = new OpenEpaperLinkAccessPointClient();
 const runtime = new RenderRuntime(new NoopPublisher());
+const assignmentScheduler = new AssignmentScheduler(
+  storage,
+  homeAssistantClient,
+  openEpaperLinkClient,
+  refreshRegisteredFonts
+);
 
 function slugifyFontId(value: string): string {
   return value
@@ -147,6 +153,8 @@ async function resolvePreviewData(
 
 async function createApp() {
   await storage.ensureSeeded();
+  installRustTextLayoutAdapter();
+  assignmentScheduler.start();
 
   const app = express();
   app.use(express.json({ limit: "16mb" }));
@@ -383,15 +391,9 @@ async function createApp() {
 
   app.get("/api/projects/:id/displays/discover", async (request, response, next) => {
     try {
-      const [haSettings, apSettings] = await Promise.all([
-        storage.getHomeAssistantSettings(),
-        storage.getOpenEpaperLinkAccessPointSettings()
-      ]);
-      const [haDisplays, apDisplays] = await Promise.all([
-        homeAssistantClient.discoverOpenEpaperDisplays(haSettings).catch(() => []),
-        openEpaperLinkClient.discoverDisplays(apSettings).catch(() => [])
-      ]);
-      response.json([...apDisplays, ...haDisplays]);
+      const apSettings = await storage.getOpenEpaperLinkAccessPointSettings();
+      const apDisplays = await openEpaperLinkClient.discoverDisplays(apSettings).catch(() => []);
+      response.json(apDisplays);
     } catch (error) {
       next(error);
     }
@@ -652,6 +654,25 @@ async function createApp() {
         activeOverlayId: result.activeOverlayId,
         pngBase64: result.png.toString("base64")
       });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/projects/:id/assignment-schedules", async (request, response, next) => {
+    try {
+      const project = await storage.getProject(request.params.id);
+      response.json(await assignmentScheduler.getProjectStatuses(project));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/projects/:id/assignments/:assignmentId/force-update", async (request, response, next) => {
+    try {
+      await refreshRegisteredFonts();
+      const project = buildProjectOverride(request.params.id, request.body) ?? (await storage.getProject(request.params.id));
+      response.json(await assignmentScheduler.forceUpdate(project, String(request.params.assignmentId)));
     } catch (error) {
       next(error);
     }

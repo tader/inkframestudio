@@ -1,9 +1,10 @@
 import { LitElement, css, html, nothing, type TemplateResult } from "lit";
-import { BUILT_IN_WIDGET_DEFINITIONS, DISPLAY_PROFILES, ICON_DEFINITIONS, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FontOption, type FontSlope, type FontVariantKey, type HomeAssistantConnectionSettings, type HomeAssistantConnectionStatus, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutInspectionResult, type LayoutNode, type ManagedDisplay, type OpenEpaperLinkAccessPointSettings, type OpenEpaperLinkAccessPointStatus, type PreviewDataSource, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
+import { BUILT_IN_WIDGET_DEFINITIONS, DISPLAY_PROFILES, ICON_DEFINITIONS, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type HomeAssistantConnectionSettings, type HomeAssistantConnectionStatus, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutInspectionResult, type LayoutNode, type ManagedDisplay, type OpenEpaperLinkAccessPointSettings, type OpenEpaperLinkAccessPointStatus, type PreviewDataSource, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
 import { SAMPLE_PROJECT } from "../../render-core/src/sample-project.js";
 import {
   deleteFont,
   fetchDaFontPage,
+  fetchAssignmentSchedules,
   fetchDevicePreview,
   fetchDiscoveredDisplays,
   fetchFontSpecimens,
@@ -25,9 +26,11 @@ import {
   saveProject,
   testHomeAssistantConnection,
   testOpenEpaperLinkAccessPointConnection,
-  uploadDeviceImage,
   uploadPreviewToOpenEpaperLinkAccessPoint,
   updateFontMetadata,
+  forceAssignmentUpdate,
+  type AssignmentForceUpdateResponse,
+  type AssignmentScheduleStatusResponse,
   type HomeAssistantSettingsResponse,
   type FontSpecimenResponse,
   type DaFontEntry,
@@ -38,16 +41,15 @@ import {
 import { deriveStructureDropIntent, findInspectionNodeAtPoint, type StructureDropIntent } from "./structure-preview-model.js";
 import { buildNodeTree, getNodeById, isContainerNode, isDescendant, moveNode, moveNodeAfter, moveNodeBefore, moveNodeToGridCell, removeNode } from "./tree-model.js";
 
-type PageId = "displays" | "display-types" | "widgets" | "layouts" | "themes" | "assignments" | "config" | "dafont";
+type PageId = "displays" | "display-types" | "widgets" | "layouts" | "themes" | "config" | "dafont";
 
-const PAGE_ORDER: PageId[] = ["displays", "display-types", "widgets", "layouts", "themes", "assignments", "config", "dafont"];
+const PAGE_ORDER: PageId[] = ["displays", "display-types", "widgets", "layouts", "themes", "config", "dafont"];
 const PAGE_LABELS: Record<PageId, string> = {
   displays: "Displays",
   "display-types": "Display Types",
   widgets: "Widgets",
   layouts: "Layouts",
   themes: "Themes",
-  assignments: "Assignments",
   config: "Config",
   dafont: "DaFont"
 };
@@ -83,6 +85,9 @@ function maskToken(hasToken: boolean, token: string): string {
 
 function routeToPage(hash: string): PageId {
   const value = hash.replace(/^#\/?/, "");
+  if (value === "assignments") {
+    return "displays";
+  }
   return PAGE_ORDER.includes(value as PageId) ? (value as PageId) : "displays";
 }
 
@@ -315,6 +320,29 @@ function emptyStackRoot(): LayoutNode {
 
 function candidateMac(candidate: DiscoveredDisplayCandidate): string {
   return String(candidate.metadata?.mac ?? candidate.providerRef ?? "");
+}
+
+function normalizedMac(value: string): string {
+  return value.replace(/[^a-fA-F0-9]/g, "").toUpperCase();
+}
+
+function lastSixMacDigits(value: string): string {
+  const compact = normalizedMac(value);
+  return compact.length >= 6 ? compact.slice(-6) : compact;
+}
+
+function displayMac(display: Pick<ManagedDisplay, "metadata" | "providerRef">): string {
+  return String(display.metadata?.mac ?? display.providerRef ?? "");
+}
+
+function displayTitle(display: Pick<ManagedDisplay, "name" | "metadata" | "providerRef">): string {
+  const suffix = lastSixMacDigits(displayMac(display));
+  return suffix ? `${display.name} · ${suffix}` : display.name;
+}
+
+function discoveredDisplayTitle(candidate: DiscoveredDisplayCandidate): string {
+  const suffix = lastSixMacDigits(candidateMac(candidate));
+  return suffix ? `${candidate.name} · ${suffix}` : candidate.name;
 }
 
 function parseAllowedPixelSizes(value: string): number[] {
@@ -626,11 +654,11 @@ function defaultTheme(): WidgetTheme {
     surface: {},
     text: { title: "fg", body: "fg", value: "fg" },
     accentRole: "accent",
-    autoFitFontFamily: "px-sans",
     fontRoles: {
-      tiny: { family: "px-sans", weight: "regular", slope: "roman", size: "tiny", pixelSize: 8, lineSpacingPx: 0, topPaddingPx: 0 },
-      normal: { family: "px-sans", weight: "regular", slope: "roman", size: "normal", pixelSize: 12, lineSpacingPx: 0, topPaddingPx: 0 },
-      header: { family: "px-sans", weight: "bold", slope: "roman", size: "header", pixelSize: 18, lineSpacingPx: 0, topPaddingPx: 0 }
+      tiny: { family: "px-sans", weight: "regular", slope: "roman", size: "tiny", pixelSize: 8, colorRole: "fg", lineSpacingPx: 0, topPaddingPx: 0 },
+      normal: { family: "px-sans", weight: "regular", slope: "roman", size: "normal", pixelSize: 12, colorRole: "fg", lineSpacingPx: 0, topPaddingPx: 0 },
+      normalEmphasis: { family: "px-sans", weight: "bold", slope: "roman", size: "normal", pixelSize: 12, colorRole: "fg", lineSpacingPx: 0, topPaddingPx: 0 },
+      header: { family: "px-sans", weight: "bold", slope: "roman", size: "header", pixelSize: 18, colorRole: "fg", lineSpacingPx: 0, topPaddingPx: 0 }
     },
     borderTokens: {
       thin: { thicknessPx: 1, colorRole: "fg" },
@@ -642,6 +670,43 @@ function defaultTheme(): WidgetTheme {
       thicknessPx: 1
     }
   };
+}
+
+function fontRoleBasePixelSize(project: Project, role: FontRole): number {
+  if (role === "tiny") {
+    return project.fontPresets.tiny;
+  }
+  if (role === "header") {
+    return project.fontPresets.header;
+  }
+  return project.fontPresets.normal;
+}
+
+function fontRoleLabel(role: FontRole): string {
+  if (role === "normalEmphasis") {
+    return "normal emphasis";
+  }
+  return role;
+}
+
+function textColorRoleLabel(role: TextStyle["colorRole"] | undefined): string {
+  if (role === "bg") return "white";
+  if (role === "fg" || role === undefined) return "black";
+  if (role === "accent") return "accent";
+  return "transparent";
+}
+
+function fontRoleThemeTextKey(role: FontRole): "title" | "body" | "value" | undefined {
+  if (role === "tiny") {
+    return "title";
+  }
+  if (role === "normal") {
+    return "body";
+  }
+  if (role === "header") {
+    return "value";
+  }
+  return undefined;
 }
 
 function defaultDisplayType(): DisplayType {
@@ -697,6 +762,10 @@ function defaultAssignment(displayId: string, layoutId?: string): DeviceAssignme
     displayId,
     defaultFullscreenLayoutId: layoutId,
     defaultThemeId: "classic-outline",
+    schedule: {
+      enabled: false,
+      intervalMinutes: 15
+    },
     fullscreenRules: [],
     popupRules: []
   };
@@ -754,6 +823,7 @@ export class EpPaperEditorApp extends LitElement {
     openEpaperLinkAccessPointSettings: { state: true },
     openEpaperLinkAccessPointStatus: { state: true },
     uploadStatusMessage: { state: true },
+    assignmentScheduleStatuses: { state: true },
     selectedPreviewTagMac: { state: true },
     dafontEntries: { state: true },
     dafontPage: { state: true },
@@ -1118,6 +1188,7 @@ export class EpPaperEditorApp extends LitElement {
   declare private openEpaperLinkAccessPointSettings: OpenEpaperLinkAccessPointSettingsResponse;
   declare private openEpaperLinkAccessPointStatus: OpenEpaperLinkAccessPointStatus | null;
   declare private uploadStatusMessage: string;
+  declare private assignmentScheduleStatuses: Record<string, AssignmentScheduleStatusResponse>;
   declare private selectedPreviewTagMac: string;
   declare private dafontEntries: DaFontEntry[];
   declare private dafontPage: number;
@@ -1180,6 +1251,7 @@ export class EpPaperEditorApp extends LitElement {
     this.openEpaperLinkAccessPointSettings = { url: "" };
     this.openEpaperLinkAccessPointStatus = null;
     this.uploadStatusMessage = "";
+    this.assignmentScheduleStatuses = {};
     this.selectedPreviewTagMac = "";
     this.dafontEntries = [];
     this.dafontPage = 1;
@@ -1193,6 +1265,9 @@ export class EpPaperEditorApp extends LitElement {
     this.structureHoveredNodeId = "";
     this.structureDraggedNodeId = "";
     this.structureDropIntent = null;
+    if (window.location.hash && window.location.hash !== pageToRoute(this.activePage)) {
+      window.location.hash = pageToRoute(this.activePage);
+    }
   }
 
   connectedCallback(): void {
@@ -1210,6 +1285,10 @@ export class EpPaperEditorApp extends LitElement {
 
   private onHashChange = (): void => {
     this.activePage = routeToPage(window.location.hash);
+    if (window.location.hash !== pageToRoute(this.activePage)) {
+      window.location.hash = pageToRoute(this.activePage);
+      return;
+    }
     if (this.activePage === "config") {
       void this.refreshFontSpecimens();
     }
@@ -1256,6 +1335,9 @@ export class EpPaperEditorApp extends LitElement {
     }
     this.syncSelections();
     await this.discoverDisplays().catch(() => undefined);
+    await this.refreshAssignmentSchedules().catch(() => {
+      this.assignmentScheduleStatuses = {};
+    });
     await this.refreshPreview();
     if (this.activePage === "config") {
       this.ensureSelectedFontPreviewFamily();
@@ -1267,9 +1349,9 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private syncSelections(): void {
-    this.selectedDisplayId = this.project.devices?.some((entry) => entry.id === this.selectedDisplayId)
+    this.selectedDisplayId = this.visibleDisplays.some((entry) => entry.id === this.selectedDisplayId)
       ? this.selectedDisplayId
-      : this.project.devices?.[0]?.id || "";
+      : this.visibleDisplays[0]?.id || "";
     this.selectedDisplayTypeId = this.project.displayTypes?.some((entry) => entry.id === this.selectedDisplayTypeId)
       ? this.selectedDisplayTypeId
       : this.project.displayTypes?.[0]?.id || "";
@@ -1336,10 +1418,19 @@ export class EpPaperEditorApp extends LitElement {
     }
   }
 
+  private async refreshAssignmentSchedules(): Promise<void> {
+    this.assignmentScheduleStatuses = Object.fromEntries(
+      (await fetchAssignmentSchedules(this.project.id)).map((status) => [status.assignmentId, status])
+    );
+  }
+
   private async persistProject(): Promise<void> {
     this.project = cloneProject(await saveProject(this.project));
     this.projectSummaries = await fetchProjects();
     this.syncSelections();
+    await this.refreshAssignmentSchedules().catch(() => {
+      this.assignmentScheduleStatuses = {};
+    });
     await this.refreshPreview();
   }
 
@@ -1519,7 +1610,7 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private async fetchPagePreview(): Promise<PreviewResponse | undefined> {
-    if (this.activePage === "displays" || this.activePage === "assignments") {
+    if (this.activePage === "displays") {
       if (!this.selectedDisplayId) {
         return undefined;
       }
@@ -1823,12 +1914,15 @@ export class EpPaperEditorApp extends LitElement {
     });
   }
 
-  private addAssignment(): void {
-    const displayId = this.selectedDisplayId || this.project.devices?.[0]?.id;
+  private addAssignment(displayId = this.selectedDisplayId || this.project.devices?.[0]?.id): void {
     if (!displayId) {
       return;
     }
-    const assignment = defaultAssignment(displayId, this.project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen")?.id);
+    const display = this.project.devices?.find((entry) => entry.id === displayId);
+    const layoutId =
+      this.project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen" && entry.displayTypeId === display?.displayTypeId)?.id
+      ?? this.project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen")?.id;
+    const assignment = defaultAssignment(displayId, layoutId);
     this.replaceProject({
       ...this.project,
       deviceAssignments: [...(this.project.deviceAssignments ?? []), assignment]
@@ -2102,17 +2196,18 @@ export class EpPaperEditorApp extends LitElement {
     });
   }
 
-  private async uploadSelectedDisplay(): Promise<void> {
-    const display = this.selectedDisplay;
-    if (!display || display.providerKind !== "openepaperlink-ap") {
+  private async forceSelectedAssignmentUpdate(): Promise<void> {
+    const assignment = this.selectedDisplayAssignment;
+    if (!assignment) {
       return;
     }
-    this.uploadStatusMessage = "Uploading...";
+    this.uploadStatusMessage = "Forcing update...";
     try {
-      const result = await uploadDeviceImage(this.project.id, display.id, this.previewDataSource, this.project);
-      this.uploadStatusMessage = `Uploaded. hash ${result.hash}`;
+      const result: AssignmentForceUpdateResponse = await forceAssignmentUpdate(this.project.id, assignment.id, this.project);
+      this.uploadStatusMessage = result.message + (result.hash ? ` hash ${result.hash}` : "");
+      await this.refreshAssignmentSchedules().catch(() => undefined);
     } catch (error) {
-      this.uploadStatusMessage = error instanceof Error ? error.message : "Upload failed";
+      this.uploadStatusMessage = error instanceof Error ? error.message : "Forced update failed";
     }
   }
 
@@ -2187,11 +2282,15 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private get selectedDisplay(): ManagedDisplay | undefined {
-    return this.project.devices?.find((entry) => entry.id === this.selectedDisplayId);
+    return this.visibleDisplays.find((entry) => entry.id === this.selectedDisplayId);
   }
 
   private get selectedDisplayType(): DisplayType | undefined {
     return this.project.displayTypes?.find((entry) => entry.id === this.selectedDisplayTypeId);
+  }
+
+  private get visibleDisplays(): ManagedDisplay[] {
+    return (this.project.devices ?? []).filter((entry) => entry.virtual || entry.providerKind === "openepaperlink-ap");
   }
 
   private get accessPointTagCandidates(): DiscoveredDisplayCandidate[] {
@@ -2235,8 +2334,38 @@ export class EpPaperEditorApp extends LitElement {
     return this.project.themes.find((entry) => entry.id === this.selectedThemeId);
   }
 
-  private get selectedAssignment(): DeviceAssignment | undefined {
-    return this.project.deviceAssignments?.find((entry) => entry.id === this.selectedAssignmentId);
+  private get selectedDisplayAssignment(): DeviceAssignment | undefined {
+    return this.project.deviceAssignments?.find((entry) => entry.displayId === this.selectedDisplayId);
+  }
+
+  private get selectedDisplayAssignmentStatus(): AssignmentScheduleStatusResponse | undefined {
+    const assignment = this.selectedDisplayAssignment;
+    return assignment ? this.assignmentScheduleStatuses[assignment.id] : undefined;
+  }
+
+  private managedDisplayForCandidate(candidate: DiscoveredDisplayCandidate): ManagedDisplay | undefined {
+    const candidateRef = String(candidate.providerRef ?? "");
+    const candidateMacKey = normalizedMac(candidateMac(candidate));
+    return (this.project.devices ?? []).find((display) => {
+      if (display.providerKind !== "openepaperlink-ap") {
+        return false;
+      }
+      if (candidateRef && display.providerRef === candidateRef) {
+        return true;
+      }
+      return Boolean(candidateMacKey) && normalizedMac(displayMac(display)) === candidateMacKey;
+    });
+  }
+
+  private formatScheduleTimestamp(value: string | undefined): string {
+    if (!value) {
+      return "never";
+    }
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+    return parsed.toLocaleString();
   }
 
   private get effectivePreviewThemeId(): string | undefined {
@@ -2332,14 +2461,14 @@ export class EpPaperEditorApp extends LitElement {
             <button @click=${() => void this.discoverDisplays()}>Discover OEL</button>
             <button @click=${() => this.addVirtualDisplay()}>Add Virtual</button>
           </div>
-          ${(this.project.devices ?? []).map(
+          ${this.visibleDisplays.map(
             (device) => html`
               <div class="row">
                 <button class="item-button ${device.id === this.selectedDisplayId ? "active" : ""}" @click=${() => {
                   this.selectedDisplayId = device.id;
                   this.selectedAssignmentId = this.project.deviceAssignments?.find((entry) => entry.displayId === device.id)?.id ?? "";
                   void this.refreshPreview();
-                }}>${device.name}</button>
+                }}>${displayTitle(device)}</button>
                 <button @click=${() => this.removeDisplay(device.id)}>${device.virtual ? "Delete" : "Unmanage"}</button>
               </div>
             `
@@ -2347,14 +2476,19 @@ export class EpPaperEditorApp extends LitElement {
         </div>
         <div class="section">
           <h3>Discovered</h3>
-          ${this.discoveredDisplays.map(
-            (candidate) => html`
-              <details>
-                <summary>${candidate.name}</summary>
-                <div class="muted">${candidate.providerKind} ${candidate.discoverySource ? `(${candidate.discoverySource})` : ""}</div>
-                <button @click=${() => this.addDiscoveredDisplay(candidate)}>Manage device</button>
-              </details>
-            `
+          ${this.accessPointTagCandidates.map(
+            (candidate) => {
+              const managedDisplay = this.managedDisplayForCandidate(candidate);
+              return html`
+                <details>
+                  <summary>${discoveredDisplayTitle(candidate)}</summary>
+                  <div class="muted">${candidate.providerKind} ${candidate.discoverySource ? `(${candidate.discoverySource})` : ""}</div>
+                  ${managedDisplay
+                    ? html`<div class="muted">Already managed as ${displayTitle(managedDisplay)}</div>`
+                    : html`<button @click=${() => this.addDiscoveredDisplay(candidate)}>Manage device</button>`}
+                </details>
+              `;
+            }
           )}
         </div>
       `;
@@ -2478,24 +2612,7 @@ export class EpPaperEditorApp extends LitElement {
         </div>
       `;
     }
-    return html`
-      <div class="section">
-        <h2>Assignments</h2>
-        <button @click=${() => this.addAssignment()}>Add assignment</button>
-        ${(this.project.deviceAssignments ?? []).map(
-          (assignment) => html`
-            <div class="row">
-              <button class="item-button ${assignment.id === this.selectedAssignmentId ? "active" : ""}" @click=${() => {
-                this.selectedAssignmentId = assignment.id;
-                this.selectedDisplayId = assignment.displayId;
-                void this.refreshPreview();
-              }}>${assignment.id}</button>
-              <button @click=${() => this.removeAssignment(assignment.id)}>Delete</button>
-            </div>
-          `
-        )}
-      </div>
-    `;
+    return html``;
   }
 
   private structureNodeClass(node: LayoutInspectionNode): string {
@@ -2775,6 +2892,18 @@ export class EpPaperEditorApp extends LitElement {
           @input=${(event: Event) => onChange({ topPaddingPx: Number((event.target as HTMLInputElement).value) })}
         />
       </label>
+      <label>
+        Color
+        <select
+          .value=${String(style?.colorRole ?? "fg")}
+          @change=${(event: Event) => onChange({ colorRole: (event.target as HTMLSelectElement).value as TextStyle["colorRole"] })}
+        >
+          <option value="fg">${textColorRoleLabel("fg")}</option>
+          <option value="bg">${textColorRoleLabel("bg")}</option>
+          <option value="accent">${textColorRoleLabel("accent")}</option>
+          <option value="transparent">${textColorRoleLabel("transparent")}</option>
+        </select>
+      </label>
     `;
   }
 
@@ -2964,9 +3093,10 @@ export class EpPaperEditorApp extends LitElement {
             ${autoFitDisabled ? html`<div class="muted">Auto fit unavailable when width or height uses Fit content.</div>` : nothing}
             <label>
               Theme font role
-              <select .value=${String(node.props?.fontRole ?? "normal")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, fontRole: (event.target as HTMLSelectElement).value as "tiny" | "normal" | "header" } })))}>
+              <select .value=${String(node.props?.fontRole ?? "normal")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, fontRole: (event.target as HTMLSelectElement).value as FontRole } })))}>
                 <option value="tiny">Tiny</option>
                 <option value="normal">Normal</option>
+                <option value="normalEmphasis">Normal emphasis</option>
                 <option value="header">Header</option>
               </select>
             </label>
@@ -3004,9 +3134,10 @@ export class EpPaperEditorApp extends LitElement {
             ${autoFitDisabled ? html`<div class="muted">Auto fit unavailable when width or height uses Fit content.</div>` : nothing}
             <label>
               Theme font role
-              <select .value=${String(node.props?.fontRole ?? "header")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, fontRole: (event.target as HTMLSelectElement).value as "tiny" | "normal" | "header" } })))}>
+              <select .value=${String(node.props?.fontRole ?? "header")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, fontRole: (event.target as HTMLSelectElement).value as FontRole } })))}>
                 <option value="tiny">Tiny</option>
                 <option value="normal">Normal</option>
+                <option value="normalEmphasis">Normal emphasis</option>
                 <option value="header">Header</option>
               </select>
             </label>
@@ -3714,6 +3845,102 @@ export class EpPaperEditorApp extends LitElement {
     `;
   }
 
+  private renderDisplayAssignmentEditor(device: ManagedDisplay): TemplateResult {
+    const assignment = this.selectedDisplayAssignment;
+    const status = this.selectedDisplayAssignmentStatus;
+    const fullscreenLayouts = (this.project.layoutDefinitions ?? []).filter((layout) => layout.kind === "fullscreen" && layout.displayTypeId === device.displayTypeId);
+    const fullscreenOptions = fullscreenLayouts.length
+      ? fullscreenLayouts
+      : (this.project.layoutDefinitions ?? []).filter((layout) => layout.kind === "fullscreen");
+    if (!device.managed) {
+      return html`<div class="muted">Enable management to configure assignment rules.</div>`;
+    }
+    if (!assignment) {
+      return html`
+        <div class="muted">No assignment yet for this display.</div>
+        <button @click=${() => this.addAssignment(device.id)}>Create assignment</button>
+      `;
+    }
+    return html`
+      <label>
+        Default fullscreen
+        <select .value=${assignment.defaultFullscreenLayoutId ?? ""} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({ ...current, defaultFullscreenLayoutId: (event.target as HTMLSelectElement).value || undefined }))}>
+          ${fullscreenOptions.map((layout) => html`<option value=${layout.id}>${layout.name}</option>`)}
+        </select>
+      </label>
+      <label>
+        Theme
+        <select .value=${assignment.defaultThemeId ?? "inherit"} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({ ...current, defaultThemeId: (event.target as HTMLSelectElement).value || undefined }))}>
+          ${this.project.themes.map((theme) => html`<option value=${theme.id}>${theme.name}</option>`)}
+        </select>
+      </label>
+      <div class="section">
+        <div class="row">
+          <h3>Fullscreen Rules</h3>
+          <button @click=${() => this.updateAssignment(assignment.id, (current) => ({ ...current, fullscreenRules: [...current.fullscreenRules, defaultRule("fullscreen_activation")] }))}>Add rule</button>
+        </div>
+        ${assignment.fullscreenRules.map((rule) => this.renderRuleEditor(rule, assignment, "fullscreen_activation"))}
+      </div>
+      <div class="section">
+        <div class="row">
+          <h3>Popup Rules</h3>
+          <button @click=${() => this.updateAssignment(assignment.id, (current) => ({ ...current, popupRules: [...current.popupRules, defaultRule("popup_activation")] }))}>Add rule</button>
+        </div>
+        ${assignment.popupRules.map((rule) => this.renderRuleEditor(rule, assignment, "popup_activation"))}
+      </div>
+      <div class="section">
+        <h3>Schedule</h3>
+        ${device.providerKind === "openepaperlink-ap"
+          ? html`
+              <label>
+                <input
+                  type="checkbox"
+                  .checked=${Boolean(assignment.schedule?.enabled)}
+                  @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({
+                    ...current,
+                    schedule: {
+                      enabled: (event.target as HTMLInputElement).checked,
+                      intervalMinutes: Math.max(1, Math.trunc(Number(current.schedule?.intervalMinutes ?? 15) || 15))
+                    }
+                  }))}
+                />
+                Scheduled updates enabled
+              </label>
+              <label>
+                Every
+                <input
+                  type="number"
+                  min="1"
+                  .value=${String(assignment.schedule?.intervalMinutes ?? 15)}
+                  @input=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({
+                    ...current,
+                    schedule: {
+                      enabled: Boolean(current.schedule?.enabled),
+                      intervalMinutes: Math.max(1, Math.trunc(Number((event.target as HTMLInputElement).value) || 15))
+                    }
+                  }))}
+                />
+                minutes
+              </label>
+              <div class="row">
+                <button class="primary" @click=${() => void this.forceSelectedAssignmentUpdate()}>Force update now</button>
+              </div>
+              <div class="muted">Save project for schedule changes to take effect on the backend timer.</div>
+              ${status
+                ? html`
+                    <div class="muted">Last result: ${status.lastResult ?? "idle"}</div>
+                    <div class="muted">Last run: ${this.formatScheduleTimestamp(status.lastCompletedAt ?? status.lastRunAt)}</div>
+                    <div class="muted">Next run: ${!status.enabled ? "not scheduled" : this.formatScheduleTimestamp(status.nextRunAt)}</div>
+                    ${status.lastError ? html`<div class="status-error">${status.lastError}</div>` : nothing}
+                  `
+                : html`<div class="muted">Schedule status unavailable.</div>`}
+            `
+          : html`<div class="muted">Scheduling only available for managed AP displays.</div>`}
+      </div>
+      <button @click=${() => this.removeAssignment(assignment.id)}>Delete assignment</button>
+    `;
+  }
+
   private renderDetailPanel() {
     if (this.activePage === "displays") {
       const device = this.selectedDisplay;
@@ -3743,14 +3970,11 @@ export class EpPaperEditorApp extends LitElement {
                   </label>
                   <div class="muted">${device.virtual ? "Virtual device" : "Provider-backed device"}</div>
                   ${device.metadata?.mac ? html`<div class="muted">MAC ${String(device.metadata.mac)}</div>` : nothing}
-                  ${device.providerKind === "openepaperlink-ap"
-                    ? html`
-                        <div class="row">
-                          <button class="primary" @click=${() => void this.uploadSelectedDisplay()}>Upload image to AP</button>
-                        </div>
-                        ${this.uploadStatusMessage ? html`<div class="muted">${this.uploadStatusMessage}</div>` : nothing}
-                      `
-                    : nothing}
+                  <div class="section">
+                    <h3>Assignment</h3>
+                    ${this.renderDisplayAssignmentEditor(device)}
+                  </div>
+                  ${this.uploadStatusMessage ? html`<div class="muted">${this.uploadStatusMessage}</div>` : nothing}
                   <button @click=${() => this.removeDisplay(device.id)}>${device.virtual ? "Delete virtual display" : "Unmanage device"}</button>
                 `
               : html`<div class="muted">Select display.</div>`}
@@ -3966,36 +4190,6 @@ export class EpPaperEditorApp extends LitElement {
               ? html`
                   <label>Name <input .value=${theme.name} @input=${(event: Event) => this.updateTheme(theme.id, (current) => ({ ...current, name: (event.target as HTMLInputElement).value }))} /></label>
                   <label>
-                    Auto-fit font family
-                    <select .value=${theme.autoFitFontFamily ?? "px-sans"} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({ ...current, autoFitFontFamily: (event.target as HTMLSelectElement).value }))}>
-                      ${this.renderFontFamilyOptions(theme.autoFitFontFamily ?? "px-sans")}
-                    </select>
-                  </label>
-                  <label>
-                    Title color
-                    <select .value=${theme.text.title} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({ ...current, text: { ...current.text, title: (event.target as HTMLSelectElement).value as typeof current.text.title } }))}>
-                      <option value="fg">Foreground</option>
-                      <option value="accent">Accent</option>
-                      <option value="bg">Background</option>
-                    </select>
-                  </label>
-                  <label>
-                    Body color
-                    <select .value=${theme.text.body} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({ ...current, text: { ...current.text, body: (event.target as HTMLSelectElement).value as typeof current.text.body } }))}>
-                      <option value="fg">Foreground</option>
-                      <option value="accent">Accent</option>
-                      <option value="bg">Background</option>
-                    </select>
-                  </label>
-                  <label>
-                    Value color
-                    <select .value=${theme.text.value} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({ ...current, text: { ...current.text, value: (event.target as HTMLSelectElement).value as typeof current.text.value } }))}>
-                      <option value="fg">Foreground</option>
-                      <option value="accent">Accent</option>
-                      <option value="bg">Background</option>
-                    </select>
-                  </label>
-                  <label>
                     Background fill
                     <select .value=${theme.surface.fillRole ?? "none"} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({
                       ...current,
@@ -4012,13 +4206,13 @@ export class EpPaperEditorApp extends LitElement {
                       <option value="accent">Accent</option>
                     </select>
                   </label>
-                  ${(["tiny", "normal", "header"] as const).map(
+                  ${(["tiny", "normal", "normalEmphasis", "header"] as const).map(
                     (role) => {
                       const roleStyle = this.coerceTextStyleVariant(theme.fontRoles?.[role]);
                       const roleFamily = roleStyle.family ?? "px-sans";
                       return html`
                       <details>
-                        <summary>${role} font</summary>
+                        <summary>${fontRoleLabel(role)} font</summary>
                         <label>
                           Family
                           <select .value=${roleFamily} @change=${(event: Event) => {
@@ -4035,14 +4229,17 @@ export class EpPaperEditorApp extends LitElement {
                         ${this.renderTextVariantControls(roleFamily, roleStyle, (patch) =>
                           this.updateTheme(theme.id, (current) => ({
                             ...current,
-                            fontRoles: { ...current.fontRoles, [role]: { ...current.fontRoles?.[role], family: roleFamily, ...patch } }
+                            fontRoles: { ...current.fontRoles, [role]: { ...current.fontRoles?.[role], family: roleFamily, ...patch } },
+                            text: fontRoleThemeTextKey(role) && patch.colorRole && patch.colorRole !== "transparent"
+                              ? { ...current.text, [fontRoleThemeTextKey(role)!]: patch.colorRole }
+                              : current.text
                           }))
                         )}
                         <label>
                           Pixel size
                           ${this.renderFontPixelSizeControl(
                             roleFamily,
-                            Number(theme.fontRoles?.[role]?.pixelSize ?? this.project.fontPresets[role]),
+                            Number(theme.fontRoles?.[role]?.pixelSize ?? fontRoleBasePixelSize(this.project, role)),
                             (pixelSize) => this.updateTheme(theme.id, (current) => ({ ...current, fontRoles: { ...current.fontRoles, [role]: { ...current.fontRoles?.[role], pixelSize } } }))
                           )}
                         </label>
@@ -4058,9 +4255,9 @@ export class EpPaperEditorApp extends LitElement {
                     <label>
                       Color
                       <select .value=${theme.textOutline?.colorRole ?? "bg"} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({ ...current, textOutline: { ...current.textOutline, enabled: current.textOutline?.enabled ?? false, colorRole: (event.target as HTMLSelectElement).value as "bg" | "fg" | "accent", thicknessPx: current.textOutline?.thicknessPx ?? 1 } }))}>
-                        <option value="bg">Background</option>
-                        <option value="fg">Foreground</option>
-                        <option value="accent">Accent</option>
+                        <option value="fg">black</option>
+                        <option value="bg">white</option>
+                        <option value="accent">accent</option>
                       </select>
                     </label>
                   </details>
@@ -4335,48 +4532,10 @@ export class EpPaperEditorApp extends LitElement {
       `;
     }
 
-    const assignment = this.selectedAssignment;
     return html`
       <div class="detail">
         <div class="section">
-          <h2>Assignment</h2>
-          ${assignment
-            ? html`
-                <label>
-                  Display
-                  <select .value=${assignment.displayId} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({ ...current, displayId: (event.target as HTMLSelectElement).value }))}>
-                    ${(this.project.devices ?? []).map((device) => html`<option value=${device.id}>${device.name}</option>`)}
-                  </select>
-                </label>
-                <label>
-                  Default fullscreen
-                  <select .value=${assignment.defaultFullscreenLayoutId ?? ""} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({ ...current, defaultFullscreenLayoutId: (event.target as HTMLSelectElement).value }))}>
-                    ${(this.project.layoutDefinitions ?? []).filter((layout) => layout.kind === "fullscreen").map((layout) => html`<option value=${layout.id}>${layout.name}</option>`)}
-                  </select>
-                </label>
-                <label>
-                  Theme
-                  <select .value=${assignment.defaultThemeId ?? "inherit"} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({ ...current, defaultThemeId: (event.target as HTMLSelectElement).value }))}>
-                    ${this.project.themes.map((theme) => html`<option value=${theme.id}>${theme.name}</option>`)}
-                  </select>
-                </label>
-                <div class="section">
-                  <div class="row">
-                    <h3>Fullscreen Rules</h3>
-                    <button @click=${() => this.updateAssignment(assignment.id, (current) => ({ ...current, fullscreenRules: [...current.fullscreenRules, defaultRule("fullscreen_activation")] }))}>Add rule</button>
-                  </div>
-                  ${assignment.fullscreenRules.map((rule) => this.renderRuleEditor(rule, assignment, "fullscreen_activation"))}
-                </div>
-                <div class="section">
-                  <div class="row">
-                    <h3>Popup Rules</h3>
-                    <button @click=${() => this.updateAssignment(assignment.id, (current) => ({ ...current, popupRules: [...current.popupRules, defaultRule("popup_activation")] }))}>Add rule</button>
-                  </div>
-                  ${assignment.popupRules.map((rule) => this.renderRuleEditor(rule, assignment, "popup_activation"))}
-                </div>
-                <button @click=${() => this.removeAssignment(assignment.id)}>Delete assignment</button>
-              `
-            : html`<div class="muted">Select assignment.</div>`}
+          <div class="muted">Select item.</div>
         </div>
       </div>
     `;

@@ -101,6 +101,38 @@ describe("designer renderer", () => {
     expect(rendered.activeScreenId).toBeTruthy();
   });
 
+  it("repairs stale assignments missing a default fullscreen layout", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const display = normalized.devices?.[0];
+    expect(display).toBeDefined();
+    const project: Project = normalizeProject({
+      ...normalized,
+      deviceAssignments: [{
+        id: "assignment-broken",
+        displayId: display!.id,
+        defaultThemeId: "classic-outline",
+        fullscreenRules: [],
+        popupRules: []
+      }]
+    });
+    const rendered = renderAssignedDisplay(project, display!.id, SAMPLE_DATA);
+    expect(rendered.width).toBeGreaterThan(0);
+    expect(rendered.activeScreenId).toBeTruthy();
+  });
+
+  it("renders assigned display even when a raw project lacks an assignment", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const display = normalized.devices?.[0];
+    expect(display).toBeDefined();
+    const project: Project = {
+      ...normalized,
+      deviceAssignments: []
+    };
+    const rendered = renderAssignedDisplay(project, display!.id, SAMPLE_DATA);
+    expect(rendered.width).toBeGreaterThan(0);
+    expect(rendered.activeScreenId).toBeTruthy();
+  });
+
   it("inspects composition layout frames with zstack children sharing same bounds", () => {
     const normalized = normalizeProject(SAMPLE_PROJECT);
     const layout = normalized.layoutDefinitions?.find((entry) => entry.id === "layout-test-zstack");
@@ -821,6 +853,67 @@ describe("designer renderer", () => {
       weight: "regular",
       slope: "roman",
       size: "header",
+      pixelSize: 16
+    }, project.fontPresets);
+    const expectedHeight = Math.max(...expected.glyphs.filter((glyph) => glyph.height > 0).map((glyph) => glyph.height));
+    expect(bounds?.height).toBe(expectedHeight);
+  });
+
+  it("uses the normal emphasis font role from theme settings", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const project: Project = normalizeProject({
+      ...normalized,
+      themes: normalized.themes.map((theme) => (
+        theme.id === "classic-outline"
+          ? {
+              ...theme,
+              fontRoles: {
+                ...theme.fontRoles,
+                normalEmphasis: {
+                  family: "px-sans",
+                  weight: "bold",
+                  slope: "roman",
+                  size: "normal",
+                  pixelSize: 16
+                }
+              }
+            }
+          : theme
+      )),
+      layoutDefinitions: [{
+        id: "layout-theme-normal-emphasis",
+        name: "Theme Normal Emphasis",
+        kind: "fullscreen",
+        displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+        rootNode: {
+          id: "root",
+          type: "stack",
+          axis: "vertical",
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          children: [{
+            id: "text",
+            type: "primitive_instance",
+            primitiveType: "text",
+            width: { mode: "fixed_px", value: 120 },
+            height: { mode: "fixed_px", value: 32 },
+            props: {
+              text: "Title",
+              fontRole: "normalEmphasis",
+              autoFit: false,
+              paddingPx: 0
+            }
+          }]
+        }
+      }]
+    });
+    const rendered = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const bounds = pixelBounds(rendered, 0, 0, 120, 32);
+    const expected = layoutText("Title", {
+      family: "px-sans",
+      weight: "bold",
+      slope: "roman",
+      size: "normal",
       pixelSize: 16
     }, project.fontPresets);
     const expectedHeight = Math.max(...expected.glyphs.filter((glyph) => glyph.height > 0).map((glyph) => glyph.height));

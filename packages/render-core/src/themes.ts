@@ -1,6 +1,6 @@
 import { BUILT_IN_WIDGET_DEFINITIONS, defaultDisplayTypes, defaultVirtualDevices, migrateLegacyAssignments, migrateLegacyLayouts } from "./designer-defaults.js";
 import { DEFAULT_FONT_PRESETS, normalizeFontPresets } from "./font-presets.js";
-import type { LayoutNode, Project, Screen, ThemeRef, WidgetInstance, WidgetTheme, WidgetThemeId } from "./types.js";
+import type { DeviceAssignment, LayoutDefinition, LayoutNode, ManagedDisplay, Project, Screen, ThemeRef, WidgetInstance, WidgetTheme, WidgetThemeId } from "./types.js";
 
 export const DEFAULT_WIDGET_THEME_ID = "classic-outline";
 
@@ -182,6 +182,43 @@ function normalizeLayoutNode(node: LayoutNode | undefined): LayoutNode | undefin
   return node;
 }
 
+function normalizeAssignmentSchedule(schedule: DeviceAssignment["schedule"] | undefined): NonNullable<DeviceAssignment["schedule"]> {
+  return {
+    enabled: Boolean(schedule?.enabled),
+    intervalMinutes: Math.max(1, Math.trunc(Number(schedule?.intervalMinutes ?? 15) || 15))
+  };
+}
+
+function defaultFullscreenLayoutIdForDisplay(layouts: LayoutDefinition[], display: ManagedDisplay, preferredId?: string): string | undefined {
+  if (preferredId && layouts.some((entry) => entry.id === preferredId)) {
+    return preferredId;
+  }
+  return (
+    layouts.find((entry) => entry.kind === "fullscreen" && entry.displayTypeId === display.displayTypeId)?.id ??
+    layouts.find((entry) => entry.kind === "fullscreen")?.id
+  );
+}
+
+function normalizeDeviceAssignments(
+  project: Project,
+  devices: ManagedDisplay[],
+  layouts: LayoutDefinition[]
+): DeviceAssignment[] {
+  const existing = new Map((project.deviceAssignments ?? []).map((assignment) => [assignment.displayId, assignment]));
+  return devices.map((display) => {
+    const assignment = existing.get(display.id);
+    return {
+      id: assignment?.id ?? `assignment-${display.id}`,
+      displayId: display.id,
+      defaultFullscreenLayoutId: defaultFullscreenLayoutIdForDisplay(layouts, display, assignment?.defaultFullscreenLayoutId),
+      defaultThemeId: assignment?.defaultThemeId ?? DEFAULT_WIDGET_THEME_ID,
+      schedule: normalizeAssignmentSchedule(assignment?.schedule),
+      fullscreenRules: assignment?.fullscreenRules ?? [],
+      popupRules: assignment?.popupRules ?? []
+    };
+  });
+}
+
 export function normalizeProject(project: Project): Project {
   const themes = (project.themes?.length ? project.themes : DEFAULT_WIDGET_THEMES).map((theme) => ({
     ...theme,
@@ -198,7 +235,7 @@ export function normalizeProject(project: Project): Project {
     ? project.widgetDefinitions
     : BUILT_IN_WIDGET_DEFINITIONS;
   const deviceAssignments = project.deviceAssignments?.length
-    ? project.deviceAssignments
+    ? normalizeDeviceAssignments(project, devices, layoutDefinitions)
     : migrateLegacyAssignments(project, devices, layoutDefinitions);
   return {
     ...project,

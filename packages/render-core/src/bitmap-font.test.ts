@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { FONT_BINARY_BASE64 } from "./generated-font-data.js";
-import { getGlyph, layoutText, registerUserFonts, resolveTextStyle, scaleForFontSize } from "./bitmap-font.js";
+import { getGlyph, layoutText, registerUserFonts, resolveTextStyle, scaleForFontSize, setTextLayoutAdapter } from "./bitmap-font.js";
 
 afterEach(() => {
   registerUserFonts({});
+  setTextLayoutAdapter(undefined);
 });
 
 describe("bitmap font system", () => {
@@ -114,6 +115,30 @@ describe("bitmap font system", () => {
     expect(glyph.height).toBeGreaterThan(0);
   });
 
+  it("falls back to built-in fonts when a configured family is missing", () => {
+    const run = layoutText("Agenda", { family: "missing-font", size: "normal", weight: "regular" });
+    expect(run.width).toBeGreaterThan(0);
+    expect(run.height).toBeGreaterThan(0);
+  });
+
+  it("passes fallback font data to an installed text engine adapter", () => {
+    let regularFontData = "";
+    setTextLayoutAdapter(({ fontFamilyData, text }) => {
+      regularFontData = fontFamilyData.regular ?? "";
+      return {
+        width: text.length,
+        height: 1,
+        ascent: 1,
+        descent: 0,
+        lineHeight: 1,
+        baseline: 1,
+        glyphs: []
+      };
+    });
+    layoutText("A", { family: "missing-font", size: "normal", weight: "regular" });
+    expect(regularFontData).toBe(FONT_BINARY_BASE64["px-sans"].regular);
+  });
+
   it("snaps uploaded font sizes to allowed pixel sizes", () => {
     registerUserFonts({
       "custom-sans": {
@@ -158,5 +183,31 @@ describe("bitmap font system", () => {
     } finally {
       globalThis.Buffer = originalBuffer;
     }
+  });
+
+  it("can delegate layout to an installed text engine adapter", () => {
+    setTextLayoutAdapter(({ text }) => ({
+      width: text.length * 10,
+      height: 11,
+      ascent: 8,
+      descent: 3,
+      lineHeight: 11,
+      baseline: 8,
+      glyphs: Array.from(text).map((char, index) => ({
+        width: 1,
+        height: 1,
+        pixels: [[1]],
+        advance: 10,
+        bearingX: 0,
+        top: 1,
+        char,
+        x: index * 10,
+        y: 7
+      }))
+    }));
+    const run = layoutText("ABC", { family: "px-sans", size: "normal", weight: "regular" });
+    expect(run.width).toBe(30);
+    expect(run.glyphs).toHaveLength(3);
+    expect(run.glyphs[1]?.x).toBe(10);
   });
 });

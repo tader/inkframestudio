@@ -1,0 +1,14 @@
+/Users/thomas/openepaperlink-codex/rust/text-engine/target/release/deps/serde-82c21e2185841200.d: /Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/thomas/openepaperlink-codex/rust/text-engine/target/release/build/serde-1271ce5b4ecddfd5/out/private.rs
+
+/Users/thomas/openepaperlink-codex/rust/text-engine/target/release/deps/libserde-82c21e2185841200.rlib: /Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/thomas/openepaperlink-codex/rust/text-engine/target/release/build/serde-1271ce5b4ecddfd5/out/private.rs
+
+/Users/thomas/openepaperlink-codex/rust/text-engine/target/release/deps/libserde-82c21e2185841200.rmeta: /Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /Users/thomas/openepaperlink-codex/rust/text-engine/target/release/build/serde-1271ce5b4ecddfd5/out/private.rs
+
+/Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/Users/thomas/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/Users/thomas/openepaperlink-codex/rust/text-engine/target/release/build/serde-1271ce5b4ecddfd5/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/thomas/openepaperlink-codex/rust/text-engine/target/release/build/serde-1271ce5b4ecddfd5/out

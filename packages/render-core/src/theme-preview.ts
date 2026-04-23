@@ -1,5 +1,5 @@
 import { PixelBuffer, COLOR_BG, COLOR_FG, COLOR_ACCENT } from "./pixel-buffer.js";
-import type { DisplayType, FontPresetValues, PaletteRole, TextStyle, WidgetTheme } from "./types.js";
+import type { DisplayType, FontPresetValues, PaletteRole, TextColorRole, TextStyle, WidgetTheme } from "./types.js";
 
 export interface ThemePreviewImage {
   width: number;
@@ -17,6 +17,13 @@ function colorForRole(role: PaletteRole): number {
   if (role === "bg") return COLOR_BG;
   if (role === "accent") return COLOR_ACCENT;
   return COLOR_FG;
+}
+
+function textColorForRole(role: TextColorRole | undefined, fallback: PaletteRole): number | undefined {
+  if (role === "transparent") {
+    return undefined;
+  }
+  return colorForRole((role ?? fallback) as PaletteRole);
 }
 
 function rgbaFromPixels(buffer: PixelBuffer, displayType: DisplayType): Uint8ClampedArray {
@@ -105,9 +112,10 @@ export function renderThemePreviewImage(
   const buffer = new PixelBuffer(width, height, COLOR_BG, fontPresets);
   const background = theme.surface.fillRole ? colorForRole(theme.surface.fillRole) : COLOR_BG;
   const border = colorForRole(theme.border.colorRole);
-  const title = colorForRole(theme.text.title);
-  const body = colorForRole(theme.text.body);
-  const value = colorForRole(theme.text.value);
+  const title = textColorForRole(theme.fontRoles?.tiny?.colorRole, theme.text.title);
+  const body = textColorForRole(theme.fontRoles?.normal?.colorRole, theme.text.body);
+  const emphasis = textColorForRole(theme.fontRoles?.normalEmphasis?.colorRole, theme.text.body);
+  const value = textColorForRole(theme.fontRoles?.header?.colorRole, theme.text.value);
   const accent = colorForRole(theme.accentRole);
   const outline = theme.textOutline?.enabled ? colorForRole(theme.textOutline.colorRole) : undefined;
   const outlineThickness = theme.textOutline?.enabled ? Math.max(1, theme.textOutline.thicknessPx ?? 1) : 0;
@@ -120,13 +128,15 @@ export function renderThemePreviewImage(
     }
   }
 
-  drawOutlinedText(buffer, "TINY SAMPLE", 8, 8, {
+  if (title !== undefined) {
+    drawOutlinedText(buffer, "TINY SAMPLE", 8, 8, {
     family: theme.fontRoles?.tiny?.family ?? "px-sans",
     weight: theme.fontRoles?.tiny?.weight ?? "regular",
     slope: theme.fontRoles?.tiny?.slope ?? "roman",
     size: "tiny",
     pixelSize: theme.fontRoles?.tiny?.pixelSize ?? fontPresets.tiny
-  }, title, outline, outlineThickness);
+    }, title, outline, outlineThickness);
+  }
   drawOutlinedText(buffer, "ACCENT", width - 54, 8, {
     family: theme.fontRoles?.tiny?.family ?? "px-sans",
     weight: theme.fontRoles?.tiny?.weight ?? "regular",
@@ -134,27 +144,42 @@ export function renderThemePreviewImage(
     size: "tiny",
     pixelSize: theme.fontRoles?.tiny?.pixelSize ?? fontPresets.tiny
   }, accent, outline, outlineThickness);
-  drawOutlinedText(buffer, "Normal sample text", 8, 28, {
+  if (body !== undefined) {
+    drawOutlinedText(buffer, "Normal sample text", 8, 28, {
     family: theme.fontRoles?.normal?.family ?? "px-sans",
     weight: theme.fontRoles?.normal?.weight ?? "regular",
     slope: theme.fontRoles?.normal?.slope ?? "roman",
     size: "normal",
     pixelSize: theme.fontRoles?.normal?.pixelSize ?? fontPresets.normal
-  }, body, outline, outlineThickness);
-  drawOutlinedText(buffer, "Header 21.5", 8, 54, {
+    }, body, outline, outlineThickness);
+  }
+  if (emphasis !== undefined) {
+    drawOutlinedText(buffer, "Emphasis sample", 8, 42, {
+    family: theme.fontRoles?.normalEmphasis?.family ?? theme.fontRoles?.normal?.family ?? "px-sans",
+    weight: theme.fontRoles?.normalEmphasis?.weight ?? theme.fontRoles?.normal?.weight ?? "bold",
+    slope: theme.fontRoles?.normalEmphasis?.slope ?? theme.fontRoles?.normal?.slope ?? "roman",
+    size: "normal",
+    pixelSize: theme.fontRoles?.normalEmphasis?.pixelSize ?? theme.fontRoles?.normal?.pixelSize ?? fontPresets.normal
+    }, emphasis, outline, outlineThickness);
+  }
+  if (value !== undefined) {
+    drawOutlinedText(buffer, "Header 21.5", 8, 58, {
     family: theme.fontRoles?.header?.family ?? "px-sans",
     weight: theme.fontRoles?.header?.weight ?? "regular",
     slope: theme.fontRoles?.header?.slope ?? "roman",
     size: "header",
     pixelSize: theme.fontRoles?.header?.pixelSize ?? fontPresets.header
-  }, value, outline, outlineThickness);
-  drawOutlinedText(buffer, "body / accent", 8, height - 18, {
+    }, value, outline, outlineThickness);
+  }
+  if (body !== undefined) {
+    drawOutlinedText(buffer, "body / accent", 8, height - 18, {
     family: theme.fontRoles?.tiny?.family ?? "px-sans",
     weight: theme.fontRoles?.tiny?.weight ?? "regular",
     slope: theme.fontRoles?.tiny?.slope ?? "roman",
     size: "tiny",
     pixelSize: theme.fontRoles?.tiny?.pixelSize ?? fontPresets.tiny
-  }, body, outline, outlineThickness);
+    }, body, outline, outlineThickness);
+  }
   drawOutlinedText(buffer, "*", width - 14, height - 22, {
     family: theme.fontRoles?.header?.family ?? "px-sans",
     weight: theme.fontRoles?.header?.weight ?? "regular",

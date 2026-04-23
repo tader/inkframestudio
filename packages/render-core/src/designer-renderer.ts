@@ -10,6 +10,7 @@ import type {
   DataQueryLayoutNode,
   DeviceAssignment,
   DisplayType,
+  FontRole,
   FilterLayoutNode,
   FontPresetValues,
   Frame,
@@ -65,6 +66,13 @@ function roleToColor(role: "bg" | "fg" | "accent"): number {
   if (role === "bg") return COLOR_BG;
   if (role === "accent") return COLOR_ACCENT;
   return COLOR_FG;
+}
+
+function textRoleToColor(role: TextStyle["colorRole"] | undefined, fallback: "bg" | "fg" | "accent"): number | undefined {
+  if (role === "transparent") {
+    return undefined;
+  }
+  return roleToColor((role ?? fallback) as "bg" | "fg" | "accent");
 }
 
 function resolveTheme(project: Project, themeId?: string): WidgetTheme {
@@ -249,18 +257,26 @@ function lineAdvance(lineHeight: number, lineSpacingPx = 0): number {
   return Math.max(1, lineHeight + lineSpacingPx);
 }
 
+function fontRoleToSize(role: FontRole): TextStyle["size"] {
+  if (role === "tiny" || role === "header") {
+    return role;
+  }
+  return "normal";
+}
+
 function primitiveTextStyles(
   node: PrimitiveInstanceNode,
   theme: WidgetTheme
 ): { bodyStyle: Partial<TextStyle>; valueStyle: Partial<TextStyle> } {
-  const fontRole = node.props?.fontRole ?? (node.primitiveType === "number" ? "header" : "normal");
+  const fontRole = (node.props?.fontRole ?? (node.primitiveType === "number" ? "header" : "normal")) as FontRole;
   return {
     bodyStyle: {
       family: theme.fontRoles?.[fontRole]?.family ?? node.props?.bodyTextStyle?.family ?? "px-sans",
       weight: theme.fontRoles?.[fontRole]?.weight ?? node.props?.bodyTextStyle?.weight ?? "regular",
       slope: theme.fontRoles?.[fontRole]?.slope ?? node.props?.bodyTextStyle?.slope ?? "roman",
-      size: node.props?.bodyTextStyle?.size ?? fontRole,
+      size: node.props?.bodyTextStyle?.size ?? fontRoleToSize(fontRole),
       pixelSize: theme.fontRoles?.[fontRole]?.pixelSize,
+      colorRole: node.props?.bodyTextStyle?.colorRole ?? theme.fontRoles?.[fontRole]?.colorRole,
       lineSpacingPx: node.props?.bodyTextStyle?.lineSpacingPx ?? theme.fontRoles?.[fontRole]?.lineSpacingPx,
       topPaddingPx: node.props?.bodyTextStyle?.topPaddingPx ?? theme.fontRoles?.[fontRole]?.topPaddingPx
     },
@@ -268,8 +284,9 @@ function primitiveTextStyles(
       family: theme.fontRoles?.[fontRole]?.family ?? node.props?.valueTextStyle?.family ?? "px-mono-special",
       weight: theme.fontRoles?.[fontRole]?.weight ?? node.props?.valueTextStyle?.weight ?? "regular",
       slope: theme.fontRoles?.[fontRole]?.slope ?? node.props?.valueTextStyle?.slope ?? "roman",
-      size: node.props?.valueTextStyle?.size ?? fontRole,
+      size: node.props?.valueTextStyle?.size ?? fontRoleToSize(fontRole),
       pixelSize: theme.fontRoles?.[fontRole]?.pixelSize,
+      colorRole: node.props?.valueTextStyle?.colorRole ?? theme.fontRoles?.[fontRole]?.colorRole,
       lineSpacingPx: node.props?.valueTextStyle?.lineSpacingPx ?? theme.fontRoles?.[fontRole]?.lineSpacingPx,
       topPaddingPx: node.props?.valueTextStyle?.topPaddingPx ?? theme.fontRoles?.[fontRole]?.topPaddingPx,
       tabularNumbers: node.primitiveType === "number"
@@ -584,7 +601,7 @@ function fitContentHeight(
       ? pickAutoTextStyle(
           buffer,
           { x: 0, y: 0, w: innerWidth, h: 10_000 },
-          { ...bodyStyle, family: theme.autoFitFontFamily ?? bodyStyle.family },
+          bodyStyle,
           text,
           placeholder,
           overflow === "wrap",
@@ -607,7 +624,7 @@ function fitContentHeight(
       ? pickAutoTextStyle(
           buffer,
           { x: 0, y: 0, w: innerWidth, h: 10_000 },
-          { ...valueStyle, family: theme.autoFitFontFamily ?? valueStyle.family },
+          valueStyle,
           display,
           placeholder,
           false
@@ -646,7 +663,7 @@ function rasterizedTextBlock(
   style: Partial<TextStyle>,
   width: number,
   lineSpacingPx: number,
-  fillColor: number,
+  fillColor: number | undefined,
   outlineColor: number | undefined,
   horizontalAlign: "left" | "center" | "right"
 ): { raster: PixelBuffer; minY: number; maxY: number; paintedHeight: number; totalHeight: number } {
@@ -700,7 +717,7 @@ function rasterizedTextBlock(
     }
     for (let y = 0; y < temp.height; y += 1) {
       for (let x = 0; x < temp.width; x += 1) {
-        if (mask.getPixel(x, y) === COLOR_FG) {
+        if (fillColor !== undefined && mask.getPixel(x, y) === COLOR_FG) {
           temp.setPixel(x, y, fillColor);
         }
       }
@@ -1031,7 +1048,7 @@ function drawGlyphOutlinedText(
   text: string,
   frame: PixelFrame,
   style: Partial<TextStyle>,
-  fillColor: number,
+  fillColor: number | undefined,
   outlineColor: number | undefined,
   horizontalAlign: "left" | "center" | "right",
   verticalAlign: "top" | "middle" | "bottom",
@@ -1041,6 +1058,9 @@ function drawGlyphOutlinedText(
   trimGlyphBounds = false,
   clip?: PixelFrame
 ): void {
+  if (fillColor === undefined && outlineColor === undefined) {
+    return;
+  }
   const lines = layoutTextLines(buffer, text, style, frame.w, overflow);
   const metrics = lines.map((line) => buffer.measureText(line, style));
   const totalHeight = totalTextBlockHeight(metrics, lineSpacingPx);
@@ -1113,7 +1133,7 @@ function drawGlyphOutlinedText(
     }
     for (let y = frame.y; y < frame.y + frame.h; y += 1) {
       for (let x = frame.x; x < frame.x + frame.w; x += 1) {
-        if (temp.getPixel(x, y) === maskColor) {
+        if (fillColor !== undefined && temp.getPixel(x, y) === maskColor) {
           buffer.setPixel(x, y, fillColor, clip ? toClipRect(clip) : undefined);
         }
       }
@@ -1296,19 +1316,20 @@ function drawPrimitiveNode(
       ? pickAutoTextStyle(
           buffer,
           innerFrame,
-          { ...bodyStyle, family: theme.autoFitFontFamily ?? bodyStyle.family },
+          bodyStyle,
           text,
           placeholder,
           overflow === "wrap",
           lineSpacingPx
         )
       : { ...bodyStyle, pixelSize: node.props?.fixedPixelSize ?? bodyStyle.pixelSize };
+    const fillColor = textRoleToColor(style.colorRole, theme.text.body);
     drawGlyphOutlinedText(
       buffer,
       text,
       innerFrame,
       style,
-      roleToColor(theme.text.body),
+      fillColor,
       outlineColor,
       (node.props?.horizontalAlign ?? "left") as "left" | "center" | "right",
       (node.props?.verticalAlign ?? "top") as "top" | "middle" | "bottom",
@@ -1332,18 +1353,19 @@ function drawPrimitiveNode(
       ? pickAutoTextStyle(
           buffer,
           innerFrame,
-          { ...valueStyle, family: theme.autoFitFontFamily ?? valueStyle.family },
+          valueStyle,
           display,
           placeholder,
           false
         )
       : { ...valueStyle, pixelSize: node.props?.fixedPixelSize ?? valueStyle.pixelSize };
+    const fillColor = textRoleToColor(style.colorRole, theme.text.value);
     drawGlyphOutlinedText(
       buffer,
       display,
       innerFrame,
       style,
-      roleToColor(theme.text.value),
+      fillColor,
       outlineColor,
       (node.props?.horizontalAlign ?? "center") as "left" | "center" | "right",
       (node.props?.verticalAlign ?? "middle") as "top" | "middle" | "bottom",
@@ -1741,10 +1763,13 @@ export function resolveAssignedLayout(project: Project, displayId: string, data:
   if (!display) {
     throw new Error(`Unknown display ${displayId}`);
   }
-  const assignment = project.deviceAssignments?.find((entry) => entry.displayId === displayId);
-  if (!assignment) {
-    throw new Error(`No assignment for display ${displayId}`);
-  }
+  const assignment = project.deviceAssignments?.find((entry) => entry.displayId === displayId) ?? {
+    id: `implicit-assignment-${display.id}`,
+    displayId: display.id,
+    defaultThemeId: DEFAULT_WIDGET_THEME_ID,
+    fullscreenRules: [],
+    popupRules: []
+  };
   const fullscreenRule = assignment.fullscreenRules
     .slice()
     .sort((left, right) => right.priority - left.priority)
@@ -1757,9 +1782,17 @@ export function resolveAssignedLayout(project: Project, displayId: string, data:
     fullscreenRule && fullscreenRule.action.type === "activate_fullscreen_layout"
       ? fullscreenRule.action.layoutId
       : assignment.defaultFullscreenLayoutId;
-  const layout = project.layoutDefinitions?.find((entry) => entry.id === layoutId);
+  const layout = layoutId
+    ? project.layoutDefinitions?.find((entry) => entry.id === layoutId)
+    : undefined;
+  const fallbackLayout =
+    project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen" && entry.displayTypeId === display.displayTypeId) ??
+    project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen");
   if (!layout) {
-    throw new Error(`Unknown fullscreen layout ${layoutId ?? ""}`);
+    if (!fallbackLayout) {
+      throw new Error(`Unknown fullscreen layout ${layoutId ?? ""}`);
+    }
+    return { layout: fallbackLayout, popup: undefined, assignment, display };
   }
   const popupLayoutId =
     popupRule && popupRule.action.type === "activate_popup_layout"

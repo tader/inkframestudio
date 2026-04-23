@@ -80,6 +80,32 @@ export interface HomeAssistantSettingsResponse extends Omit<HomeAssistantConnect
 
 export interface OpenEpaperLinkAccessPointSettingsResponse extends OpenEpaperLinkAccessPointSettings {}
 
+export interface AssignmentScheduleStatusResponse {
+  assignmentId: string;
+  displayId: string;
+  enabled: boolean;
+  intervalMinutes: number;
+  schedulable: boolean;
+  running: boolean;
+  nextRunAt?: string;
+  lastRunAt?: string;
+  lastCompletedAt?: string;
+  lastResult?: "idle" | "disabled" | "updated" | "skipped_unchanged" | "error";
+  lastError?: string;
+  lastHash?: string;
+}
+
+export interface AssignmentForceUpdateResponse {
+  assignmentId: string;
+  displayId: string;
+  updated: boolean;
+  skipped: boolean;
+  hash?: string;
+  activeScreenId?: string;
+  activeOverlayId?: string;
+  message: string;
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -167,6 +193,21 @@ export function saveProject(project: Project): Promise<Project> {
   return requestJson(`/api/projects/${project.id}`, {
     method: "PUT",
     body: JSON.stringify(project)
+  });
+}
+
+export function fetchAssignmentSchedules(projectId: string): Promise<AssignmentScheduleStatusResponse[]> {
+  return requestJson(`/api/projects/${projectId}/assignment-schedules`);
+}
+
+export function forceAssignmentUpdate(
+  projectId: string,
+  assignmentId: string,
+  project?: Project
+): Promise<AssignmentForceUpdateResponse> {
+  return requestJson(`/api/projects/${projectId}/assignments/${assignmentId}/force-update`, {
+    method: "POST",
+    body: JSON.stringify(project ? { project } : {})
   });
 }
 

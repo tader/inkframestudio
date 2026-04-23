@@ -188,6 +188,27 @@ describe("epaper editor app", () => {
           }
         ]), { status: 200 });
       }
+      if (url.endsWith(`/api/projects/${SAMPLE_PROJECT.id}/assignment-schedules`)) {
+        return new Response(JSON.stringify([{
+          assignmentId: "assignment-virtual-tri296x128-red",
+          displayId: "virtual-tri296x128-red",
+          enabled: false,
+          intervalMinutes: 15,
+          schedulable: false,
+          running: false,
+          lastResult: "disabled"
+        }]), { status: 200 });
+      }
+      if (url.endsWith(`/api/projects/${SAMPLE_PROJECT.id}/assignments/assignment-virtual-tri296x128-red/force-update`)) {
+        return new Response(JSON.stringify({
+          assignmentId: "assignment-virtual-tri296x128-red",
+          displayId: "virtual-tri296x128-red",
+          updated: true,
+          skipped: false,
+          hash: "force-hash",
+          message: "Forced update uploaded."
+        }), { status: 200 });
+      }
       if (url.endsWith(`/api/projects/${SAMPLE_PROJECT.id}/device-preview`)) {
         return new Response(JSON.stringify({
           width: 296,
@@ -286,7 +307,7 @@ describe("epaper editor app", () => {
     expect(element.shadowRoot.textContent).toContain("Display Designer");
     expect(element.shadowRoot.textContent).toContain("Displays");
     expect(element.shadowRoot.textContent).toContain("Display Types");
-    expect(element.shadowRoot.textContent).toContain("Assignments");
+    expect(element.shadowRoot.textContent).not.toContain("Assignments");
     expect(element.shadowRoot.textContent).toContain("Config");
     expect(element.shadowRoot.textContent).toContain("DaFont");
     expect(element.shadowRoot.textContent).toContain("Refresh preview");
@@ -325,7 +346,31 @@ describe("epaper editor app", () => {
     await element.updateComplete;
 
     expect(element.shadowRoot.textContent).toContain("Provider-backed device");
-    expect(element.shadowRoot.textContent).toContain("Upload image to AP");
+    expect(element.shadowRoot.textContent).toContain("Force update now");
+  });
+
+  it("marks discovered displays as already managed after import", async () => {
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    const discoverButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Discover OEL"));
+    discoverButton?.click();
+    await flush();
+    await element.updateComplete;
+
+    const manageButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Manage device"));
+    manageButton?.click();
+    await flush();
+    await element.updateComplete;
+
+    discoverButton?.click();
+    await flush();
+    await element.updateComplete;
+
+    expect(element.shadowRoot.textContent).toContain("Already managed");
+    expect(Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).some((button) => button.textContent?.includes("Manage device"))).toBe(false);
   });
 
   it("adds virtual display from displays page", async () => {
@@ -407,18 +452,17 @@ describe("epaper editor app", () => {
     expect(element.shadowRoot.textContent).toContain("Preview display type");
   });
 
-  it("adds assignment on assignments page", async () => {
+  it("shows assignment editor on displays page and redirects old assignments route", async () => {
     window.location.hash = "#/assignments";
     const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
     document.body.append(element);
     await flush();
     await element.updateComplete;
-
-    const addButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Add assignment"));
-    addButton?.click();
     await flush();
     await element.updateComplete;
 
+    expect(window.location.hash).toBe("#/displays");
+    expect(element.shadowRoot.textContent).toContain("Assignment");
     expect(element.shadowRoot.textContent).toContain("Fullscreen Rules");
   });
 

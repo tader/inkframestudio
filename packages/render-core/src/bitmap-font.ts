@@ -35,6 +35,12 @@ type FontkitGlyph = {
 };
 
 type ResolvedFontFamily = string;
+type EmbeddedFontFamilyData = {
+  regular: string;
+  italic?: string;
+  bold?: string;
+  boldItalic?: string;
+};
 
 interface GlyphCacheEntry {
   width: number;
@@ -83,6 +89,27 @@ const glyphCache = new Map<string, GlyphCacheEntry>();
 const tabularAdvanceCache = new Map<string, number>();
 const layoutCache = new Map<string, TextLayoutRun>();
 const userFontData = new Map<string, { regular?: string; italic?: string; bold?: string; boldItalic?: string; label?: string; allowedPixelSizes?: number[] }>();
+const missingFontFamilyWarnings = new Set<string>();
+let textLayoutAdapter: TextLayoutAdapter | undefined;
+const DEFAULT_FALLBACK_FAMILY: ResolvedFontFamily = "px-sans";
+
+export interface FontFamilyData {
+  regular?: string;
+  italic?: string;
+  bold?: string;
+  boldItalic?: string;
+  label?: string;
+  allowedPixelSizes?: number[];
+}
+
+export interface TextLayoutAdapterRequest {
+  text: string;
+  style: TextStyle;
+  fontPresets: FontPresetValues;
+  fontFamilyData: FontFamilyData;
+}
+
+export type TextLayoutAdapter = (request: TextLayoutAdapterRequest) => TextLayoutRun | undefined;
 
 export const BUILT_IN_FONT_OPTIONS: FontOption[] = [
   { id: "px-sans", label: "PX Sans", source: "built-in", variants: ["regular", "bold"] },
@@ -97,6 +124,11 @@ function clearFontCaches(): void {
   layoutCache.clear();
 }
 
+export function setTextLayoutAdapter(adapter: TextLayoutAdapter | undefined): void {
+  textLayoutAdapter = adapter;
+  clearFontCaches();
+}
+
 export function registerUserFonts(fonts: Record<string, { regular?: string; italic?: string; bold?: string; boldItalic?: string; label?: string; allowedPixelSizes?: number[] }>): void {
   userFontData.clear();
   for (const [id, value] of Object.entries(fonts)) {
@@ -106,7 +138,15 @@ export function registerUserFonts(fonts: Record<string, { regular?: string; ital
 }
 
 function resolveFamily(family: FontFamily): ResolvedFontFamily {
-  return family === "ui-sans" ? "px-sans" : family;
+  const resolved = family === "ui-sans" ? "px-sans" : family;
+  if (userFontData.has(resolved) || FONT_BINARY_BASE64[resolved as keyof typeof FONT_BINARY_BASE64]) {
+    return resolved;
+  }
+  if (!missingFontFamilyWarnings.has(resolved)) {
+    missingFontFamilyWarnings.add(resolved);
+    console.warn(`Unknown font family ${resolved}; falling back to ${DEFAULT_FALLBACK_FAMILY}`);
+  }
+  return DEFAULT_FALLBACK_FAMILY;
 }
 
 function variantKeyFor(weight: FontWeight, slope: FontSlope): FontVariantKey {
@@ -128,11 +168,27 @@ function fontDataFor(family: ResolvedFontFamily, weight: FontWeight, slope: Font
   if (imported) {
     return imported[preferredVariant] ?? imported.regular ?? imported.bold ?? "";
   }
-  const familyData = FONT_BINARY_BASE64[family as keyof typeof FONT_BINARY_BASE64] as { regular: string; italic?: string; bold?: string; boldItalic?: string } | undefined;
-  if (!familyData) {
-    throw new Error(`Unknown font family ${family}`);
-  }
+  const familyData =
+    (FONT_BINARY_BASE64[family as keyof typeof FONT_BINARY_BASE64] as EmbeddedFontFamilyData | undefined) ??
+    (FONT_BINARY_BASE64[DEFAULT_FALLBACK_FAMILY as keyof typeof FONT_BINARY_BASE64] as EmbeddedFontFamilyData);
   return familyData[preferredVariant] ?? familyData.regular;
+}
+
+function fontFamilyDataFor(family: ResolvedFontFamily): FontFamilyData {
+  const imported = userFontData.get(family);
+  if (imported) {
+    return imported;
+  }
+  const familyData = FONT_BINARY_BASE64[family as keyof typeof FONT_BINARY_BASE64] as EmbeddedFontFamilyData | undefined;
+  if (!familyData) {
+    return {};
+  }
+  return {
+    regular: familyData.regular,
+    italic: familyData.italic,
+    bold: familyData.bold,
+    boldItalic: familyData.boldItalic
+  };
 }
 
 function hasRealVariant(family: ResolvedFontFamily, weight: FontWeight, slope: FontSlope): boolean {
@@ -141,7 +197,7 @@ function hasRealVariant(family: ResolvedFontFamily, weight: FontWeight, slope: F
   if (imported) {
     return Boolean(imported[preferredVariant]);
   }
-  const familyData = FONT_BINARY_BASE64[family as keyof typeof FONT_BINARY_BASE64] as { regular: string; italic?: string; bold?: string; boldItalic?: string } | undefined;
+  const familyData = FONT_BINARY_BASE64[family as keyof typeof FONT_BINARY_BASE64] as EmbeddedFontFamilyData | undefined;
   if (!familyData) {
     return false;
   }
@@ -528,6 +584,31 @@ export function layoutText(
         pixels: clonePixels(glyph.pixels)
       }))
     };
+  }
+
+  if (textLayoutAdapter) {
+    const adapted = textLayoutAdapter({
+      text,
+      style: resolved,
+      fontPresets,
+      fontFamilyData: fontFamilyDataFor(resolveFamily(resolved.family))
+    });
+    if (adapted) {
+      layoutCache.set(cacheKey, {
+        ...adapted,
+        glyphs: adapted.glyphs.map((glyph) => ({
+          ...glyph,
+          pixels: clonePixels(glyph.pixels)
+        }))
+      });
+      return {
+        ...adapted,
+        glyphs: adapted.glyphs.map((glyph) => ({
+          ...glyph,
+          pixels: clonePixels(glyph.pixels)
+        }))
+      };
+    }
   }
 
   const font = getFont(resolved.family, resolved.weight, resolved.slope);

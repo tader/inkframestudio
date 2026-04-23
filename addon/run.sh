@@ -2,4 +2,4 @@
 export PORT=8099
 export NODE_ENV=production
 cd /app
-node dist/addon-backend/server.js
+node dist/addon-backend/server.cjs
