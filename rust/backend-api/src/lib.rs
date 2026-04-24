@@ -46,8 +46,7 @@ use routes::providers::{
 };
 use routes::projects::{get_project, list_projects, save_project};
 use routes::previews::{
-    device_preview, font_specimens, layout_inspection_preview, layout_preview, live_data, preview,
-    theme_preview,
+    device_preview, font_specimens, layout_preview, live_data, preview, theme_preview,
 };
 use routes::system::{healthz, list_display_profiles, list_icons};
 use routes::system::{__path_healthz, __path_list_display_profiles, __path_list_icons};
@@ -628,10 +627,6 @@ fn app(state: AppState) -> Router {
         .route(
             "/api/v2/projects/:id/layout-preview",
             post(layout_preview),
-        )
-        .route(
-            "/api/v2/projects/:id/layout-inspection-preview",
-            post(layout_inspection_preview),
         )
         .route(
             "/api/v2/projects/:id/device-preview",

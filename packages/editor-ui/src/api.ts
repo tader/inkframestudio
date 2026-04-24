@@ -289,19 +289,6 @@ export function fetchLayoutPreviewBundle(
   });
 }
 
-export function fetchLayoutInspectionPreview(
-  projectId: string,
-  layoutId: string,
-  popupLayoutId: string | undefined,
-  project: Project,
-  expandCompoundRefs = false
-): Promise<LayoutInspectionPreviewResponse> {
-  return requestJson(`${V2_API_BASE}/projects/${projectId}/layout-inspection-preview`, {
-    method: "POST",
-    body: JSON.stringify({ layoutId, popupLayoutId, project, expandCompoundRefs })
-  });
-}
-
 export function fetchDevicePreview(
   projectId: string,
   displayId: string,

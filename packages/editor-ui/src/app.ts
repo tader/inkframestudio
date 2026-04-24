@@ -12,7 +12,6 @@ import {
   fetchFontSpecimens,
   fetchFonts,
   fetchIcons,
-  fetchLayoutInspectionPreview,
   fetchLayoutPreview,
   fetchLayoutPreviewBundle,
   fetchProject,
@@ -1461,7 +1460,7 @@ export class EpPaperEditorApp extends LitElement {
         : response.inspection;
       return [response.preview, inspection] as const;
     }
-    return [await this.fetchPagePreview(), await this.fetchPageInspection()] as const;
+    return [await this.fetchPagePreview(), undefined] as const;
   }
 
   private ensureSelectedFontPreviewFamily(): void {
@@ -1608,42 +1607,6 @@ export class EpPaperEditorApp extends LitElement {
       return await fetchThemePreview(this.project.id, theme.id, displayTypeId, this.project);
     }
     return undefined;
-  }
-
-  private async fetchPageInspection(): Promise<LayoutInspectionPreviewResponse | undefined> {
-    if (this.activePage !== "widgets" && this.activePage !== "layouts") {
-      return undefined;
-    }
-    if (this.activePage === "layouts") {
-      if (!this.selectedLayoutId) {
-        return undefined;
-      }
-      return await fetchLayoutInspectionPreview(
-        this.project.id,
-        this.selectedLayoutId,
-        undefined,
-        this.projectWithPreviewThemeForLayout(this.selectedLayoutId),
-        false
-      );
-    }
-    const definition = this.selectedWidgetDefinition;
-    if (!definition?.rootNode) {
-      return undefined;
-    }
-    const displayTypeId = this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id;
-    if (!displayTypeId) {
-      return undefined;
-    }
-    const tempLayoutId = "__widget-preview-layout";
-    const tempProject = this.widgetPreviewProject(definition, displayTypeId);
-    const inspection = await fetchLayoutInspectionPreview(this.project.id, tempLayoutId, undefined, tempProject, true);
-    if (inspection.root?.nodeId === "__widget-preview-ref" && inspection.root.children[0]) {
-      return {
-        ...inspection,
-        root: inspection.root.children[0]
-      };
-    }
-    return inspection;
   }
 
   private navigate(page: PageId): void {

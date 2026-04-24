@@ -65,23 +65,6 @@ pub(crate) async fn layout_preview(
     .await
 }
 
-pub(crate) async fn layout_inspection_preview(
-    State(state): State<AppState>,
-    AxumPath(project_id): AxumPath<String>,
-    Json(body): Json<Value>,
-) -> ApiResult<Value> {
-    let project = load_project_for_request(&state, &project_id, Some(&body)).await?;
-    let layout_id = body.get("layoutId").and_then(Value::as_str);
-    let (data, message) = resolve_project_render_data_value(&state, &project, layout_id).await?;
-    let user_fonts = load_user_font_data(&state).await?;
-    let body = inject_live_render_context(body, project, data, user_fonts, message);
-    bridge_json_response(
-        &state,
-        json!({ "op": "layout-inspection-preview", "projectId": project_id, "body": body }),
-    )
-    .await
-}
-
 pub(crate) async fn device_preview(
     State(state): State<AppState>,
     AxumPath(project_id): AxumPath<String>,

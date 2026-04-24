@@ -18,7 +18,6 @@ import { installProjectScriptingRuntime } from "./script-runtime.js";
 type BridgeRequest =
   | { op: "preview"; projectId: string; body?: unknown }
   | { op: "layout-preview"; projectId: string; body?: unknown }
-  | { op: "layout-inspection-preview"; projectId: string; body?: unknown }
   | { op: "device-preview"; projectId: string; body?: unknown }
   | { op: "font-specimens"; projectId: string; body?: unknown }
   | { op: "theme-preview"; projectId: string; body?: unknown }
@@ -218,31 +217,6 @@ async function main(): Promise<void> {
         return;
       }
       process.stdout.write(`${JSON.stringify(renderedResponse(preview, previewData.message))}\n`);
-      return;
-    }
-    case "layout-inspection-preview": {
-      const project = projectFromRequest(request.projectId, request.body);
-      const body = request.body as Record<string, unknown> | undefined;
-      const layoutId = String(body?.layoutId ?? "");
-      const popupLayoutId = typeof body?.popupLayoutId === "string" ? String(body.popupLayoutId) : undefined;
-      const previewData = requiredRenderData(body);
-      const layout = project.layoutDefinitions?.find((entry) => entry.id === layoutId);
-      const popup = popupLayoutId ? project.layoutDefinitions?.find((entry) => entry.id === popupLayoutId) : undefined;
-      if (!layout) {
-        throw new Error(`Unknown layout ${layoutId}`);
-      }
-      process.stdout.write(
-        `${JSON.stringify(
-          inspectLayoutDefinition(
-            project,
-            layout,
-            previewData.data,
-            popup,
-            undefined,
-            Boolean(body?.expandCompoundRefs)
-          )
-        )}\n`
-      );
       return;
     }
     case "device-preview": {

@@ -262,32 +262,6 @@ describe("epaper editor app", () => {
           rgba: new Array(296 * 128 * 4).fill(255)
         }), { status: 200 });
       }
-      if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/layout-inspection-preview`)) {
-        return new Response(JSON.stringify({
-          width: 296,
-          height: 128,
-          root: {
-            nodeId: "root",
-            nodeType: "stack",
-            label: "stack",
-            frame: { x: 0, y: 0, w: 296, h: 128 },
-            contentFrame: { x: 0, y: 0, w: 296, h: 128 },
-            children: [
-              {
-                nodeId: "child-text",
-                nodeType: "primitive_instance",
-                label: "text",
-                frame: { x: 0, y: 0, w: 296, h: 64 },
-                contentFrame: { x: 4, y: 4, w: 288, h: 56 },
-                children: [],
-                isContainer: false
-              }
-            ],
-            isContainer: true,
-            stackAxis: "vertical"
-          }
-        }), { status: 200 });
-      }
       if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}`) && init?.method === "PUT") {
         return new Response(JSON.stringify({ ...SAMPLE_PROJECT, version: SAMPLE_PROJECT.version + 1 }), { status: 200 });
       }
