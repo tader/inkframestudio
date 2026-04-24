@@ -19,7 +19,6 @@
     "express": "^4.21.2",
     "fontkit": "^2.0.4",
     "lit": "^3.2.1",
-    "monaco-editor": "^0.55.1",
     "pngjs": "^7.0.0"
   },
   "devDependencies": {
