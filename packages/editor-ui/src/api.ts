@@ -57,26 +57,6 @@ export interface FontSpecimenResponse {
   }>;
 }
 
-export interface DaFontEntry {
-  id: string;
-  name: string;
-  author?: string;
-  detailUrl: string;
-  downloadUrl: string;
-  previewUrl: string;
-  pixelSize?: number;
-  licenseCategory?: string;
-  downloadSizeLabel?: string;
-}
-
-export interface DaFontPageResponse {
-  page: number;
-  totalPages: number;
-  hasPreviousPage: boolean;
-  hasNextPage: boolean;
-  entries: DaFontEntry[];
-}
-
 export interface AssignmentScheduleStatusResponse {
   assignmentId: string;
   displayId: string;
@@ -172,17 +152,6 @@ export function updateFontMetadata(id: string, allowedPixelSizes: number[]): Pro
   return requestJson(`${V2_API_BASE}/fonts/${id}`, {
     method: "PATCH",
     body: JSON.stringify({ allowedPixelSizes })
-  });
-}
-
-export function fetchDaFontPage(page = 1): Promise<DaFontPageResponse> {
-  return requestJson(`${V2_API_BASE}/dafont?page=${page}`);
-}
-
-export function importDaFontFont(entry: DaFontEntry): Promise<FontOption | null> {
-  return requestJson(`${V2_API_BASE}/dafont/import`, {
-    method: "POST",
-    body: JSON.stringify(entry)
   });
 }
 

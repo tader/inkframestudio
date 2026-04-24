@@ -6,7 +6,6 @@ import {
   deleteFont,
   fetchProviderKinds,
   fetchProviderInstances,
-  fetchDaFontPage,
   fetchAssignmentSchedules,
   fetchDevicePreview,
   fetchDiscoveredDisplays,
@@ -23,7 +22,6 @@ import {
   fetchProjects,
   fetchProviderEntities,
   fetchThemePreview,
-  importDaFontFont as importDaFontFontFromApi,
   importFont,
   rescanFonts,
   saveProviderInstance,
@@ -40,7 +38,6 @@ import {
   type AssignmentScheduleStatusResponse,
   type HomeAssistantSettingsResponse,
   type FontSpecimenResponse,
-  type DaFontEntry,
   type LayoutInspectionPreviewResponse,
   type LayoutPreviewBundleResponse,
   type OpenEpaperLinkAccessPointSettingsResponse,
@@ -59,17 +56,16 @@ import {
 } from "./structure-preview-model.js";
 import { buildNodeTree, getNodeById, isContainerNode, isDescendant, moveNode, moveNodeAfter, moveNodeBefore, moveNodeToGridCell, removeNode } from "./tree-model.js";
 
-type PageId = "displays" | "display-types" | "widgets" | "layouts" | "themes" | "config" | "dafont";
+type PageId = "displays" | "display-types" | "widgets" | "layouts" | "themes" | "config";
 
-const PAGE_ORDER: PageId[] = ["displays", "display-types", "widgets", "layouts", "themes", "config", "dafont"];
+const PAGE_ORDER: PageId[] = ["displays", "display-types", "widgets", "layouts", "themes", "config"];
 const PAGE_LABELS: Record<PageId, string> = {
   displays: "Displays",
   "display-types": "Display Types",
   widgets: "Widgets",
   layouts: "Layouts",
   themes: "Themes",
-  config: "Config",
-  dafont: "DaFont"
+  config: "Config"
 };
 
 type FontSpecimenFamilyView = FontSpecimenResponse["families"][number] & {
@@ -879,14 +875,6 @@ export class EpPaperEditorApp extends LitElement {
     uploadStatusMessage: { state: true },
     assignmentScheduleStatuses: { state: true },
     selectedPreviewTagMac: { state: true },
-    dafontEntries: { state: true },
-    dafontPage: { state: true },
-    dafontTotalPages: { state: true },
-    dafontError: { state: true },
-    dafontLoading: { state: true },
-    selectedDaFontId: { state: true },
-    dafontImportingId: { state: true },
-    dafontImportMessage: { state: true },
     layoutInspection: { state: true },
     structureHoveredNodeId: { state: true },
     structureDraggedNodeId: { state: true },
@@ -1150,18 +1138,6 @@ export class EpPaperEditorApp extends LitElement {
     .font-preview-card {
       margin-bottom: 12px;
     }
-    .dafont-card {
-      border: 2px solid #111;
-      background: #fff;
-      padding: 10px;
-      margin-bottom: 10px;
-    }
-    .dafont-preview {
-      max-width: 100%;
-      border: 2px solid #111;
-      background: #fff;
-      display: block;
-    }
     .pill {
       display: inline-block;
       border: 1px solid #111;
@@ -1228,14 +1204,6 @@ export class EpPaperEditorApp extends LitElement {
   declare private uploadStatusMessage: string;
   declare private assignmentScheduleStatuses: Record<string, AssignmentScheduleStatusResponse>;
   declare private selectedPreviewTagMac: string;
-  declare private dafontEntries: DaFontEntry[];
-  declare private dafontPage: number;
-  declare private dafontTotalPages: number;
-  declare private dafontError: string;
-  declare private dafontLoading: boolean;
-  declare private selectedDaFontId: string;
-  declare private dafontImportingId: string;
-  declare private dafontImportMessage: string;
   declare private layoutInspection: LayoutInspectionPreviewResponse | null;
   declare private structureHoveredNodeId: string;
   declare private structureDraggedNodeId: string;
@@ -1294,14 +1262,6 @@ export class EpPaperEditorApp extends LitElement {
     this.uploadStatusMessage = "";
     this.assignmentScheduleStatuses = {};
     this.selectedPreviewTagMac = "";
-    this.dafontEntries = [];
-    this.dafontPage = 1;
-    this.dafontTotalPages = 1;
-    this.dafontError = "";
-    this.dafontLoading = false;
-    this.selectedDaFontId = "";
-    this.dafontImportingId = "";
-    this.dafontImportMessage = "";
     this.layoutInspection = null;
     this.structureHoveredNodeId = "";
     this.structureDraggedNodeId = "";
@@ -1332,9 +1292,6 @@ export class EpPaperEditorApp extends LitElement {
     }
     if (this.activePage === "config") {
       void this.refreshFontSpecimens();
-    }
-    if (this.activePage === "dafont") {
-      void this.loadDaFontPage(this.dafontPage);
     }
     void this.refreshPreview();
   };
@@ -1387,9 +1344,6 @@ export class EpPaperEditorApp extends LitElement {
     if (this.activePage === "config") {
       this.ensureSelectedFontPreviewFamily();
       void this.refreshFontSpecimens();
-    }
-    if (this.activePage === "dafont") {
-      await this.loadDaFontPage(this.dafontPage);
     }
   }
 
@@ -1616,44 +1570,6 @@ export class EpPaperEditorApp extends LitElement {
       if (requestId === this.fontSpecimenRequestId) {
         this.fontSpecimenLoading = false;
       }
-    }
-  }
-
-  private async loadDaFontPage(page = 1): Promise<void> {
-    this.dafontLoading = true;
-    this.dafontError = "";
-    try {
-      const response = await fetchDaFontPage(page);
-      this.dafontEntries = response.entries ?? [];
-      this.dafontPage = response.page;
-      this.dafontTotalPages = response.totalPages;
-      this.selectedDaFontId = this.dafontEntries.some((entry) => entry.id === this.selectedDaFontId)
-        ? this.selectedDaFontId
-        : this.dafontEntries[0]?.id ?? "";
-      this.dafontImportMessage = "";
-    } catch (error) {
-      this.dafontEntries = [];
-      this.dafontError = error instanceof Error ? error.message : "DaFont load failed.";
-    } finally {
-      this.dafontLoading = false;
-    }
-  }
-
-  private async importSelectedDaFont(entry: DaFontEntry): Promise<void> {
-    this.dafontImportingId = entry.id;
-    this.dafontImportMessage = "";
-    try {
-      await importDaFontFontFromApi(entry);
-      this.fonts = await fetchFonts();
-      this.ensureSelectedFontPreviewFamily();
-      this.dafontImportMessage = `Imported ${entry.name}`;
-      if (this.activePage === "config") {
-        void this.refreshFontSpecimens();
-      }
-    } catch (error) {
-      this.dafontImportMessage = error instanceof Error ? error.message : "DaFont import failed.";
-    } finally {
-      this.dafontImportingId = "";
     }
   }
 
@@ -2586,10 +2502,6 @@ export class EpPaperEditorApp extends LitElement {
     return this.discoveredDisplays.filter((candidate) => candidate.providerId === "openepaperlink-ap");
   }
 
-  private get selectedDaFontEntry(): DaFontEntry | undefined {
-    return this.dafontEntries.find((entry) => entry.id === this.selectedDaFontId);
-  }
-
   private get previewUploadCandidates(): DiscoveredDisplayCandidate[] {
     const matches = this.accessPointTagCandidates.filter((candidate) => {
       const displayType = candidate.suggestedDisplayType;
@@ -2855,27 +2767,6 @@ export class EpPaperEditorApp extends LitElement {
         </div>
       `;
     }
-    if (this.activePage === "dafont") {
-      return html`
-        <div class="section">
-          <h2>DaFont</h2>
-          <div class="row">
-            <button ?disabled=${this.dafontPage <= 1 || this.dafontLoading} @click=${() => void this.loadDaFontPage(this.dafontPage - 1)}>Prev</button>
-            <button ?disabled=${this.dafontLoading || this.dafontPage >= this.dafontTotalPages} @click=${() => void this.loadDaFontPage(this.dafontPage + 1)}>Next</button>
-            <span class="muted">Page ${this.dafontPage} / ${this.dafontTotalPages}</span>
-          </div>
-          ${this.dafontError ? html`<div class="status-error">${this.dafontError}</div>` : nothing}
-          ${this.dafontLoading ? html`<div class="muted">Loading…</div>` : nothing}
-          ${this.dafontEntries.map((entry) => html`
-            <div class="row">
-              <button class="item-button ${entry.id === this.selectedDaFontId ? "active" : ""}" @click=${() => { this.selectedDaFontId = entry.id; }}>
-                ${entry.name}
-              </button>
-            </div>
-          `)}
-        </div>
-      `;
-    }
     return html``;
   }
 
@@ -2958,25 +2849,6 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private renderPreviewPanel() {
-    if (this.activePage === "dafont") {
-      const entry = this.selectedDaFontEntry;
-      return html`
-        <div class="section">
-          <h2>Preview</h2>
-          ${entry
-            ? html`
-                <div class="muted">${entry.name}</div>
-                ${entry.pixelSize ? html`<div class="muted">Recommended ${entry.pixelSize}px and multiples</div>` : nothing}
-              `
-            : html`<div class="muted">No selection.</div>`}
-        </div>
-        <div class="preview-body">
-          ${entry
-            ? html`<img class="dafont-preview" src=${entry.previewUrl} alt=${entry.name} />`
-            : html`<div class="muted">No preview for this page.</div>`}
-        </div>
-      `;
-    }
     const effectiveScale = this.previewCanvasScale();
     const uploadCandidates = this.previewUploadCandidates;
     const effectivePreviewTagMac = this.effectivePreviewTagMac;
@@ -4934,48 +4806,6 @@ export class EpPaperEditorApp extends LitElement {
               ? nothing
               : html`<div class="muted">No imported font previews yet.</div>`}
           </div>
-        </div>
-      `;
-    }
-
-    if (this.activePage === "dafont") {
-      const entry = this.selectedDaFontEntry;
-      return html`
-        <div class="detail">
-          <div class="section">
-            <h2>DaFont Browser</h2>
-            <div class="muted">Bitmap page import. ZIP/direct font handled server-side.</div>
-          </div>
-          ${entry
-            ? html`
-                <div class="dafont-card">
-                  <h3>${entry.name}</h3>
-                  ${entry.author ? html`<div class="muted">by ${entry.author}</div>` : nothing}
-                  <div class="row">
-                    ${typeof entry.pixelSize === "number" ? html`<span class="pill">${entry.pixelSize}px base</span>` : nothing}
-                    ${entry.licenseCategory ? html`<span class="pill">${entry.licenseCategory}</span>` : nothing}
-                    ${entry.downloadSizeLabel ? html`<span class="pill">${entry.downloadSizeLabel}</span>` : nothing}
-                  </div>
-                  <div class="row">
-                    <a href=${entry.detailUrl} target="_blank" rel="noreferrer">Open detail</a>
-                    <a href=${entry.downloadUrl} target="_blank" rel="noreferrer">Open download</a>
-                  </div>
-                  <div class="muted">
-                    Import whitelists ${entry.pixelSize ? `${entry.pixelSize}px multiples` : "all sizes"}.
-                  </div>
-                  <div class="row">
-                    <button
-                      class="primary"
-                      ?disabled=${this.dafontImportingId === entry.id}
-                      @click=${() => void this.importSelectedDaFont(entry)}
-                    >
-                      ${this.dafontImportingId === entry.id ? "Importing…" : "Import"}
-                    </button>
-                  </div>
-                  ${this.dafontImportMessage ? html`<div class="muted">${this.dafontImportMessage}</div>` : nothing}
-                </div>
-              `
-            : html`<div class="muted">Select DaFont entry.</div>`}
         </div>
       `;
     }

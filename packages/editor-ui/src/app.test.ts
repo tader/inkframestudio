@@ -143,39 +143,6 @@ describe("epaper editor app", () => {
           }]
         }), { status: 200 });
       }
-      if (url.includes("/api/v2/dafont?page=")) {
-        return new Response(JSON.stringify({
-          page: 1,
-          totalPages: 3,
-          hasPreviousPage: false,
-          hasNextPage: true,
-          entries: [{
-            id: "minecraft",
-            name: "Minecraft",
-            author: "Craftron Gaming",
-            detailUrl: "https://www.dafont.com/minecraft.font?af=on",
-            downloadUrl: "https://dl.dafont.com/dl/?f=minecraft",
-            previewUrl: "https://www.dafont.com/img/preview/m/i/minecraft0.png",
-            pixelSize: 16,
-            licenseCategory: "100% Free",
-            downloadSizeLabel: "5 K"
-          }]
-        }), { status: 200 });
-      }
-      if (url.endsWith("/api/v2/dafont/import")) {
-        return new Response(JSON.stringify({
-          id: "minecraft",
-          label: "Minecraft",
-          source: "user",
-          importSource: "dafont",
-          variants: ["regular"],
-          allowedPixelSizes: [16, 32, 48, 64],
-          declaredPixelSize: 16,
-          licenseCategory: "100% Free",
-          sourceUrl: "https://www.dafont.com/minecraft.font?af=on",
-          previewUrl: "https://www.dafont.com/img/preview/m/i/minecraft0.png"
-        }), { status: 201 });
-      }
       if (url.endsWith("/api/v2/provider-instances/home-assistant-default/entities")) {
         return new Response(
           JSON.stringify([{ entityId: "sensor.temp", friendlyName: "Temp", domain: "sensor", unit: "C" }]),
@@ -417,7 +384,6 @@ describe("epaper editor app", () => {
     expect(element.shadowRoot.textContent).toContain("Display Types");
     expect(element.shadowRoot.textContent).not.toContain("Assignments");
     expect(element.shadowRoot.textContent).toContain("Config");
-    expect(element.shadowRoot.textContent).toContain("DaFont");
     expect(element.shadowRoot.textContent).toContain("Refresh preview");
   });
 
@@ -653,27 +619,6 @@ describe("epaper editor app", () => {
     expect(element.shadowRoot.textContent).toContain("Config");
     expect(element.shadowRoot.textContent).toContain("Fonts");
     expect(element.shadowRoot.textContent).toContain("Home Assistant");
-  });
-
-  it("shows DaFont page and imports selected font", async () => {
-    window.location.hash = "#/dafont";
-    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
-    document.body.append(element);
-    await flush();
-    await element.updateComplete;
-    await flush();
-    await element.updateComplete;
-
-    expect(element.shadowRoot.textContent).toContain("DaFont Browser");
-    expect(element.shadowRoot.textContent).toContain("Minecraft");
-    expect(element.shadowRoot.textContent).toContain("100% Free");
-
-    const importButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.trim() === "Import");
-    importButton?.click();
-    await flush();
-    await element.updateComplete;
-
-    expect(element.shadowRoot.textContent).toContain("Imported Minecraft");
   });
 
   it("shows preview upload selector for matching ap tags", async () => {
