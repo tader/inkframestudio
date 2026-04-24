@@ -25,6 +25,10 @@ struct ProjectView {
     font_presets: FontPresetValues,
     #[serde(rename = "layoutDefinitions")]
     layout_definitions: Vec<LayoutDefinition>,
+    #[serde(default)]
+    devices: Vec<ManagedDisplay>,
+    #[serde(rename = "deviceAssignments", default)]
+    device_assignments: Vec<DeviceAssignment>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -112,6 +116,29 @@ struct LayoutDefinition {
     display_type_id: String,
     #[serde(rename = "rootNode")]
     root_node: Option<Node>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedDisplay {
+    id: String,
+    #[serde(rename = "displayTypeId")]
+    display_type_id: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceAssignment {
+    #[serde(rename = "displayId")]
+    display_id: String,
+    #[serde(rename = "defaultFullscreenLayoutId")]
+    default_fullscreen_layout_id: Option<String>,
+    #[serde(rename = "defaultThemeId")]
+    default_theme_id: Option<String>,
+    #[serde(rename = "fullscreenRules", default)]
+    fullscreen_rules: Vec<Value>,
+    #[serde(rename = "popupRules", default)]
+    popup_rules: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -216,6 +243,17 @@ struct IndexedCanvas {
     width: u32,
     height: u32,
     pixels: Vec<u8>,
+}
+
+pub(crate) struct NativeRenderedPreview {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) hash: String,
+    pub(crate) active_screen_id: String,
+    pub(crate) active_overlay_id: Option<String>,
+    pub(crate) data_source_message: Option<String>,
+    pub(crate) script_warnings: Option<Vec<String>>,
+    pub(crate) png_bytes: Vec<u8>,
 }
 
 impl IndexedCanvas {
@@ -690,25 +728,13 @@ fn render_node(
     }
 }
 
-pub(crate) fn try_render_layout_preview_value(
+fn render_layout_preview(
     project_value: &Value,
     user_fonts_value: &Value,
-    body: &Value,
     data_value: &Value,
-) -> Result<Option<Value>, ApiError> {
-    if body.get("includeInspection").and_then(Value::as_bool).unwrap_or(false) {
-        return Ok(None);
-    }
-    if body.get("popupLayoutId").and_then(Value::as_str).is_some() {
-        return Ok(None);
-    }
-    if body.get("displayId").and_then(Value::as_str).is_some() {
-        return Ok(None);
-    }
-    let layout_id = match body.get("layoutId").and_then(Value::as_str) {
-        Some(value) => value,
-        None => return Ok(None),
-    };
+    layout_id: &str,
+    data_source_message: Option<String>,
+) -> Result<Option<NativeRenderedPreview>, ApiError> {
     let project: ProjectView = serde_json::from_value(project_value.clone())
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let user_fonts: HashMap<String, RuntimeFontFamilyData> =
@@ -760,12 +786,103 @@ pub(crate) fn try_render_layout_preview_value(
         rgba[offset + 2] = b;
         rgba[offset + 3] = 255;
     }
-    let png = rgba_to_png(&rgba, display_type.width, display_type.height)?;
-    Ok(Some(json!({
-        "width": display_type.width,
-        "height": display_type.height,
-        "hash": format!("native-layout:{}:{}:{}", layout.id, display_type.id, base64::engine::general_purpose::STANDARD.encode(&png[..png.len().min(24)])),
-        "activeScreenId": layout.id,
-        "pngBase64": base64::engine::general_purpose::STANDARD.encode(png),
-    })))
+    let png_bytes = rgba_to_png(&rgba, display_type.width, display_type.height)?;
+    Ok(Some(NativeRenderedPreview {
+        width: display_type.width,
+        height: display_type.height,
+        hash: format!(
+            "native-layout:{}:{}:{}",
+            layout.id,
+            display_type.id,
+            base64::engine::general_purpose::STANDARD.encode(&png_bytes[..png_bytes.len().min(24)])
+        ),
+        active_screen_id: layout.id.clone(),
+        active_overlay_id: None,
+        data_source_message,
+        script_warnings: None,
+        png_bytes,
+    }))
+}
+
+pub(crate) fn preview_value(rendered: &NativeRenderedPreview) -> Value {
+    json!({
+        "width": rendered.width,
+        "height": rendered.height,
+        "hash": rendered.hash,
+        "activeScreenId": rendered.active_screen_id,
+        "activeOverlayId": rendered.active_overlay_id,
+        "dataSourceMessage": rendered.data_source_message,
+        "scriptWarnings": rendered.script_warnings,
+        "pngBase64": base64::engine::general_purpose::STANDARD.encode(&rendered.png_bytes),
+    })
+}
+
+pub(crate) fn try_render_layout_preview_value(
+    project_value: &Value,
+    user_fonts_value: &Value,
+    body: &Value,
+    data_value: &Value,
+) -> Result<Option<Value>, ApiError> {
+    if body.get("includeInspection").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(None);
+    }
+    if body.get("popupLayoutId").and_then(Value::as_str).is_some() {
+        return Ok(None);
+    }
+    if body.get("displayId").and_then(Value::as_str).is_some() {
+        return Ok(None);
+    }
+    let layout_id = match body.get("layoutId").and_then(Value::as_str) {
+        Some(value) => value,
+        None => return Ok(None),
+    };
+    Ok(render_layout_preview(project_value, user_fonts_value, data_value, layout_id, None)?
+        .map(|rendered| preview_value(&rendered)))
+}
+
+pub(crate) fn try_render_assigned_preview(
+    project_value: &Value,
+    user_fonts_value: &Value,
+    data_value: &Value,
+    display_id: &str,
+    data_source_message: Option<String>,
+) -> Result<Option<NativeRenderedPreview>, ApiError> {
+    let project: ProjectView = serde_json::from_value(project_value.clone())
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let display = match project.devices.iter().find(|display| display.id == display_id) {
+        Some(display) => display,
+        None => return Ok(None),
+    };
+    let assignment = project
+        .device_assignments
+        .iter()
+        .find(|assignment| assignment.display_id == display_id);
+    let Some(assignment) = assignment else {
+        return Ok(None);
+    };
+    if !assignment.fullscreen_rules.is_empty() || !assignment.popup_rules.is_empty() {
+        return Ok(None);
+    }
+    let layout_id = assignment
+        .default_fullscreen_layout_id
+        .as_deref()
+        .or_else(|| {
+            project
+                .layout_definitions
+                .iter()
+                .find(|layout| layout.display_type_id == display.display_type_id)
+                .map(|layout| layout.id.as_str())
+        });
+    let Some(layout_id) = layout_id else {
+        return Ok(None);
+    };
+    let rendered =
+        render_layout_preview(project_value, user_fonts_value, data_value, layout_id, data_source_message)?;
+    let Some(mut rendered) = rendered else {
+        return Ok(None);
+    };
+    if let Some(theme_id) = &assignment.default_theme_id {
+        rendered.hash = format!("{}:{theme_id}", rendered.hash);
+    }
+    Ok(Some(rendered))
 }

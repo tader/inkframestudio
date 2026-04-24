@@ -2,6 +2,7 @@ use axum::{
     extract::{Path as AxumPath, State},
     Json,
 };
+use base64::Engine;
 use serde_json::{json, Value};
 
 use crate::{
@@ -89,7 +90,16 @@ pub(crate) async fn device_preview(
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::bad_request("displayId missing"))?;
     let rendered = render_assigned_live(&state, &project_id, &project, display_id).await?;
-    Ok(Json(bridge_render_preview_value(&rendered)?))
+    Ok(Json(serde_json::json!({
+        "width": rendered.width,
+        "height": rendered.height,
+        "hash": rendered.hash,
+        "activeScreenId": rendered.active_screen_id,
+        "activeOverlayId": rendered.active_overlay_id,
+        "dataSourceMessage": rendered.data_source_message,
+        "scriptWarnings": rendered.script_warnings,
+        "pngBase64": base64::engine::general_purpose::STANDARD.encode(&rendered.png_bytes),
+    })))
 }
 
 pub(crate) async fn font_specimens(

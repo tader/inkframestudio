@@ -3,13 +3,25 @@ use serde_json::{json, Value};
 use tokio::time::{sleep, Duration};
 
 use crate::{
-    app::AppState, bridge_render_to_png_bytes, display_provider, find_provider_instance, load_user_font_data, now_ms,
+    app::AppState, display_provider, find_provider_instance, load_user_font_data,
+    native_layout_preview::try_render_assigned_preview, now_ms,
     openepaperlink_settings_from_instance, project_file_path, read_json_file, read_settings,
     png_to_jpeg, routes::projects::list_projects, run_bridge_value,
     services::render_data::resolve_project_render_data_value, upload_image_to_access_point, ApiError,
     AssignmentConfig, AssignmentForceUpdateResponse,
     AssignmentScheduleStatusResponse, BridgeRenderResponse, ProjectSummary, SchedulerState, StoredSettings,
 };
+
+pub(crate) struct RenderedPreviewOutput {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) hash: String,
+    pub(crate) active_screen_id: String,
+    pub(crate) active_overlay_id: Option<String>,
+    pub(crate) data_source_message: Option<String>,
+    pub(crate) script_warnings: Option<Vec<String>>,
+    pub(crate) png_bytes: Vec<u8>,
+}
 
 fn string_at(value: &Value, path: &[&str]) -> Option<String> {
     let mut current = value;
@@ -156,10 +168,24 @@ pub(crate) async fn render_assigned_live(
     project_id: &str,
     project: &Value,
     display_id: &str,
-) -> Result<BridgeRenderResponse, ApiError> {
+) -> Result<RenderedPreviewOutput, ApiError> {
     let (data, message) = resolve_project_render_data_value(state, project, None).await?;
     let user_fonts = load_user_font_data(state).await?;
-    serde_json::from_value(
+    if let Some(rendered) =
+        try_render_assigned_preview(project, &user_fonts, &data, display_id, message.clone())?
+    {
+        return Ok(RenderedPreviewOutput {
+            width: rendered.width,
+            height: rendered.height,
+            hash: rendered.hash,
+            active_screen_id: rendered.active_screen_id,
+            active_overlay_id: rendered.active_overlay_id,
+            data_source_message: rendered.data_source_message,
+            script_warnings: rendered.script_warnings,
+            png_bytes: rendered.png_bytes,
+        });
+    }
+    let bridged: BridgeRenderResponse = serde_json::from_value(
         run_bridge_value(
             state,
             json!({
@@ -176,7 +202,22 @@ pub(crate) async fn render_assigned_live(
         )
         .await?,
     )
-    .map_err(|error| ApiError::internal(error.to_string()))
+    .map_err(|error| ApiError::internal(error.to_string()))?;
+    let hash = bridged.hash.clone();
+    let active_screen_id = bridged.active_screen_id.clone();
+    let active_overlay_id = bridged.active_overlay_id.clone();
+    let data_source_message = bridged.data_source_message.clone();
+    let script_warnings = bridged.script_warnings.clone();
+    Ok(RenderedPreviewOutput {
+        width: bridged.width,
+        height: bridged.height,
+        hash,
+        active_screen_id,
+        active_overlay_id,
+        data_source_message,
+        script_warnings,
+        png_bytes: crate::bridge_render_to_png_bytes(&bridged)?,
+    })
 }
 
 pub(crate) async fn run_assignment_update(
@@ -251,7 +292,7 @@ pub(crate) async fn run_assignment_update(
                 message: "Skipped unchanged image.".into(),
             });
         }
-        let jpeg = png_to_jpeg(&bridge_render_to_png_bytes(&rendered)?)?;
+        let jpeg = png_to_jpeg(&rendered.png_bytes)?;
         upload_image_to_access_point(
             &state.http,
             &settings,
@@ -358,7 +399,7 @@ pub(crate) async fn upload_device_image_for_display(
         ));
     }
     let rendered = render_assigned_live(state, project_id, project, display_id).await?;
-    let jpeg = png_to_jpeg(&bridge_render_to_png_bytes(&rendered)?)?;
+    let jpeg = png_to_jpeg(&rendered.png_bytes)?;
     let provider_ref = display
         .get("providerDeviceRef")
         .or_else(|| display.get("providerRef"))
