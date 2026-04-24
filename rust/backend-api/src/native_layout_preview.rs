@@ -32,6 +32,8 @@ struct ProjectView {
     font_presets: FontPresetValues,
     #[serde(rename = "layoutDefinitions")]
     layout_definitions: Vec<LayoutDefinition>,
+    #[serde(rename = "widgetDefinitions", default)]
+    widget_definitions: Vec<WidgetDefinition>,
     #[serde(default)]
     devices: Vec<ManagedDisplay>,
     #[serde(rename = "deviceAssignments", default)]
@@ -224,6 +226,49 @@ struct WidgetProps {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CompoundInputDefinition {
+    id: String,
+    name: String,
+    #[serde(rename = "valueType")]
+    value_type: String,
+    #[serde(rename = "defaultValue")]
+    default_value: Option<Value>,
+    #[serde(rename = "previewValue")]
+    preview_value: Option<Value>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WidgetDefinition {
+    id: String,
+    #[allow(dead_code)]
+    name: String,
+    kind: String,
+    #[serde(rename = "inputSchema", default)]
+    input_schema: Vec<CompoundInputDefinition>,
+    #[serde(rename = "rootNode")]
+    root_node: Option<Node>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CompoundRefNode {
+    #[allow(dead_code)]
+    id: String,
+    #[serde(rename = "definitionId")]
+    definition_id: String,
+    #[serde(rename = "inputBindings", default)]
+    input_bindings: HashMap<String, String>,
+    #[serde(rename = "inputValues", default)]
+    input_values: HashMap<String, Value>,
+    #[serde(default)]
+    style: LayoutStyle,
+    width: Option<SizeSpec>,
+    height: Option<SizeSpec>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ScriptNode {
     #[allow(dead_code)]
     id: String,
@@ -289,6 +334,7 @@ enum Node {
         width: Option<SizeSpec>,
         height: Option<SizeSpec>,
     },
+    CompoundRef(CompoundRefNode),
     Script(ScriptNode),
     IfElse(IfElseNode),
     PrimitiveInstance {
@@ -434,10 +480,10 @@ fn node_supported(node: &Node) -> bool {
             if unsupported_border(style) {
                 return false;
             }
-            if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
+            if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content") | Some("fit_glyph_bounds") | Some("intrinsic_font_height")) {
                 return false;
             }
-            if !matches!(height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
+            if !matches!(height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content") | Some("fit_glyph_bounds") | Some("intrinsic_font_height")) {
                 return false;
             }
             children.iter().all(node_supported)
@@ -452,10 +498,10 @@ fn node_supported(node: &Node) -> bool {
             if unsupported_border(style) {
                 return false;
             }
-            if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
+            if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content") | Some("fit_glyph_bounds") | Some("intrinsic_font_height")) {
                 return false;
             }
-            if !matches!(height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
+            if !matches!(height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content") | Some("fit_glyph_bounds") | Some("intrinsic_font_height")) {
                 return false;
             }
             children.iter().all(node_supported)
@@ -472,15 +518,22 @@ fn node_supported(node: &Node) -> bool {
             if unsupported_border(style) || rows.is_empty() || columns.is_empty() {
                 return false;
             }
-            if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
+            if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content") | Some("fit_glyph_bounds") | Some("intrinsic_font_height")) {
                 return false;
             }
-            if !matches!(height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
+            if !matches!(height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content") | Some("fit_glyph_bounds") | Some("intrinsic_font_height")) {
                 return false;
             }
             rows.iter().all(|track| matches!(track.size.mode.as_deref(), None | Some("fill") | Some("fixed_px") | Some("fraction")))
                 && columns.iter().all(|track| matches!(track.size.mode.as_deref(), None | Some("fill") | Some("fixed_px") | Some("fraction")))
                 && children.iter().all(|child| node_supported(&child.node))
+        }
+        Node::CompoundRef(node) => {
+            if unsupported_border(&node.style) {
+                return false;
+            }
+            matches!(node.width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content"))
+                && matches!(node.height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content"))
         }
         Node::Script(node) => {
             if unsupported_border(&node.style) {
@@ -523,10 +576,28 @@ fn node_supported(node: &Node) -> bool {
             if unsupported_border(style) {
                 return false;
             }
-            if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
+            if !matches!(
+                width.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None
+                    | Some("fill")
+                    | Some("fixed_px")
+                    | Some("fraction")
+                    | Some("fit_content")
+                    | Some("fit_glyph_bounds")
+                    | Some("intrinsic_font_height")
+            ) {
                 return false;
             }
-            if !matches!(height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
+            if !matches!(
+                height.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None
+                    | Some("fill")
+                    | Some("fixed_px")
+                    | Some("fraction")
+                    | Some("fit_content")
+                    | Some("fit_glyph_bounds")
+                    | Some("intrinsic_font_height")
+            ) {
                 return false;
             }
             if props.text.as_deref().is_some_and(|value| value.contains("{{") || value.contains('\n')) {
@@ -550,6 +621,40 @@ fn node_supported(node: &Node) -> bool {
                 && matches!(height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction"))
         }
         Node::Unsupported => false,
+    }
+}
+
+fn node_supported_with_project(project: &ProjectView, node: &Node) -> bool {
+    if !node_supported(node) {
+        return false;
+    }
+    match node {
+        Node::Stack { children, .. } | Node::Zstack { children, .. } => {
+            children.iter().all(|child| node_supported_with_project(project, child))
+        }
+        Node::Grid { children, .. } => children
+            .iter()
+            .all(|child| node_supported_with_project(project, &child.node)),
+        Node::CompoundRef(node) => project
+            .widget_definitions
+            .iter()
+            .find(|definition| definition.id == node.definition_id && definition.kind == "compound")
+            .and_then(|definition| definition.root_node.as_ref())
+            .is_some_and(|root| node_supported_with_project(project, root)),
+        Node::Script(node) => node
+            .child
+            .as_deref()
+            .is_some_and(|child| node_supported_with_project(project, child)),
+        Node::IfElse(node) => {
+            node.then_child
+                .as_deref()
+                .is_none_or(|child| node_supported_with_project(project, child))
+                && node
+                    .else_child
+                    .as_deref()
+                    .is_none_or(|child| node_supported_with_project(project, child))
+        }
+        _ => true,
     }
 }
 
@@ -804,14 +909,12 @@ fn draw_text_run(canvas: &mut IndexedCanvas, run: &TextLayoutRun, x: i32, y: i32
     }
 }
 
-fn render_primitive(
-    canvas: &mut IndexedCanvas,
+fn primitive_render_spec(
     project: &ProjectView,
     scope: &Value,
     node: &Node,
-    frame: Rect,
     user_fonts: &HashMap<String, RuntimeFontFamilyData>,
-) -> Result<(), ApiError> {
+) -> Result<Option<(String, String, u8, bool, u32, String, String, i32)>, ApiError> {
     let Node::PrimitiveInstance {
         primitive_type,
         props,
@@ -819,21 +922,16 @@ fn render_primitive(
         style,
         ..
     } = node else {
-        return Ok(());
+        return Ok(None);
     };
     let theme = theme_for_node(project, style);
     let padding = node_padding(style, props.padding_px);
-    let inner = Rect {
-        x: frame.x + padding,
-        y: frame.y + padding,
-        w: (frame.w - padding * 2).max(1),
-        h: (frame.h - padding * 2).max(1),
-    };
     let (text, family, color, tabular, default_px, h_align, v_align) = if primitive_type == "text" {
         let text = if props.render_entity_state.unwrap_or(false) {
             bindings
                 .get("entity")
-                .map(|entity_id| entity_state_text(scope, entity_id))
+                .map(|entity_id| render_template(entity_id, scope).unwrap_or_else(|| entity_id.clone()))
+                .map(|entity_id| entity_state_text(scope, &entity_id))
                 .unwrap_or_default()
         } else {
             props
@@ -859,13 +957,14 @@ fn render_primitive(
                 .and_then(|roles| roles.normal.as_ref())
                 .and_then(|style| style.pixel_size)
                 .unwrap_or(project.font_presets.normal),
-            props.horizontal_align.as_deref().unwrap_or("left"),
-            props.vertical_align.as_deref().unwrap_or("top"),
+            props.horizontal_align.as_deref().unwrap_or("left").to_string(),
+            props.vertical_align.as_deref().unwrap_or("top").to_string(),
         )
     } else {
         let mut value = bindings
             .get("entity")
-            .map(|entity_id| entity_state_text(scope, entity_id))
+            .map(|entity_id| render_template(entity_id, scope).unwrap_or_else(|| entity_id.clone()))
+            .map(|entity_id| entity_state_text(scope, &entity_id))
             .unwrap_or_default();
         if let Some(unit) = &props.unit {
             value.push_str(&render_template(unit, scope).unwrap_or_else(|| unit.clone()));
@@ -901,13 +1000,57 @@ fn render_primitive(
                 .and_then(|roles| roles.header.as_ref())
                 .and_then(|style| style.pixel_size)
                 .unwrap_or(project.font_presets.header),
-            props.horizontal_align.as_deref().unwrap_or("center"),
-            props.vertical_align.as_deref().unwrap_or("middle"),
+            props.horizontal_align.as_deref().unwrap_or("center").to_string(),
+            props.vertical_align.as_deref().unwrap_or("middle").to_string(),
         )
     };
     if text.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
+    let _ = user_fonts;
+    Ok(Some((text, family, color, tabular, default_px, h_align, v_align, padding)))
+}
+
+fn measure_primitive(
+    project: &ProjectView,
+    scope: &Value,
+    node: &Node,
+    user_fonts: &HashMap<String, RuntimeFontFamilyData>,
+) -> Result<Option<(i32, i32)>, ApiError> {
+    let Some((text, family, _color, tabular, pixel_size, _h_align, _v_align, padding)) =
+        primitive_render_spec(project, scope, node, user_fonts)?
+    else {
+        return Ok(None);
+    };
+    let Some(run) = text_run(&text, &family, pixel_size, tabular, &project.font_presets, user_fonts)? else {
+        return Ok(None);
+    };
+    let (painted_w, painted_h) = painted_bounds(&run);
+    Ok(Some((painted_w + padding * 2, painted_h + padding * 2)))
+}
+
+fn render_primitive(
+    canvas: &mut IndexedCanvas,
+    project: &ProjectView,
+    scope: &Value,
+    node: &Node,
+    frame: Rect,
+    user_fonts: &HashMap<String, RuntimeFontFamilyData>,
+) -> Result<(), ApiError> {
+    let Node::PrimitiveInstance { props, .. } = node else {
+        return Ok(());
+    };
+    let Some((text, family, color, tabular, default_px, h_align, v_align, padding)) =
+        primitive_render_spec(project, scope, node, user_fonts)?
+    else {
+        return Ok(());
+    };
+    let inner = Rect {
+        x: frame.x + padding,
+        y: frame.y + padding,
+        w: (frame.w - padding * 2).max(1),
+        h: (frame.h - padding * 2).max(1),
+    };
     let pixel_size = if props.auto_fit.unwrap_or(false) {
         auto_fit_pixel_size(&text, &family, tabular, inner, &project.font_presets, user_fonts)?
             .unwrap_or(default_px)
@@ -918,12 +1061,12 @@ fn render_primitive(
         return Ok(());
     };
     let (painted_w, painted_h) = painted_bounds(&run);
-    let draw_x = match h_align {
+    let draw_x = match h_align.as_str() {
         "center" => inner.x + ((inner.w - painted_w) / 2),
         "right" => inner.x + inner.w - painted_w,
         _ => inner.x,
     };
-    let draw_y = match v_align {
+    let draw_y = match v_align.as_str() {
         "middle" => inner.y + ((inner.h - painted_h) / 2),
         "bottom" => inner.y + inner.h - painted_h,
         _ => inner.y,
@@ -932,7 +1075,14 @@ fn render_primitive(
     Ok(())
 }
 
-fn child_rects(axis: &str, children: &[Node], frame: Rect) -> Vec<Rect> {
+fn child_rects(
+    axis: &str,
+    children: &[Node],
+    frame: Rect,
+    project: &ProjectView,
+    scope: &Value,
+    user_fonts: &HashMap<String, RuntimeFontFamilyData>,
+) -> Vec<Rect> {
     let is_vertical = axis == "vertical";
     let total = if is_vertical { frame.h } else { frame.w };
     let mut fixed = 0;
@@ -943,6 +1093,7 @@ fn child_rects(axis: &str, children: &[Node], frame: Rect) -> Vec<Rect> {
             Node::Stack { width, height, style, .. } => (width, height, style, None),
             Node::Zstack { width, height, style, .. } => (width, height, style, None),
             Node::Grid { width, height, style, .. } => (width, height, style, None),
+            Node::CompoundRef(node) => (&node.width, &node.height, &node.style, None),
             Node::Script(node) => (&node.width, &node.height, &node.style, None),
             Node::IfElse(node) => (&node.width, &node.height, &node.style, None),
             Node::PrimitiveInstance { width, height, style, props, .. } => (width, height, style, props.padding_px),
@@ -954,7 +1105,16 @@ fn child_rects(axis: &str, children: &[Node], frame: Rect) -> Vec<Rect> {
         };
         let spec = if is_vertical { height } else { width };
         let padding = node_padding(style, props_padding);
-        let measured = get_size_value(spec, total).map(|value| value.max(1 + padding * 2));
+        let measured = match spec.as_ref().and_then(|spec| spec.mode.as_deref()) {
+            Some("fit_content") | Some("fit_glyph_bounds") | Some("intrinsic_font_height") => {
+                match measure_primitive(project, scope, child, user_fonts) {
+                    Ok(Some((w, h))) => Some(if is_vertical { h } else { w }),
+                    _ => None,
+                }
+            }
+            _ => get_size_value(spec, total),
+        }
+        .map(|value| value.max(1 + padding * 2));
         if let Some(value) = measured {
             fixed += value;
             sizes.push(Some(value));
@@ -1057,7 +1217,7 @@ fn render_node(
                 w: (frame.w - padding * 2).max(1),
                 h: (frame.h - padding * 2).max(1),
             };
-            let mut rects = child_rects(axis, children, inner);
+            let mut rects = child_rects(axis, children, inner, project, scope, user_fonts);
             if !rects.is_empty() && gap > 0 {
                 let total_gap = gap * (rects.len().saturating_sub(1) as i32);
                 if axis == "vertical" {
@@ -1135,6 +1295,48 @@ fn render_node(
             }
             Ok(())
         }
+        Node::CompoundRef(node) => {
+            let Some(definition) = project
+                .widget_definitions
+                .iter()
+                .find(|definition| definition.id == node.definition_id && definition.kind == "compound")
+            else {
+                return Ok(());
+            };
+            let Some(root) = definition.root_node.as_ref() else {
+                return Ok(());
+            };
+            let mut nested_scope = scope.clone();
+            let Some(scope_object) = nested_scope.as_object_mut() else {
+                return Ok(());
+            };
+            for input in &definition.input_schema {
+                let key = &input.id;
+                let alias = &input.name;
+                let value = if input.value_type == "entity" {
+                    node.input_bindings
+                        .get(key)
+                        .or_else(|| node.input_bindings.get(alias))
+                        .map(|value| render_template(value, scope).unwrap_or_else(|| value.clone()))
+                        .map(Value::String)
+                        .or_else(|| node.input_values.get(key).cloned())
+                        .or_else(|| node.input_values.get(alias).cloned())
+                        .or_else(|| input.preview_value.clone())
+                        .unwrap_or(Value::String(String::new()))
+                } else {
+                    node.input_values
+                        .get(key)
+                        .cloned()
+                        .or_else(|| node.input_values.get(alias).cloned())
+                        .or_else(|| input.default_value.clone())
+                        .or_else(|| input.preview_value.clone())
+                        .unwrap_or(Value::String(String::new()))
+                };
+                scope_object.insert(key.clone(), value.clone());
+                scope_object.insert(alias.clone(), value);
+            }
+            render_node(canvas, project, &nested_scope, root, frame, user_fonts)
+        }
         Node::Script(script) => {
             let globals = globals_value(project, scope, frame);
             let bindings = Value::Object(
@@ -1198,7 +1400,7 @@ fn render_layout_preview(
         None => return Ok(None),
     };
     let root = match &layout.root_node {
-        Some(root) if node_supported(root) => root,
+        Some(root) if node_supported_with_project(&project, root) => root,
         _ => return Ok(None),
     };
     let display_type = match project
@@ -1342,4 +1544,134 @@ pub(crate) fn try_render_assigned_preview(
         rendered.hash = format!("{}:{theme_id}", rendered.hash);
     }
     Ok(Some(rendered))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn first_unsupported(project: &ProjectView, node: &Node) -> Option<String> {
+        match node {
+            Node::Stack { children, .. } | Node::Zstack { children, .. } => {
+                if let Some(found) = children.iter().find_map(|child| first_unsupported(project, child)) {
+                    return Some(found);
+                }
+            }
+            Node::Grid { children, .. } => {
+                if let Some(found) = children
+                    .iter()
+                    .find_map(|child| first_unsupported(project, &child.node))
+                {
+                    return Some(found);
+                }
+            }
+            Node::CompoundRef(node) => {
+                let definition = project
+                    .widget_definitions
+                    .iter()
+                    .find(|definition| definition.id == node.definition_id && definition.kind == "compound");
+                let Some(definition) = definition else {
+                    return Some(format!("missing-definition:{}", node.definition_id));
+                };
+                let Some(root) = definition.root_node.as_ref() else {
+                    return Some(format!("missing-root:{}", node.definition_id));
+                };
+                if let Some(found) = first_unsupported(project, root) {
+                    return Some(found);
+                }
+            }
+            Node::Script(node) => {
+                if let Some(found) = node
+                    .child
+                    .as_deref()
+                    .and_then(|child| first_unsupported(project, child))
+                {
+                    return Some(found);
+                }
+            }
+            Node::IfElse(node) => {
+                if let Some(found) = node
+                    .then_child
+                    .as_deref()
+                    .and_then(|child| first_unsupported(project, child))
+                    .or_else(|| node.else_child.as_deref().and_then(|child| first_unsupported(project, child)))
+                {
+                    return Some(found);
+                }
+            }
+            _ => {}
+        }
+        if !node_supported(node) {
+            Some(format!("self:{node:?}"))
+        } else {
+            None
+        }
+    }
+
+    fn demo_project() -> Value {
+        serde_json::from_str(include_str!("../../../data/projects/demo-home.json")).unwrap()
+    }
+
+    #[test]
+    fn compound_ref_layout_supported_natively() {
+        let project_value = demo_project();
+        let project: ProjectView = serde_json::from_value(project_value.clone()).unwrap();
+        let root = json!({
+            "type": "compound_ref",
+            "id": "node-compound",
+            "definitionId": "widget-efd4b992",
+            "inputValues": { "input-eb402e73": "Bathroom" },
+            "inputBindings": {
+                "input-1a1d2a4a": "sensor.bathroom_climate_temperature",
+                "input-82491d75": "sensor.bathroom_climate_humidity"
+            },
+            "style": { "borderToken": "none", "paddingPx": 0 },
+            "width": { "mode": "fill" },
+            "height": { "mode": "fill" }
+        });
+        let node: Node = serde_json::from_value(root).unwrap();
+        assert!(
+            node_supported_with_project(&project, &node),
+            "{:?}",
+            first_unsupported(&project, &node)
+        );
+    }
+
+    #[test]
+    fn render_layout_preview_handles_compound_ref_layout() {
+        let mut project_value = demo_project();
+        project_value["layoutDefinitions"] = json!([{
+            "id": "layout-climate-native",
+            "displayTypeId": "tri296x128-red",
+            "rootNode": {
+                "type": "compound_ref",
+                "id": "node-compound",
+                "definitionId": "widget-efd4b992",
+                "inputValues": { "input-eb402e73": "Bathroom" },
+                "inputBindings": {
+                    "input-1a1d2a4a": "sensor.bathroom_climate_temperature",
+                    "input-82491d75": "sensor.bathroom_climate_humidity"
+                },
+                "style": { "borderToken": "none", "paddingPx": 0 },
+                "width": { "mode": "fill" },
+                "height": { "mode": "fill" }
+            }
+        }]);
+        let rendered = render_layout_preview(
+            &project_value,
+            &json!({}),
+            &json!({
+                "entities": {
+                    "sensor.bathroom_climate_temperature": { "state": "21.4" },
+                    "sensor.bathroom_climate_humidity": { "state": "87" }
+                },
+                "now": "2026-04-24T22:00:00+02:00"
+            }),
+            "layout-climate-native",
+            None,
+        )
+        .unwrap();
+        assert!(rendered.is_some());
+        assert!(rendered.unwrap().hash.starts_with("native-layout:"));
+    }
 }
