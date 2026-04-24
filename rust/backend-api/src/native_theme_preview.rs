@@ -8,7 +8,7 @@ use epd_text_engine::{
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{font_assets, rgba_to_png, ApiError};
+use crate::{rgba_to_png, ApiError};
 
 const COLOR_BG: u8 = 0;
 const COLOR_FG: u8 = 1;
@@ -215,7 +215,9 @@ impl IndexedCanvas {
         fonts: &HashMap<String, RuntimeFontFamilyData>,
         color: u8,
     ) -> Result<(), ApiError> {
-        let family_data = resolve_font_family_data(&style.family, fonts)?;
+        let Some(family_data) = resolve_font_family_data(&style.family, fonts) else {
+            return Ok(());
+        };
         let run = render_text_layout(LayoutRequest {
             op: "layout".into(),
             text: text.into(),
@@ -239,7 +241,7 @@ impl IndexedCanvas {
                 bold: family_data.bold,
                 bold_italic: family_data.bold_italic,
             },
-            render_mode: "gray_threshold".into(),
+            render_mode: "mono_hint".into(),
             threshold: 128,
             oversample_factor: 1,
         })
@@ -366,34 +368,11 @@ fn resolve_text_style(
     }
 }
 
-fn canonical_family(family: &str) -> &str {
-    if family == "ui-sans" {
-        "px-sans"
-    } else {
-        family
-    }
-}
-
 fn resolve_font_family_data(
     family: &str,
     user_fonts: &HashMap<String, RuntimeFontFamilyData>,
-) -> Result<RuntimeFontFamilyData, ApiError> {
-    let canonical = canonical_family(family);
-    if let Some(data) = user_fonts.get(canonical) {
-        return Ok(data.clone());
-    }
-    if let Some(data) = font_assets::built_in_font_data(canonical) {
-        return Ok(RuntimeFontFamilyData {
-            regular: data.regular,
-            italic: data.italic,
-            bold: data.bold,
-            bold_italic: data.bold_italic,
-        });
-    }
-    if canonical != "px-sans" {
-        return resolve_font_family_data("px-sans", user_fonts);
-    }
-    Err(ApiError::bad_request("Missing fallback font data"))
+) -> Option<RuntimeFontFamilyData> {
+    user_fonts.get(family).cloned()
 }
 
 pub(crate) fn render_theme_preview_value(
@@ -441,13 +420,13 @@ pub(crate) fn render_theme_preview_value(
 
     let font_roles = theme.font_roles.clone().unwrap_or_default();
     let tiny_default = ResolvedTextStyle {
-        family: "px-sans".into(),
+        family: "missing-font".into(),
         weight: "regular".into(),
         slope: "roman".into(),
         pixel_size: project.font_presets.tiny,
     };
     let normal_default = ResolvedTextStyle {
-        family: "px-sans".into(),
+        family: "missing-font".into(),
         weight: "regular".into(),
         slope: "roman".into(),
         pixel_size: project.font_presets.normal,
@@ -457,7 +436,7 @@ pub(crate) fn render_theme_preview_value(
             .normal
             .as_ref()
             .and_then(|value| value.family.clone())
-            .unwrap_or_else(|| "px-sans".into()),
+            .unwrap_or_else(|| "missing-font".into()),
         weight: font_roles
             .normal
             .as_ref()
@@ -475,7 +454,7 @@ pub(crate) fn render_theme_preview_value(
             .unwrap_or(project.font_presets.normal),
     };
     let header_default = ResolvedTextStyle {
-        family: "px-sans".into(),
+        family: "missing-font".into(),
         weight: "regular".into(),
         slope: "roman".into(),
         pixel_size: project.font_presets.header,
@@ -623,9 +602,19 @@ pub(crate) fn render_theme_preview_value(
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine;
     use serde_json::{json, Value};
+    use std::path::PathBuf;
 
     use super::render_theme_preview_value;
+
+    fn fixture_font_base64() -> String {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/fonts/arial-regular.ttf");
+        base64::engine::general_purpose::STANDARD.encode(
+            std::fs::read(path).expect("fixture font"),
+        )
+    }
 
     #[test]
     fn renders_theme_preview_png() {
@@ -637,9 +626,9 @@ mod tests {
                 "text": { "title": "fg", "body": "fg", "value": "accent" },
                 "accentRole": "accent",
                 "fontRoles": {
-                    "tiny": { "family": "px-sans", "pixelSize": 8, "weight": "regular", "slope": "roman" },
-                    "normal": { "family": "px-sans", "pixelSize": 8, "weight": "regular", "slope": "roman" },
-                    "header": { "family": "px-sans", "pixelSize": 8, "weight": "regular", "slope": "roman" }
+                    "tiny": { "family": "arial", "pixelSize": 8, "weight": "regular", "slope": "roman" },
+                    "normal": { "family": "arial", "pixelSize": 8, "weight": "regular", "slope": "roman" },
+                    "header": { "family": "arial", "pixelSize": 8, "weight": "regular", "slope": "roman" }
                 },
                 "textOutline": { "enabled": false, "colorRole": "bg", "thicknessPx": 1 }
             }],
@@ -651,8 +640,11 @@ mod tests {
             }],
             "fontPresets": { "tiny": 8, "normal": 8, "header": 8 }
         });
+        let user_fonts = json!({
+            "arial": { "regular": fixture_font_base64() }
+        });
         let value =
-            render_theme_preview_value(&project, &json!({}), "default", "demo").expect("render");
+            render_theme_preview_value(&project, &user_fonts, "default", "demo").expect("render");
         let png = value.get("pngBase64").and_then(Value::as_str).expect("png");
         assert!(!png.is_empty());
     }

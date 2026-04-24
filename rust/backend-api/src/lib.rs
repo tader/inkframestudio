@@ -1,6 +1,5 @@
 pub mod app;
 pub mod error;
-mod font_assets;
 mod native_font_specimens;
 mod native_theme_preview;
 pub mod providers;
@@ -818,89 +817,6 @@ pub(crate) async fn load_user_font_data(state: &AppState) -> Result<Value, ApiEr
         families.insert(font.id, Value::Object(entry));
     }
     Ok(Value::Object(families))
-}
-
-pub(crate) fn built_in_font_options() -> Vec<FontOption> {
-    debug_assert!(font_assets::has_built_in_font("px-sans"));
-    debug_assert!(font_assets::has_built_in_font("px-mono-special"));
-    debug_assert!(font_assets::has_built_in_font("ui-sans"));
-    debug_assert!(font_assets::has_built_in_font("fa-solid"));
-    debug_assert!(font_assets::has_built_in_font("fa-regular"));
-    debug_assert!(font_assets::has_built_in_font("fa-brands"));
-    vec![
-        FontOption {
-            id: "px-sans".into(),
-            label: "PX Sans".into(),
-            source: "built-in".into(),
-            variants: vec!["regular".into(), "bold".into()],
-            allowed_pixel_sizes: None,
-            import_source: None,
-            source_url: None,
-            preview_url: None,
-            declared_pixel_size: None,
-            license_category: None,
-        },
-        FontOption {
-            id: "px-mono-special".into(),
-            label: "PX Mono Special".into(),
-            source: "built-in".into(),
-            variants: vec!["regular".into()],
-            allowed_pixel_sizes: None,
-            import_source: None,
-            source_url: None,
-            preview_url: None,
-            declared_pixel_size: None,
-            license_category: None,
-        },
-        FontOption {
-            id: "ui-sans".into(),
-            label: "Legacy UI Sans".into(),
-            source: "built-in".into(),
-            variants: vec!["regular".into(), "bold".into()],
-            allowed_pixel_sizes: None,
-            import_source: None,
-            source_url: None,
-            preview_url: None,
-            declared_pixel_size: None,
-            license_category: None,
-        },
-        FontOption {
-            id: "fa-solid".into(),
-            label: "Font Awesome Solid".into(),
-            source: "built-in".into(),
-            variants: vec!["regular".into()],
-            allowed_pixel_sizes: None,
-            import_source: None,
-            source_url: None,
-            preview_url: None,
-            declared_pixel_size: None,
-            license_category: None,
-        },
-        FontOption {
-            id: "fa-regular".into(),
-            label: "Font Awesome Regular".into(),
-            source: "built-in".into(),
-            variants: vec!["regular".into()],
-            allowed_pixel_sizes: None,
-            import_source: None,
-            source_url: None,
-            preview_url: None,
-            declared_pixel_size: None,
-            license_category: None,
-        },
-        FontOption {
-            id: "fa-brands".into(),
-            label: "Font Awesome Brands".into(),
-            source: "built-in".into(),
-            variants: vec!["regular".into()],
-            allowed_pixel_sizes: None,
-            import_source: None,
-            source_url: None,
-            preview_url: None,
-            declared_pixel_size: None,
-            license_category: None,
-        },
-    ]
 }
 
 pub(crate) fn slugify_font_id(value: &str) -> String {

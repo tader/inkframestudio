@@ -9,19 +9,14 @@ use base64::Engine;
 use tokio::fs;
 
 use crate::{
-    app::AppState, built_in_font_options, detect_font_variant_from_name, font_files, fonts_dir,
+    app::AppState, detect_font_variant_from_name, font_files, fonts_dir,
     internal_error, list_font_options, read_font_index, slugify_font_id, to_font_option,
     write_font_index, ApiError, ApiResult, FontImportRequest, FontImportResponse,
     FontMetadataPatch, FontOption, StoredFontFamily, StoredFontsIndex,
 };
 
 pub(crate) async fn list_fonts(State(state): State<AppState>) -> ApiResult<Vec<FontOption>> {
-    let fonts = list_font_options(&state).await?;
-    Ok(Json(if fonts.is_empty() {
-        built_in_font_options()
-    } else {
-        fonts
-    }))
+    Ok(Json(list_font_options(&state).await?))
 }
 
 pub(crate) async fn delete_font(
@@ -76,13 +71,19 @@ pub(crate) async fn import_font(
     if filename.is_empty() {
         return Err(ApiError::bad_request("Filename missing"));
     }
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(payload.base64.as_bytes())
-        .map_err(|error| ApiError::bad_request(format!("Invalid base64: {error}")))?;
     let extension = Path::new(filename)
         .extension()
         .and_then(|value| value.to_str())
-        .unwrap_or("ttf");
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if extension != "ttf" {
+        return Err(ApiError::bad_request("Only .ttf fonts supported"));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(payload.base64.as_bytes())
+        .map_err(|error| ApiError::bad_request(format!("Invalid base64: {error}")))?;
+    ttf_parser::Face::parse(&bytes, 0)
+        .map_err(|error| ApiError::bad_request(format!("Invalid TrueType font: {error:?}")))?;
     let label = filename
         .rsplit_once('.')
         .map(|(stem, _)| stem)
@@ -157,7 +158,7 @@ pub(crate) async fn rescan_fonts(State(state): State<AppState>) -> ApiResult<Vec
             .and_then(|value| value.to_str())
             .map(|value| value.to_ascii_lowercase())
             .unwrap_or_default();
-        if !matches!(ext.as_str(), "ttf" | "otf" | "woff" | "woff2") {
+        if ext != "ttf" {
             continue;
         }
         let filename = path
@@ -165,6 +166,10 @@ pub(crate) async fn rescan_fonts(State(state): State<AppState>) -> ApiResult<Vec
             .and_then(|value| value.to_str())
             .unwrap_or_default()
             .to_string();
+        let bytes = fs::read(&path).await.map_err(internal_error)?;
+        if ttf_parser::Face::parse(&bytes, 0).is_err() {
+            continue;
+        }
         let label = filename
             .rsplit_once('.')
             .map(|(stem, _)| stem)

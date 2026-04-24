@@ -8,7 +8,7 @@ use epd_text_engine::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::{font_assets, rgba_to_png, ApiError, DisplayProfile, FontOption};
+use crate::{rgba_to_png, ApiError, DisplayProfile, FontOption};
 
 const SPECIMEN_VARIANTS: [(&str, &str, &str); 4] = [
     ("regular", "roman", "regular"),
@@ -42,34 +42,11 @@ struct RuntimeFontFamilyData {
     bold_italic: Option<String>,
 }
 
-fn canonical_family(family: &str) -> &str {
-    if family == "ui-sans" {
-        "px-sans"
-    } else {
-        family
-    }
-}
-
 fn resolve_font_family_data(
     family: &str,
     user_fonts: &HashMap<String, RuntimeFontFamilyData>,
-) -> Result<RuntimeFontFamilyData, ApiError> {
-    let canonical = canonical_family(family);
-    if let Some(data) = user_fonts.get(canonical) {
-        return Ok(data.clone());
-    }
-    if let Some(data) = font_assets::built_in_font_data(canonical) {
-        return Ok(RuntimeFontFamilyData {
-            regular: data.regular,
-            italic: data.italic,
-            bold: data.bold,
-            bold_italic: data.bold_italic,
-        });
-    }
-    if canonical != "px-sans" {
-        return resolve_font_family_data("px-sans", user_fonts);
-    }
-    Err(ApiError::bad_request("Missing fallback font data"))
+) -> Option<RuntimeFontFamilyData> {
+    user_fonts.get(family).cloned()
 }
 
 fn parse_hex_color(value: &str) -> Result<[u8; 3], ApiError> {
@@ -119,7 +96,14 @@ fn render_specimen_tile(
     sample_text: &str,
     size: i32,
 ) -> Result<Value, ApiError> {
-    let family_data = resolve_font_family_data(family, user_fonts)?;
+    let Some(family_data) = resolve_font_family_data(family, user_fonts) else {
+        return Ok(json!({
+            "size": size,
+            "width": 0,
+            "height": 0,
+            "pngBase64": "",
+        }));
+    };
     let run = render_text_layout(LayoutRequest {
         op: "layout".into(),
         text: sample_text.into(),
@@ -143,7 +127,7 @@ fn render_specimen_tile(
             bold: family_data.bold,
             bold_italic: family_data.bold_italic,
         },
-        render_mode: "gray_threshold".into(),
+        render_mode: "mono_hint".into(),
         threshold: 128,
         oversample_factor: 1,
     })
@@ -290,18 +274,30 @@ pub(crate) fn render_font_specimens_value(
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine;
     use serde_json::json;
+    use std::path::PathBuf;
 
     use crate::DisplayProfile;
 
     use super::render_font_specimens_value;
+
+    fn fixture_font_base64() -> String {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../data/fonts/arial-regular.ttf");
+        base64::engine::general_purpose::STANDARD.encode(
+            std::fs::read(path).expect("fixture font"),
+        )
+    }
 
     #[test]
     fn renders_unbordered_exact_fit_specimen_png() {
         let project = json!({
             "fontPresets": { "tiny": 6, "normal": 10, "header": 14 }
         });
-        let user_fonts = json!({});
+        let user_fonts = json!({
+            "arial": { "regular": fixture_font_base64() }
+        });
         let profile = DisplayProfile {
             id: "tri296x128-red".into(),
             width: 296,
@@ -322,10 +318,10 @@ mod tests {
             recommended_font_scale: 2,
         };
         let fonts = vec![crate::FontOption {
-            id: "px-sans".into(),
-            label: "Pixel Sans".into(),
-            source: "built-in".into(),
-            variants: vec!["regular".into(), "bold".into()],
+            id: "arial".into(),
+            label: "Arial".into(),
+            source: "user".into(),
+            variants: vec!["regular".into()],
             allowed_pixel_sizes: None,
             import_source: None,
             source_url: None,
@@ -341,7 +337,7 @@ mod tests {
             12,
             12,
             &fonts,
-            Some("px-sans"),
+            Some("arial"),
             false,
         )
         .expect("font specimens");

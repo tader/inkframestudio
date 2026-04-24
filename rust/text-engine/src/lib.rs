@@ -191,6 +191,7 @@ pub fn render(request: LayoutRequest) -> Result<TextLayoutRun, String> {
         .decode(base64_font.as_bytes())
         .map_err(|error| format!("invalid font data: {error}"))?;
     let size_px = pixel_size(&request.style, &request.font_presets);
+    let hinted_mono = request.render_mode == "mono_hint";
     let oversample = if request.render_mode == "gray_oversample" {
         request.oversample_factor.max(1)
     } else {
@@ -228,7 +229,11 @@ pub fn render(request: LayoutRequest) -> Result<TextLayoutRun, String> {
 
     if tabular {
         for digit in '0'..='9' {
-            face.load_char(digit as usize, LoadFlag::DEFAULT)
+            let mut digit_flags = LoadFlag::DEFAULT;
+            if hinted_mono {
+                digit_flags |= LoadFlag::TARGET_MONO | LoadFlag::MONOCHROME;
+            }
+            face.load_char(digit as usize, digit_flags)
                 .map_err(|error| format!("digit load failed: {error}"))?;
             let advance = scale_fixed(face.glyph().advance().x as i32, out_scale);
             max_digit_advance = max_digit_advance.max(advance);
@@ -240,7 +245,7 @@ pub fn render(request: LayoutRequest) -> Result<TextLayoutRun, String> {
         let render_mode = match request.render_mode.as_str() {
             "gray_threshold" | "gray_oversample" => RenderMode::Normal,
             _ => {
-                load_flags |= LoadFlag::TARGET_MONO;
+                load_flags |= LoadFlag::TARGET_MONO | LoadFlag::MONOCHROME;
                 RenderMode::Mono
             }
         };

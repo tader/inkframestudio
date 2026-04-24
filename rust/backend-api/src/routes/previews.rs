@@ -5,8 +5,8 @@ use axum::{
 use serde_json::{json, Value};
 
 use crate::{
-    app::AppState, bridge_render_preview_value, built_in_font_options,
-    list_font_options, load_project_for_request, load_user_font_data,
+    app::AppState, bridge_render_preview_value, list_font_options, load_project_for_request,
+    load_user_font_data,
     native_font_specimens::render_font_specimens_value,
     native_theme_preview::render_theme_preview_value, run_bridge_value,
     services::render_data::resolve_project_render_data_value, ApiError, ApiResult,
@@ -120,12 +120,7 @@ pub(crate) async fn font_specimens(
 ) -> ApiResult<Value> {
     let project = load_project_for_request(&state, &project_id, Some(&body)).await?;
     let user_fonts = load_user_font_data(&state).await?;
-    let available_fonts = list_font_options(&state).await?;
-    let fonts = if available_fonts.is_empty() {
-        built_in_font_options()
-    } else {
-        available_fonts
-    };
+    let fonts = list_font_options(&state).await?;
     let display_profile_id = body
         .get("displayProfileId")
         .and_then(Value::as_str)
