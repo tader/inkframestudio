@@ -5,9 +5,9 @@ use axum::{
 use serde_json::{json, Value};
 
 use crate::{
-    app::AppState, bridge_json_response, built_in_font_options, list_font_options,
+    app::AppState, bridge_json_response, bridge_render_preview_value, built_in_font_options, list_font_options,
     load_project_for_request, load_user_font_data, services::render_data::resolve_project_render_data_value,
-    ApiError, ApiResult,
+    run_bridge_value, ApiError, ApiResult, BridgeRenderResponse,
 };
 
 pub(crate) async fn live_data(
@@ -45,7 +45,10 @@ pub(crate) async fn preview(
     let (data, message) = resolve_project_render_data_value(&state, &project, None).await?;
     let user_fonts = load_user_font_data(&state).await?;
     let body = inject_live_render_context(body, project, data, user_fonts, message);
-    bridge_json_response(&state, json!({ "op": "preview", "projectId": project_id, "body": body })).await
+    let rendered: BridgeRenderResponse = serde_json::from_value(
+        run_bridge_value(&state, json!({ "op": "preview", "projectId": project_id, "body": body })).await?
+    ).map_err(|error| ApiError::internal(error.to_string()))?;
+    Ok(Json(bridge_render_preview_value(&rendered)?))
 }
 
 pub(crate) async fn layout_preview(
@@ -58,11 +61,22 @@ pub(crate) async fn layout_preview(
     let (data, message) = resolve_project_render_data_value(&state, &project, layout_id).await?;
     let user_fonts = load_user_font_data(&state).await?;
     let body = inject_live_render_context(body, project, data, user_fonts, message);
-    bridge_json_response(
+    let response = run_bridge_value(
         &state,
         json!({ "op": "layout-preview", "projectId": project_id, "body": body }),
-    )
-    .await
+    ).await?;
+    if let Some(preview_value) = response.get("preview") {
+        let rendered: BridgeRenderResponse = serde_json::from_value(preview_value.clone())
+            .map_err(|error| ApiError::internal(error.to_string()))?;
+        let inspection = response.get("inspection").cloned();
+        return Ok(Json(json!({
+            "preview": bridge_render_preview_value(&rendered)?,
+            "inspection": inspection
+        })));
+    }
+    let rendered: BridgeRenderResponse = serde_json::from_value(response)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    Ok(Json(bridge_render_preview_value(&rendered)?))
 }
 
 pub(crate) async fn device_preview(
@@ -74,11 +88,13 @@ pub(crate) async fn device_preview(
     let (data, message) = resolve_project_render_data_value(&state, &project, None).await?;
     let user_fonts = load_user_font_data(&state).await?;
     let body = inject_live_render_context(body, project, data, user_fonts, message);
-    bridge_json_response(
-        &state,
-        json!({ "op": "device-preview", "projectId": project_id, "body": body }),
-    )
-    .await
+    let rendered: BridgeRenderResponse = serde_json::from_value(
+        run_bridge_value(
+            &state,
+            json!({ "op": "device-preview", "projectId": project_id, "body": body }),
+        ).await?
+    ).map_err(|error| ApiError::internal(error.to_string()))?;
+    Ok(Json(bridge_render_preview_value(&rendered)?))
 }
 
 pub(crate) async fn font_specimens(
@@ -122,9 +138,11 @@ pub(crate) async fn theme_preview(
         object.insert("project".into(), project);
         object.insert("userFonts".into(), user_fonts);
     }
-    bridge_json_response(
-        &state,
-        json!({ "op": "theme-preview", "projectId": project_id, "body": body }),
-    )
-    .await
+    let rendered: BridgeRenderResponse = serde_json::from_value(
+        run_bridge_value(
+            &state,
+            json!({ "op": "theme-preview", "projectId": project_id, "body": body }),
+        ).await?
+    ).map_err(|error| ApiError::internal(error.to_string()))?;
+    Ok(Json(bridge_render_preview_value(&rendered)?))
 }

@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use base64::Engine;
 use serde_json::json;
 
 use crate::providers::registry::{
@@ -8,7 +9,7 @@ use crate::providers::registry::{
 use crate::{
     app::AppState, build_discovered_display_type, fetch_access_point_page,
     fetch_access_point_tag_type, fetch_all_access_point_tags, openepaperlink_settings_from_instance,
-    rgba_to_jpeg, upload_image_to_access_point, ApiError, DiscoveredDisplayCandidate,
+    png_to_jpeg, rgba_to_jpeg, upload_image_to_access_point, ApiError, DiscoveredDisplayCandidate,
     UploadPreviewRequest, UploadPreviewResponse,
 };
 
@@ -162,15 +163,21 @@ impl DisplayProvider for OpenEpaperLinkApProvider {
             return Err(ApiError::bad_request("Provider URL is not configured"));
         }
         let _ = payload.dither;
-        let expected = payload.width as usize * payload.height as usize * 4;
-        if payload.mac.trim().is_empty()
-            || payload.width == 0
-            || payload.height == 0
-            || payload.rgba.len() != expected
-        {
+        if payload.mac.trim().is_empty() || payload.width == 0 || payload.height == 0 {
             return Err(ApiError::bad_request("Invalid preview payload"));
         }
-        let jpeg = rgba_to_jpeg(&payload.rgba, payload.width, payload.height)?;
+        let jpeg = if let Some(png_base64) = payload.png_base64.as_ref() {
+            let png = base64::engine::general_purpose::STANDARD
+                .decode(png_base64)
+                .map_err(|error| ApiError::bad_request(format!("Invalid PNG payload: {error}")))?;
+            png_to_jpeg(&png)?
+        } else {
+            let expected = payload.width as usize * payload.height as usize * 4;
+            if payload.rgba.len() != expected {
+                return Err(ApiError::bad_request("Invalid preview payload"));
+            }
+            rgba_to_jpeg(&payload.rgba, payload.width, payload.height)?
+        };
         upload_image_to_access_point(
             &state.http,
             &resolved,

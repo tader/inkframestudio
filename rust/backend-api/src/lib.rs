@@ -23,6 +23,7 @@ use axum::{
 };
 use base64::Engine;
 use image::codecs::jpeg::JpegEncoder;
+use image::codecs::png::PngEncoder;
 use image::{ColorType, ImageEncoder};
 use reqwest::header::{ACCEPT, AUTHORIZATION};
 use reqwest::multipart::{Form, Part};
@@ -223,6 +224,9 @@ pub(crate) struct UploadPreviewRequest {
     mac: String,
     width: u32,
     height: u32,
+    #[serde(rename = "pngBase64", default)]
+    png_base64: Option<String>,
+    #[serde(default)]
     rgba: Vec<u8>,
     dither: Option<u8>,
 }
@@ -1095,6 +1099,42 @@ pub(crate) fn rgba_to_jpeg(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u
         .write_image(&rgb, width, height, ColorType::Rgb8.into())
         .map_err(|error| ApiError::internal(error.to_string()))?;
     Ok(bytes)
+}
+
+pub(crate) fn rgba_to_png(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, ApiError> {
+    let mut bytes = Vec::new();
+    PngEncoder::new(&mut bytes)
+        .write_image(rgba, width, height, ColorType::Rgba8.into())
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    Ok(bytes)
+}
+
+pub(crate) fn png_to_jpeg(png: &[u8]) -> Result<Vec<u8>, ApiError> {
+    let image = image::load_from_memory_with_format(png, image::ImageFormat::Png)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    let rgba = image.to_rgba8();
+    rgba_to_jpeg(&rgba, image.width(), image.height())
+}
+
+pub(crate) fn bridge_render_to_png_bytes(rendered: &BridgeRenderResponse) -> Result<Vec<u8>, ApiError> {
+    let expected = rendered.width as usize * rendered.height as usize * 4;
+    if rendered.rgba.len() != expected {
+        return Err(ApiError::internal("Bridge render returned invalid RGBA payload"));
+    }
+    rgba_to_png(&rendered.rgba, rendered.width, rendered.height)
+}
+
+pub(crate) fn bridge_render_preview_value(rendered: &BridgeRenderResponse) -> Result<Value, ApiError> {
+    Ok(serde_json::json!({
+        "width": rendered.width,
+        "height": rendered.height,
+        "hash": rendered.hash,
+        "activeScreenId": rendered.active_screen_id,
+        "activeOverlayId": rendered.active_overlay_id,
+        "dataSourceMessage": rendered.data_source_message,
+        "scriptWarnings": rendered.script_warnings,
+        "pngBase64": base64::engine::general_purpose::STANDARD.encode(bridge_render_to_png_bytes(rendered)?)
+    }))
 }
 
 pub(crate) async fn upload_image_to_access_point(

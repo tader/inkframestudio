@@ -832,7 +832,7 @@ export class EpPaperEditorApp extends LitElement {
     icons: { state: true },
     fonts: { state: true },
     entityCatalog: { state: true },
-    previewRgba: { state: true },
+    previewPngBase64: { state: true },
     previewHash: { state: true },
     previewWidth: { state: true },
     previewHeight: { state: true },
@@ -1151,7 +1151,7 @@ export class EpPaperEditorApp extends LitElement {
   declare private icons: IconDefinition[];
   declare private fonts: FontOption[];
   declare private entityCatalog: Array<{ entityId: string; friendlyName: string; domain: string; unit?: string }>;
-  declare private previewRgba: Uint8ClampedArray;
+  declare private previewPngBase64: string;
   declare private previewHash: string;
   declare private previewWidth: number;
   declare private previewHeight: number;
@@ -1198,7 +1198,7 @@ export class EpPaperEditorApp extends LitElement {
     this.icons = [];
     this.fonts = [];
     this.entityCatalog = [];
-    this.previewRgba = new Uint8ClampedArray();
+    this.previewPngBase64 = "";
     this.previewHash = "";
     this.previewWidth = 0;
     this.previewHeight = 0;
@@ -1350,17 +1350,6 @@ export class EpPaperEditorApp extends LitElement {
       this.previewViewportHeight = previewHost.clientHeight;
     }
 
-    const canvases = Array.from(this.renderRoot.querySelectorAll<HTMLCanvasElement>("canvas.preview-canvas"));
-    if (canvases.length && this.previewRgba.length) {
-      const imageData = new ImageData(new Uint8ClampedArray(this.tonedPreviewRgba()), this.previewWidth, this.previewHeight);
-      for (const canvas of canvases) {
-        const context = canvas.getContext("2d");
-        if (context) {
-          context.putImageData(imageData, 0, 0);
-        }
-      }
-    }
-
   }
 
   private replaceProject(project: Project): void {
@@ -1399,7 +1388,7 @@ export class EpPaperEditorApp extends LitElement {
       return;
     }
     if (!preview) {
-      this.previewRgba = new Uint8ClampedArray();
+      this.previewPngBase64 = "";
       this.previewHash = "";
       this.previewMessage = "";
       this.previewWidth = 0;
@@ -1410,7 +1399,7 @@ export class EpPaperEditorApp extends LitElement {
       this.structureDropIntent = null;
       return;
     }
-    this.previewRgba = new Uint8ClampedArray(preview.rgba);
+    this.previewPngBase64 = preview.pngBase64;
     this.previewHash = preview.hash;
     this.previewMessage = [
       preview.dataSourceMessage,
@@ -2260,7 +2249,7 @@ export class EpPaperEditorApp extends LitElement {
 
   private async uploadCurrentPreviewToTag(): Promise<void> {
     const mac = this.effectivePreviewTagMac;
-    if (!mac || !this.previewWidth || !this.previewHeight || !this.previewRgba.length) {
+    if (!mac || !this.previewWidth || !this.previewHeight || !this.previewPngBase64) {
       return;
     }
     this.uploadStatusMessage = "Uploading preview...";
@@ -2269,7 +2258,7 @@ export class EpPaperEditorApp extends LitElement {
         mac,
         this.previewWidth,
         this.previewHeight,
-        this.previewRgba,
+        this.previewPngBase64,
         0
       );
       this.uploadStatusMessage = `Uploaded preview to ${mac}`;
@@ -2787,7 +2776,11 @@ export class EpPaperEditorApp extends LitElement {
         ${this.previewWidth && this.previewHeight
           ? html`
               <div class="preview-stage" style=${`width:${cssPreviewWidth}px;height:${cssPreviewHeight}px;`}>
-                <canvas class="preview-canvas" width=${this.previewWidth} height=${this.previewHeight} style=${`width:${cssPreviewWidth}px;height:${cssPreviewHeight}px;`}></canvas>
+                <img
+                  alt="Preview"
+                  src=${`data:image/png;base64,${this.previewPngBase64}`}
+                  style=${`width:${cssPreviewWidth}px;height:${cssPreviewHeight}px;image-rendering:pixelated;display:block;`}
+                />
               </div>
             `
           : html`<div class="muted">No preview for this page.</div>`}
@@ -2956,41 +2949,6 @@ export class EpPaperEditorApp extends LitElement {
   private previewCanvasScale(): number {
     const deviceScale = typeof window !== "undefined" ? Math.max(1, window.devicePixelRatio || 1) : 1;
     return this.scale / deviceScale;
-  }
-
-  private tonedPreviewRgba(): Uint8ClampedArray {
-    if (!this.previewRgba.length) {
-      return this.previewRgba;
-    }
-    const toned = new Uint8ClampedArray(this.previewRgba.length);
-    for (let index = 0; index < this.previewRgba.length; index += 4) {
-      const r = this.previewRgba[index];
-      const g = this.previewRgba[index + 1];
-      const b = this.previewRgba[index + 2];
-      const a = this.previewRgba[index + 3];
-      const isWhite = r >= 245 && g >= 245 && b >= 245;
-      const isBlack = r <= 20 && g <= 20 && b <= 20;
-
-      if (isWhite) {
-        toned[index] = 236;
-        toned[index + 1] = 236;
-        toned[index + 2] = 232;
-      } else if (isBlack) {
-        toned[index] = 48;
-        toned[index + 1] = 48;
-        toned[index + 2] = 48;
-      } else if (r > 180 && g > 160 && b < 120) {
-        toned[index] = 216;
-        toned[index + 1] = 188;
-        toned[index + 2] = 92;
-      } else {
-        toned[index] = Math.min(255, Math.round(r * 0.78 + 18));
-        toned[index + 1] = Math.min(255, Math.round(g * 0.72 + 12));
-        toned[index + 2] = Math.min(255, Math.round(b * 0.72 + 12));
-      }
-      toned[index + 3] = a;
-    }
-    return toned;
   }
 
   private renderSizeSpecEditor(label: string, spec: SizeSpec | undefined, onChange: (next: SizeSpec) => void) {

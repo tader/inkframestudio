@@ -22,7 +22,7 @@ export interface PreviewResponse {
   activeOverlayId?: string;
   dataSourceMessage?: string;
   scriptWarnings?: string[];
-  rgba: number[];
+  pngBase64: string;
 }
 
 export type LayoutInspectionPreviewResponse = LayoutInspectionResult;
@@ -336,12 +336,12 @@ export function uploadPreviewToDisplayProvider(
   mac: string,
   width: number,
   height: number,
-  rgba: number[] | Uint8ClampedArray,
+  pngBase64: string,
   dither = 0
 ): Promise<{ uploaded: boolean; mac: string; width: number; height: number }> {
   return requestJson(`${V2_API_BASE}/provider-instances/${providerInstanceId}/upload-preview`, {
     method: "POST",
-    body: JSON.stringify({ mac, width, height, rgba: Array.from(rgba), dither })
+    body: JSON.stringify({ mac, width, height, pngBase64, dither })
   });
 }
 
@@ -349,7 +349,7 @@ export async function uploadPreviewToOpenEpaperLinkAccessPoint(
   mac: string,
   width: number,
   height: number,
-  rgba: number[] | Uint8ClampedArray,
+  pngBase64: string,
   dither = 0
 ): Promise<{ uploaded: boolean; mac: string; width: number; height: number }> {
   const instances = await fetchProviderInstances();
@@ -357,5 +357,5 @@ export async function uploadPreviewToOpenEpaperLinkAccessPoint(
   if (!instance) {
     throw new Error("No OpenEPaperLink provider configured");
   }
-  return uploadPreviewToDisplayProvider(instance.id, mac, width, height, rgba, dither);
+  return uploadPreviewToDisplayProvider(instance.id, mac, width, height, pngBase64, dither);
 }

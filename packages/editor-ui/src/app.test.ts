@@ -11,29 +11,10 @@ async function flush(): Promise<void> {
 
 describe("epaper editor app", () => {
   const originalFetch = globalThis.fetch;
+  const TINY_PNG =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4////fwAJ+wP9BUNFygAAAABJRU5ErkJggg==";
 
   beforeEach(() => {
-    Object.defineProperty(globalThis, "ImageData", {
-      configurable: true,
-      value: class {
-        data: Uint8ClampedArray;
-        width: number;
-        height: number;
-
-        constructor(data: Uint8ClampedArray, width: number, height: number) {
-          this.data = data;
-          this.width = width;
-          this.height = height;
-        }
-      }
-    });
-    Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
-      configurable: true,
-      value: () => ({
-        putImageData: () => {}
-      })
-    });
-
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/v2/display-profiles")) {
@@ -214,7 +195,7 @@ describe("epaper editor app", () => {
           height: 128,
           hash: "device-preview",
           activeScreenId: "layout-calendar",
-          rgba: new Array(296 * 128 * 4).fill(255)
+          pngBase64: TINY_PNG
         }), { status: 200 });
       }
       if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/layout-preview`)) {
@@ -226,7 +207,7 @@ describe("epaper editor app", () => {
               height: 128,
               hash: "layout-preview",
               activeScreenId: "layout-widget",
-              rgba: new Array(296 * 128 * 4).fill(255)
+              pngBase64: TINY_PNG
             },
             inspection: {
               width: 296,
@@ -259,7 +240,7 @@ describe("epaper editor app", () => {
           height: 128,
           hash: "layout-preview",
           activeScreenId: "layout-widget",
-          rgba: new Array(296 * 128 * 4).fill(255)
+          pngBase64: TINY_PNG
         }), { status: 200 });
       }
       if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}`) && init?.method === "PUT") {
@@ -296,8 +277,6 @@ describe("epaper editor app", () => {
   afterEach(() => {
     document.body.innerHTML = "";
     globalThis.fetch = originalFetch;
-    delete (globalThis as { ImageData?: unknown }).ImageData;
-    delete (HTMLCanvasElement.prototype as Partial<HTMLCanvasElement>).getContext;
     vi.restoreAllMocks();
   });
 

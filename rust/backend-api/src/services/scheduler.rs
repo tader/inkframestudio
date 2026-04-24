@@ -3,9 +3,9 @@ use serde_json::{json, Value};
 use tokio::time::{sleep, Duration};
 
 use crate::{
-    app::AppState, display_provider, find_provider_instance, load_user_font_data, now_ms,
+    app::AppState, bridge_render_to_png_bytes, display_provider, find_provider_instance, load_user_font_data, now_ms,
     openepaperlink_settings_from_instance, project_file_path, read_json_file, read_settings,
-    rgba_to_jpeg, routes::projects::list_projects, run_bridge_value,
+    png_to_jpeg, routes::projects::list_projects, run_bridge_value,
     services::render_data::resolve_project_render_data_value, upload_image_to_access_point, ApiError,
     AssignmentConfig, AssignmentForceUpdateResponse,
     AssignmentScheduleStatusResponse, BridgeRenderResponse, ProjectSummary, SchedulerState, StoredSettings,
@@ -251,7 +251,7 @@ pub(crate) async fn run_assignment_update(
                 message: "Skipped unchanged image.".into(),
             });
         }
-        let jpeg = rgba_to_jpeg(&rendered.rgba, rendered.width, rendered.height)?;
+        let jpeg = png_to_jpeg(&bridge_render_to_png_bytes(&rendered)?)?;
         upload_image_to_access_point(
             &state.http,
             &settings,
@@ -358,7 +358,7 @@ pub(crate) async fn upload_device_image_for_display(
         ));
     }
     let rendered = render_assigned_live(state, project_id, project, display_id).await?;
-    let jpeg = rgba_to_jpeg(&rendered.rgba, rendered.width, rendered.height)?;
+    let jpeg = png_to_jpeg(&bridge_render_to_png_bytes(&rendered)?)?;
     let provider_ref = display
         .get("providerDeviceRef")
         .or_else(|| display.get("providerRef"))
