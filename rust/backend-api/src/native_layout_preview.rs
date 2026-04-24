@@ -269,6 +269,45 @@ struct CompoundRefNode {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct DataQueryNode {
+    #[allow(dead_code)]
+    id: String,
+    #[serde(rename = "queryKind")]
+    query_kind: String,
+    #[serde(rename = "variableName")]
+    variable_name: String,
+    #[serde(rename = "dateVariableName")]
+    date_variable_name: Option<String>,
+    child: Option<Box<Node>>,
+    #[serde(default)]
+    style: LayoutStyle,
+    width: Option<SizeSpec>,
+    height: Option<SizeSpec>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ForEachNode {
+    #[allow(dead_code)]
+    id: String,
+    #[serde(rename = "itemsRef")]
+    items_ref: String,
+    #[serde(rename = "itemAlias")]
+    item_alias: String,
+    #[serde(rename = "indexAlias")]
+    index_alias: String,
+    axis: String,
+    #[serde(rename = "maxItems")]
+    max_items: Option<usize>,
+    child: Option<Box<Node>>,
+    #[serde(default)]
+    style: LayoutStyle,
+    width: Option<SizeSpec>,
+    height: Option<SizeSpec>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ScriptNode {
     #[allow(dead_code)]
     id: String,
@@ -334,6 +373,9 @@ enum Node {
         width: Option<SizeSpec>,
         height: Option<SizeSpec>,
     },
+    DataQuery(DataQueryNode),
+    #[serde(rename = "foreach")]
+    ForEach(ForEachNode),
     CompoundRef(CompoundRefNode),
     Script(ScriptNode),
     IfElse(IfElseNode),
@@ -454,6 +496,34 @@ fn unsupported_border(style: &LayoutStyle) -> bool {
         .is_some_and(|value| value != "none")
 }
 
+fn node_width_spec(node: &Node) -> Option<&SizeSpec> {
+    match node {
+        Node::Stack { width, .. } | Node::Zstack { width, .. } | Node::Grid { width, .. } => width.as_ref(),
+        Node::DataQuery(node) => node.width.as_ref(),
+        Node::ForEach(node) => node.width.as_ref(),
+        Node::CompoundRef(node) => node.width.as_ref(),
+        Node::Script(node) => node.width.as_ref(),
+        Node::IfElse(node) => node.width.as_ref(),
+        Node::PrimitiveInstance { width, .. } => width.as_ref(),
+        Node::Spacer { width, .. } => width.as_ref(),
+        Node::Unsupported => None,
+    }
+}
+
+fn node_height_spec(node: &Node) -> Option<&SizeSpec> {
+    match node {
+        Node::Stack { height, .. } | Node::Zstack { height, .. } | Node::Grid { height, .. } => height.as_ref(),
+        Node::DataQuery(node) => node.height.as_ref(),
+        Node::ForEach(node) => node.height.as_ref(),
+        Node::CompoundRef(node) => node.height.as_ref(),
+        Node::Script(node) => node.height.as_ref(),
+        Node::IfElse(node) => node.height.as_ref(),
+        Node::PrimitiveInstance { height, .. } => height.as_ref(),
+        Node::Spacer { height, .. } => height.as_ref(),
+        Node::Unsupported => None,
+    }
+}
+
 fn theme_for_node<'a>(project: &'a ProjectView, style: &LayoutStyle) -> &'a WidgetTheme {
     if let Some(theme_id) = style.theme_id.as_deref() {
         if let Some(theme) = project.themes.iter().find(|theme| theme.id == theme_id) {
@@ -527,6 +597,22 @@ fn node_supported(node: &Node) -> bool {
             rows.iter().all(|track| matches!(track.size.mode.as_deref(), None | Some("fill") | Some("fixed_px") | Some("fraction")))
                 && columns.iter().all(|track| matches!(track.size.mode.as_deref(), None | Some("fill") | Some("fixed_px") | Some("fraction")))
                 && children.iter().all(|child| node_supported(&child.node))
+        }
+        Node::DataQuery(node) => {
+            if unsupported_border(&node.style) || node.query_kind != "calendar_events" {
+                return false;
+            }
+            matches!(node.width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content"))
+                && matches!(node.height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content"))
+                && node.child.as_deref().is_some_and(node_supported)
+        }
+        Node::ForEach(node) => {
+            if unsupported_border(&node.style) || !matches!(node.axis.as_str(), "horizontal" | "vertical") {
+                return false;
+            }
+            matches!(node.width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content"))
+                && matches!(node.height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content"))
+                && node.child.as_deref().is_some_and(node_supported)
         }
         Node::CompoundRef(node) => {
             if unsupported_border(&node.style) {
@@ -641,6 +727,14 @@ fn node_supported_with_project(project: &ProjectView, node: &Node) -> bool {
             .find(|definition| definition.id == node.definition_id && definition.kind == "compound")
             .and_then(|definition| definition.root_node.as_ref())
             .is_some_and(|root| node_supported_with_project(project, root)),
+        Node::DataQuery(node) => node
+            .child
+            .as_deref()
+            .is_some_and(|child| node_supported_with_project(project, child)),
+        Node::ForEach(node) => node
+            .child
+            .as_deref()
+            .is_some_and(|child| node_supported_with_project(project, child)),
         Node::Script(node) => node
             .child
             .as_deref()
@@ -661,10 +755,10 @@ fn node_supported_with_project(project: &ProjectView, node: &Node) -> bool {
 fn simple_identifier(value: &str) -> bool {
     let mut chars = value.chars();
     match chars.next() {
-        Some(first) if first == '_' || first.is_ascii_alphabetic() => {}
+        Some(first) if first == '_' || first == '$' || first.is_ascii_alphabetic() => {}
         _ => return false,
     }
-    chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    chars.all(|ch| ch == '_' || ch == '$' || ch.is_ascii_alphanumeric())
 }
 
 fn template_supported(value: &str) -> bool {
@@ -675,10 +769,29 @@ fn template_supported(value: &str) -> bool {
             return false;
         };
         let expr = after[..end].trim();
-        if expr.is_empty() || expr.contains('|') || expr.contains('(') || expr.contains(')') || expr.contains('$') {
+        if expr.is_empty() {
             return false;
         }
-        if !expr.split('.').all(simple_identifier) {
+        let mut segments = split_top_level(expr, '|').into_iter();
+        let Some(base) = segments.next() else {
+            return false;
+        };
+        if !base.trim().split('.').all(simple_identifier) {
+            return false;
+        }
+        for filter in segments {
+            let trimmed = filter.trim();
+            if trimmed == "title" || trimmed == "downcase" || trimmed == "upcase" {
+                continue;
+            }
+            if let Some(args) = trimmed.strip_prefix("format(").and_then(|rest| rest.strip_suffix(')')) {
+                let arg = args.trim();
+                if ((arg.starts_with('"') && arg.ends_with('"')) || (arg.starts_with('\'') && arg.ends_with('\'')))
+                    && arg.len() >= 2
+                {
+                    continue;
+                }
+            }
             return false;
         }
         rest = &after[end + 2..];
@@ -690,6 +803,197 @@ fn binding_supported(value: &str) -> bool {
     template_supported(value)
 }
 
+fn split_top_level(input: &str, separator: char) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut paren_depth = 0i32;
+    let mut brace_depth = 0i32;
+    let mut bracket_depth = 0i32;
+    let mut quote: Option<char> = None;
+    let chars: Vec<char> = input.chars().collect();
+    let mut index = 0usize;
+    while index < chars.len() {
+        let ch = chars[index];
+        if let Some(active) = quote {
+            current.push(ch);
+            if ch == '\\' && index + 1 < chars.len() {
+                index += 1;
+                current.push(chars[index]);
+            } else if ch == active {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        match ch {
+            '"' | '\'' => {
+                quote = Some(ch);
+                current.push(ch);
+            }
+            '(' => {
+                paren_depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                paren_depth -= 1;
+                current.push(ch);
+            }
+            '{' => {
+                brace_depth += 1;
+                current.push(ch);
+            }
+            '}' => {
+                brace_depth -= 1;
+                current.push(ch);
+            }
+            '[' => {
+                bracket_depth += 1;
+                current.push(ch);
+            }
+            ']' => {
+                bracket_depth -= 1;
+                current.push(ch);
+            }
+            _ if ch == separator && paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 => {
+                parts.push(current.trim().to_string());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+        index += 1;
+    }
+    parts.push(current.trim().to_string());
+    parts
+}
+
+fn stringify_scope_value(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(text) => text.clone(),
+        Value::Number(number) => number.to_string(),
+        Value::Bool(boolean) => boolean.to_string(),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
+fn format_date_part(date: chrono::DateTime<chrono::Utc>, locale: &str, options: chrono::format::StrftimeItems<'_>) -> String {
+    let _ = locale;
+    date.format_with_items(options).to_string()
+}
+
+fn parse_date_like_parts(value: &Value, locale: &str) -> Option<HashMap<String, String>> {
+    let _ = locale;
+    if let Some(object) = value.as_object() {
+        for key in ["dateTime", "datetime", "date", "iso", "value", "start", "start_time"] {
+            if let Some(nested) = object.get(key) {
+                if let Some(parts) = parse_date_like_parts(nested, locale) {
+                    return Some(parts);
+                }
+            }
+        }
+    }
+    let text = match value {
+        Value::String(text) => text.clone(),
+        Value::Number(number) => number.to_string(),
+        _ => return None,
+    };
+    let parsed = chrono::DateTime::parse_from_rfc3339(&text)
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .or_else(|_| chrono::NaiveDate::parse_from_str(&text, "%Y-%m-%d").map(|value| value.and_hms_opt(0, 0, 0).unwrap().and_utc()))
+        .ok()?;
+    let mut parts = HashMap::new();
+    parts.insert("dddd".into(), parsed.format("%A").to_string());
+    parts.insert("ddd".into(), parsed.format("%a").to_string());
+    parts.insert("mmmm".into(), parsed.format("%B").to_string());
+    parts.insert("mmm".into(), parsed.format("%b").to_string());
+    parts.insert("yyyy".into(), parsed.format("%Y").to_string());
+    parts.insert("yy".into(), parsed.format("%y").to_string());
+    parts.insert("mm".into(), parsed.format("%m").to_string());
+    parts.insert("m".into(), parsed.format("%-m").to_string());
+    parts.insert("dd".into(), parsed.format("%d").to_string());
+    parts.insert("d".into(), parsed.format("%-d").to_string());
+    parts.insert("HH".into(), parsed.format("%H").to_string());
+    parts.insert("H".into(), parsed.format("%-H").to_string());
+    parts.insert("hh".into(), parsed.format("%I").to_string());
+    parts.insert("h".into(), parsed.format("%-I").to_string());
+    parts.insert("MM".into(), parsed.format("%M").to_string());
+    parts.insert("M".into(), parsed.format("%-M").to_string());
+    parts.insert("ss".into(), parsed.format("%S").to_string());
+    parts.insert("s".into(), parsed.format("%-S").to_string());
+    Some(parts)
+}
+
+fn format_scope_value(value: &Value, pattern: &str, locale: &str) -> Value {
+    let _ = format_date_part; // keep helper anchored
+    let Some(parts) = parse_date_like_parts(value, locale) else {
+        return value.clone();
+    };
+    let mut out = pattern.to_string();
+    for token in ["dddd", "ddd", "mmmm", "mmm", "yyyy", "yy", "HH", "H", "hh", "h", "MM", "M", "ss", "s", "mm", "m", "dd", "d"] {
+        out = out.replace(token, parts.get(token).map(String::as_str).unwrap_or(token));
+    }
+    Value::String(out)
+}
+
+fn title_case(text: &str) -> String {
+    text.split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str().to_lowercase()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn apply_template_filter(value: Value, filter_expression: &str, locale: &str) -> Value {
+    let trimmed = filter_expression.trim();
+    if trimmed == "title" {
+        return Value::String(title_case(&stringify_scope_value(&value)));
+    }
+    if trimmed == "downcase" {
+        return Value::String(stringify_scope_value(&value).to_lowercase());
+    }
+    if trimmed == "upcase" {
+        return Value::String(stringify_scope_value(&value).to_uppercase());
+    }
+    if let Some(args) = trimmed.strip_prefix("format(").and_then(|rest| rest.strip_suffix(')')) {
+        let pattern = args.trim().trim_matches('"').trim_matches('\'');
+        return format_scope_value(&value, pattern, locale);
+    }
+    value
+}
+
+fn resolve_scope_or_literal_expression(expression: &str, scope: &Value, locale: &str) -> Value {
+    let trimmed = expression.trim();
+    if trimmed.is_empty() {
+        return Value::Null;
+    }
+    if (trimmed.starts_with('"') && trimmed.ends_with('"')) || (trimmed.starts_with('\'') && trimmed.ends_with('\'')) {
+        return Value::String(trimmed[1..trimmed.len() - 1].to_string());
+    }
+    if trimmed == "true" {
+        return Value::Bool(true);
+    }
+    if trimmed == "false" {
+        return Value::Bool(false);
+    }
+    if let Ok(number) = trimmed.parse::<f64>() {
+        if let Some(number) = serde_json::Number::from_f64(number) {
+            return Value::Number(number);
+        }
+    }
+    let segments = split_top_level(trimmed, '|');
+    let base = segments.first().map(String::as_str).unwrap_or(trimmed).trim();
+    let mut current = scope_value(scope, base).unwrap_or(Value::Null);
+    for segment in segments.into_iter().skip(1) {
+        current = apply_template_filter(current, &segment, locale);
+    }
+    current
+}
+
 fn scope_value(scope: &Value, path: &str) -> Option<Value> {
     let mut current = scope;
     for segment in path.split('.') {
@@ -698,7 +1002,7 @@ fn scope_value(scope: &Value, path: &str) -> Option<Value> {
     Some(current.clone())
 }
 
-fn render_template(value: &str, scope: &Value) -> Option<String> {
+fn render_template(value: &str, scope: &Value, locale: &str) -> Option<String> {
     if !value.contains("{{") {
         return Some(value.to_string());
     }
@@ -712,11 +1016,11 @@ fn render_template(value: &str, scope: &Value) -> Option<String> {
         let after = &rest[start + 2..];
         let end = after.find("}}")?;
         let expr = after[..end].trim();
-        let resolved = scope_value(scope, expr)?;
+        let resolved = resolve_scope_or_literal_expression(expr, scope, locale);
         match resolved {
             Value::Null => {}
             Value::String(text) => out.push_str(&text),
-            other => out.push_str(&other.to_string()),
+            other => out.push_str(&stringify_scope_value(&other)),
         }
         rest = &after[end + 2..];
     }
@@ -732,6 +1036,65 @@ fn merge_scope(scope: &Value, derived: &Value) -> Value {
         }
     }
     merged
+}
+
+fn build_array_item_scope(scope: &Value, value: &Value, index: usize, item_alias: &str, index_alias: &str) -> Value {
+    let mut next = scope.clone();
+    if let Some(object) = next.as_object_mut() {
+        object.insert("$".into(), value.clone());
+        object.insert("item".into(), value.clone());
+        object.insert("index".into(), Value::Number(index.into()));
+        object.insert(item_alias.to_string(), value.clone());
+        object.insert(index_alias.to_string(), Value::Number(index.into()));
+    }
+    next
+}
+
+fn evaluate_array_expression(expression: &str, scope: &Value, locale: &str, item_alias: &str, index_alias: &str) -> Vec<Value> {
+    let segments = split_top_level(expression, '|');
+    let base = segments.first().cloned().unwrap_or_default();
+    let mut current = match resolve_scope_or_literal_expression(&base, scope, locale) {
+        Value::Array(items) => items,
+        _ => Vec::new(),
+    };
+    for stage in segments.into_iter().skip(1) {
+        let trimmed = stage.trim();
+        if let Some(condition) = trimmed.strip_prefix("filter(").and_then(|rest| rest.strip_suffix(')')) {
+            current = current
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, value)| {
+                    let item_scope = build_array_item_scope(scope, &value, index, item_alias, index_alias);
+                    match evaluate_js_bool(condition, &item_scope) {
+                        Ok(true) => Some(value),
+                        _ => None,
+                    }
+                })
+                .collect();
+            continue;
+        }
+        if let Some(template_expr) = trimmed.strip_prefix("unique_by(").and_then(|rest| rest.strip_suffix(')')) {
+            let template = match resolve_scope_or_literal_expression(template_expr, scope, locale) {
+                Value::String(text) => text,
+                other => stringify_scope_value(&other),
+            };
+            let mut seen = std::collections::HashSet::new();
+            current = current
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, value)| {
+                    let item_scope = build_array_item_scope(scope, &value, index, item_alias, index_alias);
+                    let key = render_template(&template, &item_scope, locale).unwrap_or_default();
+                    if seen.insert(key) {
+                        Some(value)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+        }
+    }
+    current
 }
 
 fn globals_value(project: &ProjectView, data: &Value, frame: Rect) -> Value {
@@ -930,14 +1293,14 @@ fn primitive_render_spec(
         let text = if props.render_entity_state.unwrap_or(false) {
             bindings
                 .get("entity")
-                .map(|entity_id| render_template(entity_id, scope).unwrap_or_else(|| entity_id.clone()))
+                .map(|entity_id| render_template(entity_id, scope, &project.locale).unwrap_or_else(|| entity_id.clone()))
                 .map(|entity_id| entity_state_text(scope, &entity_id))
                 .unwrap_or_default()
         } else {
             props
                 .text
                 .as_deref()
-                .and_then(|value| render_template(value, scope))
+                .and_then(|value| render_template(value, scope, &project.locale))
                 .unwrap_or_default()
         };
         (
@@ -963,24 +1326,24 @@ fn primitive_render_spec(
     } else {
         let mut value = bindings
             .get("entity")
-            .map(|entity_id| render_template(entity_id, scope).unwrap_or_else(|| entity_id.clone()))
+            .map(|entity_id| render_template(entity_id, scope, &project.locale).unwrap_or_else(|| entity_id.clone()))
             .map(|entity_id| entity_state_text(scope, &entity_id))
             .unwrap_or_default();
         if let Some(unit) = &props.unit {
-            value.push_str(&render_template(unit, scope).unwrap_or_else(|| unit.clone()));
+            value.push_str(&render_template(unit, scope, &project.locale).unwrap_or_else(|| unit.clone()));
         }
         let text = format!(
             "{}{}{}",
             props
                 .prefix
                 .as_deref()
-                .and_then(|value| render_template(value, scope))
+                .and_then(|value| render_template(value, scope, &project.locale))
                 .unwrap_or_default(),
             value,
             props
                 .suffix
                 .as_deref()
-                .and_then(|value| render_template(value, scope))
+                .and_then(|value| render_template(value, scope, &project.locale))
                 .unwrap_or_default()
         );
         (
@@ -1027,6 +1390,187 @@ fn measure_primitive(
     };
     let (painted_w, painted_h) = painted_bounds(&run);
     Ok(Some((painted_w + padding * 2, painted_h + padding * 2)))
+}
+
+fn measure_node(
+    project: &ProjectView,
+    scope: &Value,
+    node: &Node,
+    user_fonts: &HashMap<String, RuntimeFontFamilyData>,
+) -> Result<Option<(i32, i32)>, ApiError> {
+    match node {
+        Node::PrimitiveInstance { .. } => measure_primitive(project, scope, node, user_fonts),
+        Node::Stack { axis, children, style, .. } => {
+            let padding = style.padding_px.unwrap_or(0).max(0);
+            let gap = style.gap_px.unwrap_or(0).max(0);
+            let mut width = 0;
+            let mut height = 0;
+            let mut count = 0;
+            for child in children {
+                if let Some((child_w, child_h)) = measure_node(project, scope, child, user_fonts)? {
+                    count += 1;
+                    if axis == "vertical" {
+                        width = width.max(child_w);
+                        height += child_h;
+                    } else {
+                        width += child_w;
+                        height = height.max(child_h);
+                    }
+                }
+            }
+            if count > 1 {
+                if axis == "vertical" {
+                    height += gap * (count - 1);
+                } else {
+                    width += gap * (count - 1);
+                }
+            }
+            Ok(Some((width + padding * 2, height + padding * 2)))
+        }
+        Node::Script(node) => {
+            let globals = globals_value(project, scope, Rect { x: 0, y: 0, w: 0, h: 0 });
+            let bindings = Value::Object(
+                node.bindings
+                    .iter()
+                    .map(|(key, value)| {
+                        let resolved = if value.contains("{{") {
+                            render_template(value, scope, &project.locale)
+                                .map(Value::String)
+                                .unwrap_or(Value::Null)
+                        } else {
+                            scope_value(scope, value).unwrap_or_else(|| Value::String(value.clone()))
+                        };
+                        (key.clone(), resolved)
+                    })
+                    .collect(),
+            );
+            let derived = run_js_json(&node.source, scope, &bindings, &globals)?;
+            let merged_scope = if derived.is_object() { merge_scope(scope, &derived) } else { scope.clone() };
+            node.child
+                .as_deref()
+                .map(|child| measure_node(project, &merged_scope, child, user_fonts))
+                .transpose()
+                .map(|value| value.flatten())
+        }
+        Node::IfElse(node) => {
+            let child = if evaluate_js_bool(&node.condition, scope)? {
+                node.then_child.as_deref()
+            } else {
+                node.else_child.as_deref()
+            };
+            child
+                .map(|child| measure_node(project, scope, child, user_fonts))
+                .transpose()
+                .map(|value| value.flatten())
+        }
+        Node::CompoundRef(node) => {
+            let Some(definition) = project
+                .widget_definitions
+                .iter()
+                .find(|definition| definition.id == node.definition_id && definition.kind == "compound")
+            else {
+                return Ok(None);
+            };
+            let Some(root) = definition.root_node.as_ref() else {
+                return Ok(None);
+            };
+            let mut nested_scope = scope.clone();
+            let Some(scope_object) = nested_scope.as_object_mut() else {
+                return Ok(None);
+            };
+            for input in &definition.input_schema {
+                let key = &input.id;
+                let alias = &input.name;
+                let value = if input.value_type == "entity" {
+                    node.input_bindings
+                        .get(key)
+                        .or_else(|| node.input_bindings.get(alias))
+                        .map(|value| render_template(value, scope, &project.locale).unwrap_or_else(|| value.clone()))
+                        .map(Value::String)
+                        .or_else(|| node.input_values.get(key).cloned())
+                        .or_else(|| node.input_values.get(alias).cloned())
+                        .or_else(|| input.preview_value.clone())
+                        .unwrap_or(Value::String(String::new()))
+                } else {
+                    node.input_values
+                        .get(key)
+                        .cloned()
+                        .or_else(|| node.input_values.get(alias).cloned())
+                        .or_else(|| input.default_value.clone())
+                        .or_else(|| input.preview_value.clone())
+                        .unwrap_or(Value::String(String::new()))
+                };
+                scope_object.insert(key.clone(), value.clone());
+                scope_object.insert(alias.clone(), value);
+            }
+            measure_node(project, &nested_scope, root, user_fonts)
+        }
+        Node::DataQuery(node) => {
+            let mut nested_scope = scope.clone();
+            let items = scope
+                .get("metaQueries")
+                .and_then(|value| value.get(&node.id))
+                .and_then(|value| value.get("items"))
+                .cloned()
+                .unwrap_or_else(|| Value::Array(Vec::new()));
+            let date = scope
+                .get("metaQueries")
+                .and_then(|value| value.get(&node.id))
+                .and_then(|value| value.get("meta"))
+                .and_then(|value| value.get("date"))
+                .cloned()
+                .unwrap_or(Value::String(String::new()));
+            if let Some(object) = nested_scope.as_object_mut() {
+                object.insert(node.variable_name.clone(), items);
+                object.insert(
+                    node.date_variable_name.clone().unwrap_or_else(|| "date".into()),
+                    date,
+                );
+            }
+            node.child
+                .as_deref()
+                .map(|child| measure_node(project, &nested_scope, child, user_fonts))
+                .transpose()
+                .map(|value| value.flatten())
+        }
+        Node::ForEach(node) => {
+            let values = evaluate_array_expression(
+                &node.items_ref,
+                scope,
+                &project.locale,
+                &node.item_alias,
+                &node.index_alias,
+            );
+            let count = node.max_items.unwrap_or(values.len()).min(values.len());
+            let Some(template) = node.child.as_deref() else {
+                return Ok(None);
+            };
+            let mut width = 0;
+            let mut height = 0;
+            let gap = node.style.gap_px.unwrap_or(0).max(0);
+            for (index, value) in values.into_iter().take(count).enumerate() {
+                let item_scope = build_array_item_scope(scope, &value, index, &node.item_alias, &node.index_alias);
+                if let Some((child_w, child_h)) = measure_node(project, &item_scope, template, user_fonts)? {
+                    if node.axis == "horizontal" {
+                        width += child_w;
+                        height = height.max(child_h);
+                    } else {
+                        width = width.max(child_w);
+                        height += child_h;
+                    }
+                }
+            }
+            if count > 1 {
+                if node.axis == "horizontal" {
+                    width += gap * (count as i32 - 1);
+                } else {
+                    height += gap * (count as i32 - 1);
+                }
+            }
+            Ok(Some((width, height)))
+        }
+        _ => Ok(None),
+    }
 }
 
 fn render_primitive(
@@ -1093,6 +1637,8 @@ fn child_rects(
             Node::Stack { width, height, style, .. } => (width, height, style, None),
             Node::Zstack { width, height, style, .. } => (width, height, style, None),
             Node::Grid { width, height, style, .. } => (width, height, style, None),
+            Node::DataQuery(node) => (&node.width, &node.height, &node.style, None),
+            Node::ForEach(node) => (&node.width, &node.height, &node.style, None),
             Node::CompoundRef(node) => (&node.width, &node.height, &node.style, None),
             Node::Script(node) => (&node.width, &node.height, &node.style, None),
             Node::IfElse(node) => (&node.width, &node.height, &node.style, None),
@@ -1107,7 +1653,7 @@ fn child_rects(
         let padding = node_padding(style, props_padding);
         let measured = match spec.as_ref().and_then(|spec| spec.mode.as_deref()) {
             Some("fit_content") | Some("fit_glyph_bounds") | Some("intrinsic_font_height") => {
-                match measure_primitive(project, scope, child, user_fonts) {
+                match measure_node(project, scope, child, user_fonts) {
                     Ok(Some((w, h))) => Some(if is_vertical { h } else { w }),
                     _ => None,
                 }
@@ -1295,6 +1841,76 @@ fn render_node(
             }
             Ok(())
         }
+        Node::DataQuery(node) => {
+            let mut nested_scope = scope.clone();
+            let items = scope
+                .get("metaQueries")
+                .and_then(|value| value.get(&node.id))
+                .and_then(|value| value.get("items"))
+                .cloned()
+                .unwrap_or_else(|| Value::Array(Vec::new()));
+            let date = scope
+                .get("metaQueries")
+                .and_then(|value| value.get(&node.id))
+                .and_then(|value| value.get("meta"))
+                .and_then(|value| value.get("date"))
+                .cloned()
+                .unwrap_or(Value::String(String::new()));
+            if let Some(object) = nested_scope.as_object_mut() {
+                object.insert(node.variable_name.clone(), items);
+                object.insert(
+                    node.date_variable_name.clone().unwrap_or_else(|| "date".into()),
+                    date,
+                );
+            }
+            if let Some(child) = node.child.as_deref() {
+                render_node(canvas, project, &nested_scope, child, frame, user_fonts)?;
+            }
+            Ok(())
+        }
+        Node::ForEach(node) => {
+            let values = evaluate_array_expression(
+                &node.items_ref,
+                scope,
+                &project.locale,
+                &node.item_alias,
+                &node.index_alias,
+            );
+            let count = node.max_items.unwrap_or(values.len()).min(values.len());
+            let Some(template) = node.child.as_deref() else {
+                return Ok(());
+            };
+            let gap = node.style.gap_px.unwrap_or(0).max(0);
+            let padding = node.style.padding_px.unwrap_or(0).max(0);
+            let inner = Rect {
+                x: frame.x + padding,
+                y: frame.y + padding,
+                w: (frame.w - padding * 2).max(1),
+                h: (frame.h - padding * 2).max(1),
+            };
+            let horizontal = node.axis == "horizontal";
+            let available_main = if horizontal { inner.w } else { inner.h } - gap * (count.saturating_sub(1) as i32);
+            let template_spec = if horizontal { node_width_spec(template) } else { node_height_spec(template) };
+            let shared_main = match template_spec.and_then(|spec| spec.mode.as_deref()) {
+                None | Some("fill") | Some("fraction") => Some((available_main.max(0) / count.max(1) as i32).max(1)),
+                _ => None,
+            };
+            let mut cursor = if horizontal { inner.x } else { inner.y };
+            for (index, value) in values.into_iter().take(count).enumerate() {
+                let item_scope = build_array_item_scope(scope, &value, index, &node.item_alias, &node.index_alias);
+                let measured = measure_node(project, &item_scope, template, user_fonts)?.unwrap_or((inner.w, inner.h));
+                let main = shared_main.unwrap_or(if horizontal { measured.0 } else { measured.1 }).max(1);
+                let cross = if horizontal { measured.1.min(inner.h) } else { measured.0.min(inner.w) }.max(1);
+                let child_frame = if horizontal {
+                    Rect { x: cursor, y: inner.y, w: main.min(inner.w.max(1)), h: cross }
+                } else {
+                    Rect { x: inner.x, y: cursor, w: cross, h: main.min(inner.h.max(1)) }
+                };
+                render_node(canvas, project, &item_scope, template, child_frame, user_fonts)?;
+                cursor += main + gap;
+            }
+            Ok(())
+        }
         Node::CompoundRef(node) => {
             let Some(definition) = project
                 .widget_definitions
@@ -1317,7 +1933,7 @@ fn render_node(
                     node.input_bindings
                         .get(key)
                         .or_else(|| node.input_bindings.get(alias))
-                        .map(|value| render_template(value, scope).unwrap_or_else(|| value.clone()))
+                        .map(|value| render_template(value, scope, &project.locale).unwrap_or_else(|| value.clone()))
                         .map(Value::String)
                         .or_else(|| node.input_values.get(key).cloned())
                         .or_else(|| node.input_values.get(alias).cloned())
@@ -1345,7 +1961,7 @@ fn render_node(
                     .iter()
                     .map(|(key, value)| {
                         let resolved = if value.contains("{{") {
-                            render_template(value, scope)
+                            render_template(value, scope, &project.locale)
                                 .map(Value::String)
                                 .unwrap_or(Value::Null)
                         } else {
@@ -1673,5 +2289,22 @@ mod tests {
         .unwrap();
         assert!(rendered.is_some());
         assert!(rendered.unwrap().hash.starts_with("native-layout:"));
+    }
+
+    #[test]
+    fn calendar_layout_supported_natively() {
+        let project_value = demo_project();
+        let project: ProjectView = serde_json::from_value(project_value.clone()).unwrap();
+        let root = project
+            .layout_definitions
+            .iter()
+            .find(|layout| layout.id == "layout-fef18f50")
+            .and_then(|layout| layout.root_node.as_ref())
+            .unwrap();
+        assert!(
+            node_supported_with_project(&project, root),
+            "{:?}",
+            first_unsupported(&project, root)
+        );
     }
 }
