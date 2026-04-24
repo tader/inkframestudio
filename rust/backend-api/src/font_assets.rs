@@ -31,6 +31,10 @@ pub(crate) fn has_built_in_font(family: &str) -> bool {
     })
 }
 
+pub(crate) fn built_in_font_data(family: &str) -> Option<GeneratedFontFamilyData> {
+    built_in_font_assets().get(family).cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::built_in_font_assets;

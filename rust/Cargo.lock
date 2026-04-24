@@ -285,6 +285,7 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "epd-text-engine",
  "futures",
  "image",
  "regex",

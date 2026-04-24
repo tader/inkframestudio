@@ -1,6 +1,7 @@
 pub mod app;
 pub mod error;
 mod font_assets;
+mod native_theme_preview;
 pub mod providers;
 pub mod routes;
 pub mod services;
