@@ -674,10 +674,10 @@ function defaultTheme(): WidgetTheme {
     text: { title: "fg", body: "fg", value: "fg" },
     accentRole: "accent",
     fontRoles: {
-      tiny: { family: "px-sans", weight: "regular", slope: "roman", size: "tiny", pixelSize: 8, colorRole: "fg", lineSpacingPx: 0, topPaddingPx: 0 },
-      normal: { family: "px-sans", weight: "regular", slope: "roman", size: "normal", pixelSize: 12, colorRole: "fg", lineSpacingPx: 0, topPaddingPx: 0 },
-      normalEmphasis: { family: "px-sans", weight: "bold", slope: "roman", size: "normal", pixelSize: 12, colorRole: "fg", lineSpacingPx: 0, topPaddingPx: 0 },
-      header: { family: "px-sans", weight: "bold", slope: "roman", size: "header", pixelSize: 18, colorRole: "fg", lineSpacingPx: 0, topPaddingPx: 0 }
+      tiny: { family: "arial", weight: "regular", slope: "roman", size: "tiny", pixelSize: 8, colorRole: "fg", lineSpacingPx: 0, topPaddingPx: 0 },
+      normal: { family: "arial", weight: "regular", slope: "roman", size: "normal", pixelSize: 12, colorRole: "fg", lineSpacingPx: 0, topPaddingPx: 0 },
+      normalEmphasis: { family: "arial", weight: "bold", slope: "roman", size: "normal", pixelSize: 12, colorRole: "fg", lineSpacingPx: 0, topPaddingPx: 0 },
+      header: { family: "arial", weight: "bold", slope: "roman", size: "header", pixelSize: 18, colorRole: "fg", lineSpacingPx: 0, topPaddingPx: 0 }
     },
     borderTokens: {
       thin: { thicknessPx: 1, colorRole: "fg" },
@@ -2814,10 +2814,11 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private renderFontFamilyOptions(selected: string | undefined) {
+    const options = this.fonts;
     return html`
-      ${(this.fonts.length ? this.fonts : [{ id: "px-sans", label: "PX Sans", source: "built-in", variants: ["regular", "bold"] }, { id: "px-mono-special", label: "PX Mono Special", source: "built-in", variants: ["regular"] }]).map(
-        (font) => html`<option value=${font.id} ?selected=${selected === font.id}>${font.label}</option>`
-      )}
+      ${options.length
+        ? options.map((font) => html`<option value=${font.id} ?selected=${selected === font.id}>${font.label}</option>`)
+        : html`<option value="" ?selected=${!selected}>No fonts imported</option>`}
     `;
   }
 
@@ -2850,7 +2851,7 @@ export class EpPaperEditorApp extends LitElement {
     style: Partial<TextStyle> | undefined,
     onChange: (patch: Partial<TextStyle>) => void
   ): TemplateResult {
-    const currentFamily = family ?? "px-sans";
+    const currentFamily = family ?? this.fonts[0]?.id ?? "arial";
     const currentWeight = style?.weight ?? "regular";
     const currentSlope = style?.slope ?? "roman";
     const italicAvailable = this.fontVariantAvailable(currentFamily, currentWeight, "italic");
@@ -2934,7 +2935,7 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private coerceTextStyleVariant(style: Partial<TextStyle> | undefined): Partial<TextStyle> {
-    const family = style?.family ?? "px-sans";
+    const family = style?.family ?? this.fonts[0]?.id ?? "arial";
     const weight = style?.weight ?? "regular";
     const slope = style?.slope ?? "roman";
     if (this.fontVariantAvailable(family, weight, slope)) {
@@ -4337,7 +4338,7 @@ export class EpPaperEditorApp extends LitElement {
                   ${(["tiny", "normal", "normalEmphasis", "header"] as const).map(
                     (role) => {
                       const roleStyle = this.coerceTextStyleVariant(theme.fontRoles?.[role]);
-                      const roleFamily = roleStyle.family ?? "px-sans";
+                      const roleFamily = roleStyle.family ?? this.fonts[0]?.id ?? "arial";
                       return html`
                       <details>
                         <summary>${fontRoleLabel(role)} font</summary>

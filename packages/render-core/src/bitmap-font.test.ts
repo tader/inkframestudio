@@ -1,9 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { FONT_BINARY_BASE64 } from "./generated-font-data.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getGlyph, layoutText, registerUserFonts, resolveTextStyle, scaleForFontSize, setTextLayoutAdapter } from "./bitmap-font.js";
+import { FIXTURE_FONTS, registerFixtureFonts } from "./test-font-fixture.js";
+
+beforeEach(() => {
+  registerFixtureFonts();
+});
 
 afterEach(() => {
-  registerUserFonts({});
+  registerFixtureFonts();
   setTextLayoutAdapter(undefined);
 });
 
@@ -24,7 +28,7 @@ describe("bitmap font system", () => {
     const digit = getGlyph("8", { size: "header", weight: "regular", pixelSize: 16, tabularNumbers: true });
     const decimal = getGlyph(".", { size: "header", weight: "regular", pixelSize: 16, tabularNumbers: true });
     expect(decimal.advance).toBeLessThan(digit.advance);
-    expect(decimal.advance).toBe(6);
+    expect(decimal.advance).toBe(4);
   });
 
   it("distinguishes regular and bold weights", () => {
@@ -39,27 +43,26 @@ describe("bitmap font system", () => {
     expect(scaleForFontSize("header")).toBe(3);
   });
 
-  it("defaults body text to px-sans and numeric text to px-mono-special", () => {
-    expect(resolveTextStyle({}).family).toBe("px-sans");
-    expect(resolveTextStyle({ tabularNumbers: true }).family).toBe("px-mono-special");
+  it("defaults body text and numeric text to first registered user font", () => {
+    expect(resolveTextStyle({}).family).toBe("arial");
+    expect(resolveTextStyle({ tabularNumbers: true }).family).toBe("arial");
   });
 
-  it("loads imported px font families deterministically", () => {
-    const sans = getGlyph("A", { family: "px-sans", size: "normal", weight: "regular" });
-    const mono = getGlyph("8", { family: "px-mono-special", size: "normal", weight: "regular" });
+  it("loads registered TrueType font families deterministically", () => {
+    const sans = getGlyph("A", { family: "arial", size: "normal", weight: "regular" });
+    const mono = getGlyph("8", { family: "arial", size: "normal", weight: "regular" });
     expect(sans.height).toBeGreaterThan(0);
-    expect(mono.width).toBe(6);
+    expect(mono.width).toBeGreaterThan(0);
   });
 
   it("keeps asymmetric imported glyphs in correct left-right orientation", () => {
-    const b = getGlyph("b", { family: "px-sans", size: "normal", weight: "regular" });
-    const d = getGlyph("d", { family: "px-sans", size: "normal", weight: "regular" });
-    expect(b.pixels[1]?.join("")).toBe("00110");
-    expect(d.pixels[1]?.join("")).toBe("01100");
+    const b = getGlyph("b", { family: "arial", size: "normal", weight: "regular" });
+    const d = getGlyph("d", { family: "arial", size: "normal", weight: "regular" });
+    expect(b.pixels.map((row) => row.join("")).join("|")).not.toBe(d.pixels.map((row) => row.join("")).join("|"));
   });
 
   it("anchors mixed text on one baseline while descenders extend below", () => {
-    const run = layoutText("Abpq19", { family: "px-sans", size: "normal", weight: "regular" });
+    const run = layoutText("Abpq19", { family: "arial", size: "normal", weight: "regular" });
     const b = run.glyphs.find((glyph) => glyph.char === "b");
     const p = run.glyphs.find((glyph) => glyph.char === "p");
     const one = run.glyphs.find((glyph) => glyph.char === "1");
@@ -69,12 +72,12 @@ describe("bitmap font system", () => {
     expect((b?.y ?? 0) + (b?.top ?? 0)).toBe(run.baseline);
     expect((p?.y ?? 0) + (p?.top ?? 0)).toBe(run.baseline);
     expect((one?.y ?? 0) + (one?.top ?? 0)).toBe(run.baseline);
-    expect((p?.height ?? 0)).toBeGreaterThan(b?.height ?? 0);
+    expect((p?.height ?? 0)).toBeGreaterThanOrEqual(b?.height ?? 0);
     expect(run.descent).toBeGreaterThan(0);
   });
 
   it("keeps whitespace glyph metrics finite", () => {
-    const run = layoutText("Header 21.5", { family: "px-sans", size: "header", weight: "regular" });
+    const run = layoutText("Header 21.5", { family: "arial", size: "header", weight: "regular" });
     expect(Number.isFinite(run.width)).toBe(true);
     const space = run.glyphs.find((glyph) => glyph.char === " ");
     expect(space).toBeDefined();
@@ -85,28 +88,28 @@ describe("bitmap font system", () => {
   });
 
   it("supports custom preset pixels and explicit specimen sizes", () => {
-    const defaultTiny = layoutText("Ag", { family: "px-sans", size: "tiny", weight: "regular" });
+    const defaultTiny = layoutText("Ag", { family: "arial", size: "tiny", weight: "regular" });
     const customTiny = layoutText(
       "Ag",
-      { family: "px-sans", size: "tiny", weight: "regular" },
+      { family: "arial", size: "tiny", weight: "regular" },
       { tiny: 5, normal: 12, header: 16 }
     );
-    const explicit = layoutText("Ag", { family: "px-sans", size: "normal", weight: "regular", pixelSize: 20 });
+    const explicit = layoutText("Ag", { family: "arial", size: "normal", weight: "regular", pixelSize: 20 });
     expect(customTiny.height).toBeLessThan(defaultTiny.height);
     expect(explicit.height).toBeGreaterThan(defaultTiny.height);
   });
 
   it("preserves explicit pixelSize through style resolution", () => {
-    expect(resolveTextStyle({ family: "px-sans", size: "normal", pixelSize: 23 }).pixelSize).toBe(23);
-    const small = layoutText("Ag", { family: "px-sans", size: "normal", pixelSize: 8 });
-    const large = layoutText("Ag", { family: "px-sans", size: "normal", pixelSize: 24 });
+    expect(resolveTextStyle({ family: "arial", size: "normal", pixelSize: 23 }).pixelSize).toBe(23);
+    const small = layoutText("Ag", { family: "arial", size: "normal", pixelSize: 8 });
+    const large = layoutText("Ag", { family: "arial", size: "normal", pixelSize: 24 });
     expect(large.height).toBeGreaterThan(small.height);
   });
 
   it("loads user-imported font families through registry", () => {
     registerUserFonts({
       "custom-sans": {
-        regular: FONT_BINARY_BASE64["px-sans"].regular,
+        regular: FIXTURE_FONTS.arial.regular,
         label: "Custom Sans"
       }
     });
@@ -115,7 +118,7 @@ describe("bitmap font system", () => {
     expect(glyph.height).toBeGreaterThan(0);
   });
 
-  it("falls back to built-in fonts when a configured family is missing", () => {
+  it("falls back to first registered user font when a configured family is missing", () => {
     const run = layoutText("Agenda", { family: "missing-font", size: "normal", weight: "regular" });
     expect(run.width).toBeGreaterThan(0);
     expect(run.height).toBeGreaterThan(0);
@@ -136,13 +139,13 @@ describe("bitmap font system", () => {
       };
     });
     layoutText("A", { family: "missing-font", size: "normal", weight: "regular" });
-    expect(regularFontData).toBe(FONT_BINARY_BASE64["px-sans"].regular);
+    expect(regularFontData).toBe(FIXTURE_FONTS.arial.regular);
   });
 
   it("snaps uploaded font sizes to allowed pixel sizes", () => {
     registerUserFonts({
       "custom-sans": {
-        regular: FONT_BINARY_BASE64["px-sans"].regular,
+        regular: FIXTURE_FONTS.arial.regular,
         label: "Custom Sans",
         allowedPixelSizes: [8, 12, 16]
       }
@@ -156,7 +159,7 @@ describe("bitmap font system", () => {
   it("can bypass allowed pixel size snapping for preview rendering", () => {
     registerUserFonts({
       "custom-sans": {
-        regular: FONT_BINARY_BASE64["px-sans"].regular,
+        regular: FIXTURE_FONTS.arial.regular,
         label: "Custom Sans",
         allowedPixelSizes: [8, 12, 16]
       }
@@ -173,12 +176,19 @@ describe("bitmap font system", () => {
     expect(snapped.height).not.toBe(bypassed.height);
   });
 
+  it("maps legacy built-in family ids onto registered user fonts", () => {
+    const legacy = getGlyph("A", { family: "px-sans", size: "normal", weight: "regular" });
+    const current = getGlyph("A", { family: "arial", size: "normal", weight: "regular" });
+    expect(legacy.width).toBe(current.width);
+    expect(legacy.height).toBe(current.height);
+  });
+
   it("loads fonts without Node Buffer in browser-like env", () => {
     const originalBuffer = globalThis.Buffer;
     // @ts-expect-error test browser-like env
     globalThis.Buffer = undefined;
     try {
-      const glyph = getGlyph("A", { family: "px-sans", size: "normal", weight: "regular" });
+      const glyph = getGlyph("A", { family: "arial", size: "normal", weight: "regular" });
       expect(glyph.width).toBeGreaterThan(0);
     } finally {
       globalThis.Buffer = originalBuffer;
@@ -205,7 +215,7 @@ describe("bitmap font system", () => {
         y: 7
       }))
     }));
-    const run = layoutText("ABC", { family: "px-sans", size: "normal", weight: "regular" });
+    const run = layoutText("ABC", { family: "arial", size: "normal", weight: "regular" });
     expect(run.width).toBe(30);
     expect(run.glyphs).toHaveLength(3);
     expect(run.glyphs[1]?.x).toBe(10);

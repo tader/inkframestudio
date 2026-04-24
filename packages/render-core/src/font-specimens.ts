@@ -1,4 +1,4 @@
-import { BUILT_IN_FONT_OPTIONS, layoutText, supportsFontVariant } from "./bitmap-font.js";
+import { layoutText, supportsFontVariant } from "./bitmap-font.js";
 import { PixelBuffer, COLOR_ACCENT, COLOR_BG, COLOR_FG } from "./pixel-buffer.js";
 import type { DisplayProfile, FontFamily, FontOption, FontSlope, FontVariantKey, FontWeight, Project } from "./types.js";
 
@@ -109,7 +109,7 @@ export function renderFontSpecimenSheets(
   sampleText: string,
   minSize = 4,
   maxSize = 36,
-  fonts: FontOption[] = BUILT_IN_FONT_OPTIONS.filter((entry) => entry.id !== "ui-sans"),
+  fonts: FontOption[] = [],
   includeAllSizes = false
 ): FontSpecimenFamilyGroup[] {
   return fonts.map((font) => ({

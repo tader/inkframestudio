@@ -1,7 +1,6 @@
 import * as fontkit from "fontkit";
 import { DEFAULT_FONT_PRESETS } from "./font-presets.js";
 import { FONT_AWESOME_FONT_BINARY_BASE64 } from "./generated-font-awesome-data.js";
-import { FONT_BINARY_BASE64 } from "./generated-font-data.js";
 import type { FontFamily, FontOption, FontPresetValues, FontSize, FontSlope, FontVariantKey, FontWeight, TextStyle } from "./types.js";
 
 type FontkitFont = {
@@ -92,11 +91,9 @@ const layoutCache = new Map<string, TextLayoutRun>();
 const userFontData = new Map<string, { regular?: string; italic?: string; bold?: string; boldItalic?: string; label?: string; allowedPixelSizes?: number[] }>();
 const missingFontFamilyWarnings = new Set<string>();
 let textLayoutAdapter: TextLayoutAdapter | undefined;
-const DEFAULT_FALLBACK_FAMILY: ResolvedFontFamily = "px-sans";
-const EMBEDDED_FONT_BINARY_BASE64 = {
-  ...FONT_BINARY_BASE64,
-  ...FONT_AWESOME_FONT_BINARY_BASE64
-} as const;
+const DEFAULT_FALLBACK_FAMILY: ResolvedFontFamily = "arial";
+const LEGACY_TEXT_FAMILY_ALIASES = new Set<ResolvedFontFamily>(["px-sans", "px-mono-special", "ui-sans"]);
+const EMBEDDED_FONT_BINARY_BASE64 = FONT_AWESOME_FONT_BINARY_BASE64;
 
 export interface FontFamilyData {
   regular?: string;
@@ -117,9 +114,6 @@ export interface TextLayoutAdapterRequest {
 export type TextLayoutAdapter = (request: TextLayoutAdapterRequest) => TextLayoutRun | undefined;
 
 export const BUILT_IN_FONT_OPTIONS: FontOption[] = [
-  { id: "px-sans", label: "PX Sans", source: "built-in", variants: ["regular", "bold"] },
-  { id: "px-mono-special", label: "PX Mono Special", source: "built-in", variants: ["regular"] },
-  { id: "ui-sans", label: "Legacy UI Sans", source: "built-in", variants: ["regular", "bold"] },
   { id: "fa-solid", label: "Font Awesome Solid", source: "built-in", variants: ["regular"] },
   { id: "fa-regular", label: "Font Awesome Regular", source: "built-in", variants: ["regular"] },
   { id: "fa-brands", label: "Font Awesome Brands", source: "built-in", variants: ["regular"] }
@@ -145,16 +139,25 @@ export function registerUserFonts(fonts: Record<string, { regular?: string; ital
   clearFontCaches();
 }
 
+function preferredTextFallbackFamily(): ResolvedFontFamily {
+  if (userFontData.has(DEFAULT_FALLBACK_FAMILY)) {
+    return DEFAULT_FALLBACK_FAMILY;
+  }
+  const firstUserFont = userFontData.keys().next().value;
+  return typeof firstUserFont === "string" && firstUserFont.length ? firstUserFont : DEFAULT_FALLBACK_FAMILY;
+}
+
 function resolveFamily(family: FontFamily): ResolvedFontFamily {
-  const resolved = family === "ui-sans" ? "px-sans" : family;
+  const resolved = LEGACY_TEXT_FAMILY_ALIASES.has(family) ? preferredTextFallbackFamily() : family;
   if (userFontData.has(resolved) || EMBEDDED_FONT_BINARY_BASE64[resolved as keyof typeof EMBEDDED_FONT_BINARY_BASE64]) {
     return resolved;
   }
+  const fallback = preferredTextFallbackFamily();
   if (!missingFontFamilyWarnings.has(resolved)) {
     missingFontFamilyWarnings.add(resolved);
-    console.warn(`Unknown font family ${resolved}; falling back to ${DEFAULT_FALLBACK_FAMILY}`);
+    console.warn(`Unknown font family ${resolved}; falling back to ${fallback}`);
   }
-  return DEFAULT_FALLBACK_FAMILY;
+  return fallback;
 }
 
 function variantKeyFor(weight: FontWeight, slope: FontSlope): FontVariantKey {
@@ -176,10 +179,11 @@ function fontDataFor(family: ResolvedFontFamily, weight: FontWeight, slope: Font
   if (imported) {
     return imported[preferredVariant] ?? imported.regular ?? imported.bold ?? "";
   }
-  const familyData =
-    (EMBEDDED_FONT_BINARY_BASE64[family as keyof typeof EMBEDDED_FONT_BINARY_BASE64] as EmbeddedFontFamilyData | undefined) ??
-    (EMBEDDED_FONT_BINARY_BASE64[DEFAULT_FALLBACK_FAMILY as keyof typeof EMBEDDED_FONT_BINARY_BASE64] as EmbeddedFontFamilyData);
-  return familyData[preferredVariant] ?? familyData.regular;
+  const familyData = EMBEDDED_FONT_BINARY_BASE64[family as keyof typeof EMBEDDED_FONT_BINARY_BASE64] as EmbeddedFontFamilyData | undefined;
+  if (familyData) {
+    return familyData[preferredVariant] ?? familyData.regular;
+  }
+  throw new Error(`No TrueType font registered for family ${family}`);
 }
 
 function fontFamilyDataFor(family: ResolvedFontFamily): FontFamilyData {
@@ -531,7 +535,7 @@ function compactNumericPunctuationAdvance(glyph: GlyphCacheEntry): number {
 
 export function resolveTextStyle(style?: Partial<TextStyle>): TextStyle {
   return {
-    family: style?.family ?? (style?.tabularNumbers ? "px-mono-special" : "px-sans"),
+    family: style?.family ?? preferredTextFallbackFamily(),
     weight: style?.weight ?? "regular",
     slope: style?.slope ?? "roman",
     size: style?.size ?? "normal",

@@ -1,5 +1,4 @@
 import {
-  BUILT_IN_FONT_OPTIONS,
   DISPLAY_PROFILES,
   registerUserFonts,
   renderAssignedDisplay,
@@ -8,7 +7,7 @@ import {
   renderLayoutDefinition,
 } from "../../render-core/src/index.js";
 import { normalizeProject } from "../../render-core/src/themes.js";
-import type { FontOption, Project, RenderData, Scenario } from "../../render-core/src/types.js";
+import type { Project, RenderData, Scenario } from "../../render-core/src/types.js";
 import { installRustTextLayoutAdapter } from "./rust-text-engine.js";
 import { installProjectScriptingRuntime } from "./script-runtime.js";
 
@@ -104,17 +103,6 @@ function providedUserFonts(
     string,
     { regular?: string; italic?: string; bold?: string; boldItalic?: string; label?: string; allowedPixelSizes?: number[] }
   >;
-}
-
-function providedFontOptions(body: unknown): FontOption[] | undefined {
-  if (!body || typeof body !== "object") {
-    return undefined;
-  }
-  const candidate = (body as { fonts?: unknown }).fonts;
-  if (!Array.isArray(candidate)) {
-    return undefined;
-  }
-  return candidate as FontOption[];
 }
 
 function renderedResponse(rendered: {

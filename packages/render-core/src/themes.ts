@@ -22,7 +22,7 @@ export const DEFAULT_WIDGET_THEMES: WidgetTheme[] = [
       value: "fg"
     },
     accentRole: "accent",
-    autoFitFontFamily: "px-sans",
+    autoFitFontFamily: "arial",
     fontRoles: {},
     borderTokens: {
       thin: { thicknessPx: 1, colorRole: "fg" },
@@ -51,7 +51,7 @@ export const DEFAULT_WIDGET_THEMES: WidgetTheme[] = [
       value: "bg"
     },
     accentRole: "fg",
-    autoFitFontFamily: "px-sans",
+    autoFitFontFamily: "arial",
     fontRoles: {},
     borderTokens: {
       thin: { thicknessPx: 1, colorRole: "fg" },
@@ -78,7 +78,7 @@ export const DEFAULT_WIDGET_THEMES: WidgetTheme[] = [
       value: "fg"
     },
     accentRole: "accent",
-    autoFitFontFamily: "px-sans",
+    autoFitFontFamily: "arial",
     fontRoles: {},
     borderTokens: {
       thin: { thicknessPx: 1, colorRole: "accent" },
@@ -105,7 +105,7 @@ export const DEFAULT_WIDGET_THEMES: WidgetTheme[] = [
       value: "fg"
     },
     accentRole: "accent",
-    autoFitFontFamily: "px-sans",
+    autoFitFontFamily: "arial",
     fontRoles: {},
     borderTokens: {
       thin: { thicknessPx: 1, colorRole: "fg" },
@@ -253,7 +253,7 @@ function normalizeDeviceAssignments(
 export function normalizeProject(project: Project): Project {
   const themes = (project.themes?.length ? project.themes : DEFAULT_WIDGET_THEMES).map((theme) => ({
     ...theme,
-    autoFitFontFamily: theme.autoFitFontFamily ?? "px-sans"
+    autoFitFontFamily: theme.autoFitFontFamily ?? "arial"
   }));
   const displayTypes = (project.displayTypes?.length ? project.displayTypes : defaultDisplayTypes())
     .map((displayType) => normalizeDisplayType(displayType as DisplayType & { safeMarginPx?: unknown }));

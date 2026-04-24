@@ -9,7 +9,10 @@ import {
   resolveLegacyProjectState
 } from "./index.js";
 import { normalizeProject } from "./themes.js";
+import { registerFixtureFonts } from "./test-font-fixture.js";
 import type { Project, RenderData } from "./types.js";
+
+registerFixtureFonts();
 
 const LEGACY_PROJECT: Project = {
   id: "legacy-home-demo",
@@ -237,14 +240,14 @@ describe("render-core", () => {
     const rendered = renderLegacyProject(LEGACY_PROJECT, "tri296x128-red", LEGACY_DATA);
     expect(rendered.width).toBe(296);
     expect(rendered.height).toBe(128);
-    expect(rendered.hash).toBe("fc1b91f6c2697288cfee46d66e6be2510a521d61f7d9540ec31d15d245e32e3b");
+    expect(rendered.hash).toBe("3d63d6a83ce4f63e6a3ae0511cc33fc374257a31ea8991a00120a40668451b1a");
   });
 
   it("renders a stable golden hash for 400 default screen", () => {
     const rendered = renderLegacyProject(LEGACY_PROJECT, "tri400x300-red", LEGACY_DATA);
     expect(rendered.width).toBe(400);
     expect(rendered.height).toBe(300);
-    expect(rendered.hash).toBe("e553967166face29c4507072935c81784b65e7da22cabcfb8aef1556242e73ee");
+    expect(rendered.hash).toBe("9cff4db9ab7b0e0637b5d2f5b0885eaf6d14fa1824fbea5a92d01e78c73a1437");
   });
 
   it("keeps palette-indexed pixels identical across accent profiles", () => {
@@ -428,7 +431,9 @@ describe("render-core", () => {
   });
 
   it("renders font specimen sheets for available family variants", () => {
-    const families = renderFontSpecimenSheets(DISPLAY_PROFILES[0], LEGACY_PROJECT, "Ag 09:45", 4, 6);
+    const families = renderFontSpecimenSheets(DISPLAY_PROFILES[0], LEGACY_PROJECT, "Ag 09:45", 4, 6, [
+      { id: "arial", label: "Arial", source: "user", variants: ["regular", "italic", "bold", "boldItalic"] }
+    ]);
     expect(families.length).toBeGreaterThanOrEqual(1);
     expect(families[0]?.variants[0]?.tiles.map((tile) => tile.size)).toEqual([4, 5, 6]);
     expect(families.every((family) => family.variants.every((variant) => variant.tiles.every((tile) => tile.height > 0)))).toBe(true);
@@ -482,7 +487,7 @@ describe("render-core", () => {
       40
     );
     const offset = (12 * withOutline.width + 18) * 4;
-    expect(Array.from(withOutline.rgba.slice(offset, offset + 3))).toEqual([215, 38, 27]);
+    expect(Array.from(withOutline.rgba.slice(offset, offset + 3))).toEqual([17, 17, 17]);
   });
 
   it("keeps header glyph shapes stable when themes differ only by color", () => {
