@@ -458,8 +458,6 @@ export interface LayoutDefinition {
     widthPx?: number;
     heightPx?: number;
   };
-  legacyScreenId?: string;
-  legacyOverlayId?: string;
 }
 
 export type RuleAction =

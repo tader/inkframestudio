@@ -1,4 +1,4 @@
-import { BUILT_IN_WIDGET_DEFINITIONS, defaultDisplayTypes, defaultVirtualDevices, migrateLegacyAssignments, migrateLegacyLayouts } from "./designer-defaults.js";
+import { BUILT_IN_WIDGET_DEFINITIONS, defaultDisplayTypes, defaultVirtualDevices } from "./designer-defaults.js";
 import { DEFAULT_FONT_PRESETS, normalizeFontPresets } from "./font-presets.js";
 import { normalizeIconId } from "./icons.js";
 import { normalizeScriptLibraryEntries } from "./scripting.js";
@@ -263,7 +263,7 @@ export function normalizeProject(project: Project): Project {
       ?? (device.virtual ? "virtual-default" : device.providerKind === "openepaperlink-ap" ? "openepaperlink-ap-default" : undefined),
     providerDeviceRef: device.providerDeviceRef ?? device.providerRef ?? device.id
   }));
-  const layoutDefinitions = (project.layoutDefinitions?.length ? project.layoutDefinitions : migrateLegacyLayouts(project))
+  const layoutDefinitions = (project.layoutDefinitions ?? [])
     .map((layout) => ({
       ...layout,
       rootNode: normalizeLayoutNode(layout.rootNode)
@@ -271,9 +271,7 @@ export function normalizeProject(project: Project): Project {
   const widgetDefinitions = project.widgetDefinitions?.length
     ? project.widgetDefinitions
     : BUILT_IN_WIDGET_DEFINITIONS;
-  const deviceAssignments = project.deviceAssignments?.length
-    ? normalizeDeviceAssignments(project, devices, layoutDefinitions)
-    : migrateLegacyAssignments(project, devices, layoutDefinitions);
+  const deviceAssignments = normalizeDeviceAssignments(project, devices, layoutDefinitions);
   const scripting = project.scripting
     ? {
         sharedSource: typeof project.scripting.sharedSource === "string" ? project.scripting.sharedSource : undefined,

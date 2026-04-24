@@ -33,7 +33,6 @@ import type {
   UniqueLayoutNode,
   WidgetTheme
 } from "./types.js";
-import { renderLegacyProject } from "./legacy-runtime.js";
 
 interface PixelFrame {
   x: number;
@@ -1943,22 +1942,6 @@ export function renderLayoutDefinition(
   popup?: LayoutDefinition,
   themeId?: string
 ): RenderedImage {
-  if (layout.legacyScreenId) {
-    const forcedScenarioId = `designer-legacy-${layout.id}`;
-    const legacyProject = {
-      ...project,
-      scenarios: [
-        ...(project.scenarios ?? []).filter((entry) => entry.id !== forcedScenarioId),
-        {
-          id: forcedScenarioId,
-          name: "Designer legacy preview",
-          forcedScreenId: layout.legacyScreenId,
-          forcedOverlayId: popup?.legacyOverlayId
-        }
-      ]
-    };
-    return renderLegacyProject(legacyProject, layout.displayTypeId, data, forcedScenarioId);
-  }
   const displayType = resolveDisplayType(project, layout.displayTypeId);
   const rootContentPadding = layout.kind === "fullscreen" ? displayType.contentPadding : undefined;
   const buffer = new PixelBuffer(displayType.width, displayType.height, COLOR_BG, project.fontPresets);
