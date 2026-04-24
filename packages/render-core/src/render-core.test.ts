@@ -55,7 +55,7 @@ const LEGACY_PROJECT: Project = {
           id: "show-empty-calendar",
           scope: "screen_activation",
           priority: 50,
-          condition: { kind: "query_empty", queryId: "agenda-today" },
+          condition: { kind: "entity_state", entityId: "binary_sensor.calendar_empty", equals: "on" },
           action: { type: "activate_screen", screenId: "calendar-empty-296" }
         }
       ]
@@ -185,10 +185,12 @@ const LEGACY_PROJECT: Project = {
       id: "empty-calendar-demo",
       name: "Empty Calendar",
       frozenNow: "2026-04-17T08:00:00.000Z",
-      queryOverrides: {
-        "agenda-today": {
-          kind: "calendar_range",
-          items: []
+      entityOverrides: {
+        "binary_sensor.calendar_empty": {
+          entityId: "binary_sensor.calendar_empty",
+          state: "on",
+          attributes: {},
+          lastChanged: "2026-04-17T07:59:00.000Z"
         }
       }
     }
@@ -217,6 +219,15 @@ const LEGACY_DATA: RenderData = {
         { timestamp: "2026-04-17T12:00:00.000Z", value: 14.4 },
         { timestamp: "2026-04-17T14:00:00.000Z", value: 14.6 }
       ]
+    }
+  },
+  entities: {
+    ...SAMPLE_DATA.entities,
+    "binary_sensor.calendar_empty": {
+      entityId: "binary_sensor.calendar_empty",
+      state: "off",
+      attributes: {},
+      lastChanged: "2026-04-17T06:00:00.000Z"
     }
   }
 };
@@ -276,7 +287,11 @@ describe("render-core", () => {
                   id: "lower-priority",
                   scope: "screen_activation" as const,
                   priority: 10,
-                  condition: { kind: "query_empty" as const, queryId: "agenda-today" },
+                  condition: {
+                    kind: "entity_state" as const,
+                    entityId: "binary_sensor.calendar_empty",
+                    equals: "on"
+                  },
                   action: { type: "activate_screen" as const, screenId: "calendar-main-296" }
                 }
               ]

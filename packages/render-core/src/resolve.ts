@@ -31,24 +31,6 @@ function getValueRef(data: RenderData, ref: ValueRef): number | string | boolean
   if (ref.type === "entity_attribute") {
     return data.entities[ref.entityId]?.attributes?.[ref.attribute] as number | string | boolean | undefined;
   }
-  if (ref.type === "query_value") {
-    const query = data.queries[ref.queryId];
-    if (!query) {
-      return undefined;
-    }
-    if (!ref.path) {
-      return query.value ?? undefined;
-    }
-    const segments = ref.path.split(".");
-    let current: unknown = query as unknown;
-    for (const segment of segments) {
-      if (typeof current !== "object" || current === null || !(segment in current)) {
-        return undefined;
-      }
-      current = (current as Record<string, unknown>)[segment];
-    }
-    return current as number | string | boolean | undefined;
-  }
 }
 
 export function evaluateCondition(condition: Condition, data: RenderData): boolean {
@@ -75,16 +57,6 @@ export function evaluateCondition(condition: Condition, data: RenderData): boole
         return false;
       }
       return minutesSinceStateChange(entity, data.now) >= condition.minutes;
-    }
-    case "query_empty": {
-      const query = data.queries[condition.queryId];
-      const itemCount = query?.items?.length ?? 0;
-      return itemCount === 0;
-    }
-    case "query_not_empty": {
-      const query = data.queries[condition.queryId];
-      const itemCount = query?.items?.length ?? 0;
-      return itemCount > 0;
     }
     case "numeric_compare": {
       const left = Number(getValueRef(data, condition.left));

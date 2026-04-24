@@ -479,7 +479,6 @@ export interface Rule {
 export type ValueRef =
   | { type: "entity_state"; entityId: string }
   | { type: "entity_attribute"; entityId: string; attribute: string }
-  | { type: "query_value"; queryId: string; path?: string }
   | { type: "literal"; value: number | string | boolean };
 
 export type Condition =
@@ -489,8 +488,6 @@ export type Condition =
   | { kind: "entity_state"; entityId: string; equals: string }
   | { kind: "entity_matches"; entityId: string; pattern: string; flags?: string }
   | { kind: "entity_duration_ge"; entityId: string; state: string; minutes: number }
-  | { kind: "query_empty"; queryId: string }
-  | { kind: "query_not_empty"; queryId: string }
   | { kind: "numeric_compare"; left: ValueRef; op: "gt" | "gte" | "lt" | "lte" | "eq"; right: number }
   | { kind: "boolean_compare"; left: ValueRef; equals: boolean }
   | { kind: "is_defined"; ref: ValueRef; expected?: boolean }
