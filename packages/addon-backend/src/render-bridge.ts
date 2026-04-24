@@ -14,7 +14,6 @@ import { installProjectScriptingRuntime } from "./script-runtime.js";
 type BridgeRequest =
   | { op: "preview"; projectId: string; body?: unknown }
   | { op: "layout-preview"; projectId: string; body?: unknown }
-  | { op: "render-project-live"; projectId: string; body?: unknown }
   | { op: "render-assigned-live"; projectId: string; body?: unknown };
 
 async function readStdin(): Promise<string> {
@@ -165,6 +164,15 @@ async function main(): Promise<void> {
         ? { ...project, scenarios: [...project.scenarios.filter((entry) => entry.id !== adHocScenario.id), adHocScenario] }
         : project;
       const previewData = requiredRenderData(body);
+      const previewLayout =
+        augmentedProject.layoutDefinitions?.find((entry) => entry.kind === "fullscreen" && entry.displayTypeId === displayProfileId) ??
+        augmentedProject.layoutDefinitions?.find((entry) => entry.kind === "fullscreen");
+      if (previewLayout?.rootNode) {
+        const themeId = augmentedProject.deviceAssignments?.find((entry) => entry.defaultFullscreenLayoutId === previewLayout.id)?.defaultThemeId;
+        const rendered = renderLayoutDefinition(augmentedProject, previewLayout, previewData.data, undefined, themeId);
+        process.stdout.write(`${JSON.stringify(renderedResponse(rendered, previewData.message))}\n`);
+        return;
+      }
       const rendered = renderLegacyProject(
         augmentedProject,
         displayProfileId,
@@ -199,17 +207,6 @@ async function main(): Promise<void> {
         return;
       }
       process.stdout.write(`${JSON.stringify(renderedResponse(preview, previewData.message))}\n`);
-      return;
-    }
-    case "render-project-live": {
-      const project = projectFromRequest(request.projectId, request.body);
-      const body = request.body as Record<string, unknown> | undefined;
-      const displayProfileId = String(
-        body?.displayProfileId ?? project.screens.find((screen) => screen.default)?.displayProfileId ?? "tri296x128-red"
-      );
-      const scenarioId = typeof body?.scenarioId === "string" ? String(body.scenarioId) : undefined;
-      const previewData = requiredRenderData(body);
-      process.stdout.write(`${JSON.stringify(renderedResponse(renderLegacyProject(project, displayProfileId, previewData.data, scenarioId), previewData.message))}\n`);
       return;
     }
     case "render-assigned-live": {

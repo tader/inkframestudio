@@ -52,7 +52,7 @@ pub(crate) async fn publish_project(
     let rendered: BridgeRenderResponse = serde_json::from_value(
         run_bridge_value(
             &state,
-            json!({ "op": "render-project-live", "projectId": project_id, "body": render_body }),
+            json!({ "op": "preview", "projectId": project_id, "body": render_body }),
         )
         .await?,
     )
