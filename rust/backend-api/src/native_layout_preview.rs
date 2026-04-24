@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fs, path::PathBuf};
 
 use base64::Engine;
 use boa_engine::{Context as BoaContext, Source};
@@ -6,6 +6,10 @@ use epd_text_engine::{
     render as render_text_layout, FontFamilyData as EngineFontFamilyData,
     FontPresets as EngineFontPresets, LayoutRequest, TextLayoutRun,
     TextStyle as EngineTextStyle,
+};
+use resvg::{
+    tiny_skia::{Pixmap, Transform},
+    usvg::{Options, Tree},
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -15,6 +19,42 @@ use crate::{rgba_to_png, ApiError};
 const COLOR_BG: u8 = 0;
 const COLOR_FG: u8 = 1;
 const COLOR_ACCENT: u8 = 2;
+const DEFAULT_ICON_ID: &str = "fa-solid:triangle-exclamation";
+
+fn normalize_icon_id(icon_id: &str) -> String {
+    match icon_id.trim() {
+        "" => DEFAULT_ICON_ID.into(),
+        "garage" => "fa-solid:warehouse".into(),
+        "warning" => "fa-solid:triangle-exclamation".into(),
+        "calendar" => "fa-regular:calendar".into(),
+        "door" => "fa-solid:door-open".into(),
+        "lock" => "fa-solid:lock".into(),
+        "thermometer" => "fa-solid:temperature-half".into(),
+        "humidity" => "fa-solid:droplet".into(),
+        "power" => "fa-solid:power-off".into(),
+        "clock" => "fa-regular:clock".into(),
+        "bolt" => "fa-solid:bolt".into(),
+        "window" => "fa-regular:window-maximize".into(),
+        "battery" => "fa-solid:battery-half".into(),
+        value => value.into(),
+    }
+}
+
+fn font_awesome_svg_path(icon_id: &str) -> Option<PathBuf> {
+    let normalized = normalize_icon_id(icon_id);
+    let (pack, name) = normalized.split_once(':')?;
+    let dir = match pack {
+        "fa-solid" => "solid",
+        "fa-regular" => "regular",
+        "fa-brands" => "brands",
+        _ => return None,
+    };
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../node_modules/@fortawesome/fontawesome-free/svgs")
+        .join(dir)
+        .join(format!("{name}.svg"));
+    root.exists().then_some(root)
+}
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -204,6 +244,7 @@ struct LayoutStyle {
 #[serde(rename_all = "camelCase")]
 struct WidgetProps {
     text: Option<String>,
+    icon: Option<String>,
     prefix: Option<String>,
     suffix: Option<String>,
     unit: Option<String>,
@@ -658,7 +699,12 @@ fn node_supported(node: &Node) -> bool {
             height,
             ..
         } => {
-            if !matches!(primitive_type.as_str(), "text" | "number" | "line") {
+            if !matches!(primitive_type.as_str(), "text" | "number" | "line" | "icon") {
+                return false;
+            }
+            if primitive_type == "icon"
+                && font_awesome_svg_path(props.icon.as_deref().unwrap_or(DEFAULT_ICON_ID)).is_none()
+            {
                 return false;
             }
             if unsupported_border(style) {
@@ -1400,6 +1446,10 @@ fn measure_primitive(
             let padding = node_padding(style, props.padding_px);
             return Ok(Some((1 + padding * 2, 1 + padding * 2)));
         }
+        if primitive_type == "icon" {
+            let padding = node_padding(style, props.padding_px);
+            return Ok(Some((10 + padding * 2, 10 + padding * 2)));
+        }
         return Ok(None);
     };
     let Some(run) = text_run(&text, &family, pixel_size, tabular, &project.font_presets, user_fonts)? else {
@@ -1640,6 +1690,24 @@ fn render_primitive(
         draw_line(canvas, x1, y1, x2, y2, role_color(theme_for_node(project, style).text.body));
         return Ok(());
     }
+    if primitive_type == "icon" {
+        let padding = node_padding(style, props.padding_px);
+        let inner = Rect {
+            x: frame.x + padding,
+            y: frame.y + padding,
+            w: (frame.w - padding * 2).max(1),
+            h: (frame.h - padding * 2).max(1),
+        };
+        draw_icon(
+            canvas,
+            props.icon.as_deref().unwrap_or(DEFAULT_ICON_ID),
+            inner,
+            role_color(theme_for_node(project, style).text.body),
+            props.horizontal_align.as_deref().unwrap_or("center"),
+            props.vertical_align.as_deref().unwrap_or("middle"),
+        )?;
+        return Ok(());
+    }
     let Some((text, family, color, tabular, default_px, h_align, v_align, padding)) =
         primitive_render_spec(project, scope, node, user_fonts)?
     else {
@@ -1672,6 +1740,53 @@ fn render_primitive(
         _ => inner.y,
     };
     draw_text_run(canvas, &run, draw_x, draw_y, color);
+    Ok(())
+}
+
+fn draw_icon(
+    canvas: &mut IndexedCanvas,
+    icon_id: &str,
+    frame: Rect,
+    color: u8,
+    horizontal_align: &str,
+    vertical_align: &str,
+) -> Result<(), ApiError> {
+    let Some(path) = font_awesome_svg_path(icon_id) else {
+        return Ok(());
+    };
+    let svg = fs::read_to_string(path).map_err(|error| ApiError::internal(error.to_string()))?;
+    let options = Options::default();
+    let tree = Tree::from_str(&svg, &options).map_err(|error| ApiError::internal(error.to_string()))?;
+    let size = tree.size();
+    let source_w = size.width().max(1.0);
+    let source_h = size.height().max(1.0);
+    let scale = (frame.w as f32 / source_w).min(frame.h as f32 / source_h).max(0.01);
+    let draw_w = (source_w * scale).round().max(1.0) as u32;
+    let draw_h = (source_h * scale).round().max(1.0) as u32;
+    let offset_x = match horizontal_align {
+        "left" => frame.x,
+        "right" => frame.x + frame.w - draw_w as i32,
+        _ => frame.x + (frame.w - draw_w as i32) / 2,
+    };
+    let offset_y = match vertical_align {
+        "top" => frame.y,
+        "bottom" => frame.y + frame.h - draw_h as i32,
+        _ => frame.y + (frame.h - draw_h as i32) / 2,
+    };
+    let mut pixmap = Pixmap::new(draw_w, draw_h)
+        .ok_or_else(|| ApiError::internal("icon pixmap alloc failed"))?;
+    let transform = Transform::from_scale(scale, scale);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    for y in 0..draw_h as usize {
+        for x in 0..draw_w as usize {
+            if pixmap
+                .pixel(x as u32, y as u32)
+                .is_some_and(|pixel| pixel.alpha() >= 16)
+            {
+                canvas.set_pixel(offset_x + x as i32, offset_y + y as i32, color);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -2416,6 +2531,50 @@ mod tests {
                         "type": "primitive_instance",
                         "primitiveType": "line",
                         "props": { "lineDirection": "diag_down" },
+                        "width": { "mode": "fill" },
+                        "height": { "mode": "fill" }
+                    }]
+                }
+            }]
+        }))
+        .unwrap();
+        let root = project.layout_definitions[0].root_node.as_ref().unwrap();
+        assert!(
+            node_supported_with_project(&project, root),
+            "{:?}",
+            first_unsupported(&project, root)
+        );
+    }
+
+    #[test]
+    fn icon_layout_supported_natively() {
+        let project: ProjectView = serde_json::from_value(json!({
+            "id": "demo",
+            "name": "Demo",
+            "locale": "nl-NL",
+            "fontPresets": { "tiny": 8, "normal": 12, "header": 24 },
+            "themes": [{
+                "id": "classic-outline",
+                "text": { "title": "fg", "body": "fg", "value": "fg" }
+            }],
+            "displayTypes": [{
+                "id": "tri296x128-red",
+                "width": 296,
+                "height": 128,
+                "palette": { "bg": "#ffffff", "fg": "#000000", "accent": "#ff0000" }
+            }],
+            "layoutDefinitions": [{
+                "id": "layout-icon",
+                "displayTypeId": "tri296x128-red",
+                "rootNode": {
+                    "id": "root",
+                    "type": "stack",
+                    "axis": "vertical",
+                    "children": [{
+                        "id": "icon1",
+                        "type": "primitive_instance",
+                        "primitiveType": "icon",
+                        "props": { "icon": "fa-solid:bolt" },
                         "width": { "mode": "fill" },
                         "height": { "mode": "fill" }
                     }]
