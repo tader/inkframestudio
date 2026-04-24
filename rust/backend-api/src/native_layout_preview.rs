@@ -207,6 +207,8 @@ struct WidgetProps {
     prefix: Option<String>,
     suffix: Option<String>,
     unit: Option<String>,
+    #[serde(rename = "lineDirection")]
+    line_direction: Option<String>,
     #[serde(rename = "fixedPixelSize")]
     fixed_pixel_size: Option<u32>,
     #[serde(rename = "renderEntityState")]
@@ -656,7 +658,7 @@ fn node_supported(node: &Node) -> bool {
             height,
             ..
         } => {
-            if !matches!(primitive_type.as_str(), "text" | "number") {
+            if !matches!(primitive_type.as_str(), "text" | "number" | "line") {
                 return false;
             }
             if unsupported_border(style) {
@@ -1323,7 +1325,7 @@ fn primitive_render_spec(
             props.horizontal_align.as_deref().unwrap_or("left").to_string(),
             props.vertical_align.as_deref().unwrap_or("top").to_string(),
         )
-    } else {
+    } else if primitive_type == "number" {
         let mut value = bindings
             .get("entity")
             .map(|entity_id| render_template(entity_id, scope, &project.locale).unwrap_or_else(|| entity_id.clone()))
@@ -1366,6 +1368,8 @@ fn primitive_render_spec(
             props.horizontal_align.as_deref().unwrap_or("center").to_string(),
             props.vertical_align.as_deref().unwrap_or("middle").to_string(),
         )
+    } else {
+        return Ok(None);
     };
     if text.is_empty() {
         return Ok(None);
@@ -1383,6 +1387,19 @@ fn measure_primitive(
     let Some((text, family, _color, tabular, pixel_size, _h_align, _v_align, padding)) =
         primitive_render_spec(project, scope, node, user_fonts)?
     else {
+        let Node::PrimitiveInstance {
+            primitive_type,
+            props,
+            style,
+            ..
+        } = node
+        else {
+            return Ok(None);
+        };
+        if primitive_type == "line" {
+            let padding = node_padding(style, props.padding_px);
+            return Ok(Some((1 + padding * 2, 1 + padding * 2)));
+        }
         return Ok(None);
     };
     let Some(run) = text_run(&text, &family, pixel_size, tabular, &project.font_presets, user_fonts)? else {
@@ -1581,9 +1598,48 @@ fn render_primitive(
     frame: Rect,
     user_fonts: &HashMap<String, RuntimeFontFamilyData>,
 ) -> Result<(), ApiError> {
-    let Node::PrimitiveInstance { props, .. } = node else {
+    let Node::PrimitiveInstance {
+        primitive_type,
+        props,
+        style,
+        ..
+    } = node
+    else {
         return Ok(());
     };
+    if primitive_type == "line" {
+        let padding = node_padding(style, props.padding_px);
+        let inner = Rect {
+            x: frame.x + padding,
+            y: frame.y + padding,
+            w: (frame.w - padding * 2).max(1),
+            h: (frame.h - padding * 2).max(1),
+        };
+        let direction = props.line_direction.as_deref().unwrap_or("horizontal");
+        let (x1, y1, x2, y2) = match direction {
+            "vertical" => (
+                inner.x + inner.w / 2,
+                inner.y,
+                inner.x + inner.w / 2,
+                inner.y + inner.h - 1,
+            ),
+            "diag_down" => (inner.x, inner.y, inner.x + inner.w - 1, inner.y + inner.h - 1),
+            "diag_up" => (
+                inner.x,
+                inner.y + inner.h - 1,
+                inner.x + inner.w - 1,
+                inner.y,
+            ),
+            _ => (
+                inner.x,
+                inner.y + inner.h / 2,
+                inner.x + inner.w - 1,
+                inner.y + inner.h / 2,
+            ),
+        };
+        draw_line(canvas, x1, y1, x2, y2, role_color(theme_for_node(project, style).text.body));
+        return Ok(());
+    }
     let Some((text, family, color, tabular, default_px, h_align, v_align, padding)) =
         primitive_render_spec(project, scope, node, user_fonts)?
     else {
@@ -1617,6 +1673,29 @@ fn render_primitive(
     };
     draw_text_run(canvas, &run, draw_x, draw_y, color);
     Ok(())
+}
+
+fn draw_line(canvas: &mut IndexedCanvas, mut x0: i32, mut y0: i32, x1: i32, y1: i32, color: u8) {
+    let dx = (x1 - x0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let dy = -(y1 - y0).abs();
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut error = dx + dy;
+    loop {
+        canvas.set_pixel(x0, y0, color);
+        if x0 == x1 && y0 == y1 {
+            break;
+        }
+        let error2 = error * 2;
+        if error2 >= dy {
+            error += dy;
+            x0 += sx;
+        }
+        if error2 <= dx {
+            error += dx;
+            y0 += sy;
+        }
+    }
 }
 
 fn child_rects(
@@ -2301,6 +2380,50 @@ mod tests {
             .find(|layout| layout.id == "layout-fef18f50")
             .and_then(|layout| layout.root_node.as_ref())
             .unwrap();
+        assert!(
+            node_supported_with_project(&project, root),
+            "{:?}",
+            first_unsupported(&project, root)
+        );
+    }
+
+    #[test]
+    fn line_layout_supported_natively() {
+        let project: ProjectView = serde_json::from_value(json!({
+            "id": "demo",
+            "name": "Demo",
+            "locale": "nl-NL",
+            "fontPresets": { "tiny": 8, "normal": 12, "header": 24 },
+            "themes": [{
+                "id": "classic-outline",
+                "text": { "title": "fg", "body": "fg", "value": "fg" }
+            }],
+            "displayTypes": [{
+                "id": "tri296x128-red",
+                "width": 296,
+                "height": 128,
+                "palette": { "bg": "#ffffff", "fg": "#000000", "accent": "#ff0000" }
+            }],
+            "layoutDefinitions": [{
+                "id": "layout-line",
+                "displayTypeId": "tri296x128-red",
+                "rootNode": {
+                    "id": "root",
+                    "type": "stack",
+                    "axis": "vertical",
+                    "children": [{
+                        "id": "line1",
+                        "type": "primitive_instance",
+                        "primitiveType": "line",
+                        "props": { "lineDirection": "diag_down" },
+                        "width": { "mode": "fill" },
+                        "height": { "mode": "fill" }
+                    }]
+                }
+            }]
+        }))
+        .unwrap();
+        let root = project.layout_definitions[0].root_node.as_ref().unwrap();
         assert!(
             node_supported_with_project(&project, root),
             "{:?}",
