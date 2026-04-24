@@ -1,5 +1,6 @@
 import { createStableHash } from "./hash.js";
 import { layoutText } from "./bitmap-font.js";
+import { defaultIconId } from "./icons.js";
 import { COLOR_ACCENT, COLOR_BG, COLOR_FG, PixelBuffer, type PixelPaint } from "./pixel-buffer.js";
 import { formatQuantizedNumber } from "./quantize.js";
 import { resolveProjectState } from "./resolve.js";
@@ -475,7 +476,7 @@ function drawWidgetContent(
         entity && widget.props.showDuration
           ? `SINCE ${new Date(entity.lastChanged).toISOString().slice(11, 16)}`
           : String(widget.props.subline ?? "");
-      const iconName = String(widget.props.icon ?? "garage");
+      const iconName = String(widget.props.icon ?? "fa-solid:warehouse");
       buffer.drawText(label, frame.x + 4, frame.y + 4, titleStyle, titleColor);
       buffer.drawIcon(iconName, frame.x + 4, frame.y + 18, 2, bodyColor);
       buffer.drawText(state, frame.x + 36, frame.y + 24, valueStyle, accentColor);
@@ -598,7 +599,7 @@ function drawWidgetContent(
       break;
     }
     case "alert_banner": {
-      buffer.drawIcon(String(widget.props.icon ?? "warning"), frame.x + 4, frame.y + 4, 2, accentColor);
+      buffer.drawIcon(String(widget.props.icon ?? defaultIconId()), frame.x + 4, frame.y + 4, 2, accentColor);
       buffer.drawText(String(widget.props.headline ?? title), frame.x + 32, frame.y + 6, valueStyle, accentColor);
       if (widget.props.detail) {
         buffer.drawText(String(widget.props.detail), frame.x + 4, frame.y + frame.h - 12, bodyStyle, bodyColor);

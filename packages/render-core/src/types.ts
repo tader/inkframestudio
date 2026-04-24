@@ -13,6 +13,7 @@ export type BorderMergeMode = "inherit" | "always" | "never";
 export type ThemeRef = "inherit" | WidgetThemeId;
 export type NumericComparisonOp = "gt" | "gte" | "lt" | "lte" | "eq" | "neq";
 export type ProviderKind = "openepaperlink" | "openepaperlink-ap" | "virtual" | (string & {});
+export type ProviderDomain = "source" | "display";
 export type BorderToken = "none" | "thin" | "thick";
 export type SizeSpecMode = "fixed_px" | "fill" | "fraction" | "fit_content" | "fit_glyph_bounds" | "intrinsic_font_height";
 export type CompositionNodeType =
@@ -26,6 +27,7 @@ export type CompositionNodeType =
   | "filter"
   | "unique"
   | "foreach"
+  | "script"
   | "if_else";
 export type PrimitiveWidgetKind =
   | "text"
@@ -64,6 +66,8 @@ export interface TextStyle {
 export interface IconDefinition {
   id: string;
   label: string;
+  pack?: "solid" | "regular" | "brands";
+  keywords?: string[];
 }
 
 export interface FontOption {
@@ -86,32 +90,43 @@ export interface EntityCatalogEntry {
   unit?: string;
 }
 
-export interface HomeAssistantConnectionSettings {
-  host: string;
-  token: string;
-  mode: "custom" | "supervisor";
-  useSupervisorProxy: boolean;
-  allowInsecureTls?: boolean;
+export interface ProviderFieldOption {
+  value: string;
+  label: string;
 }
 
-export interface OpenEpaperLinkAccessPointSettings {
-  url: string;
-  defaultTestDisplayMac?: string;
+export interface ProviderFieldDescriptor {
+  key: string;
+  label: string;
+  kind: "text" | "password" | "checkbox" | "select";
+  required?: boolean;
+  secret?: boolean;
+  placeholder?: string;
+  help?: string;
+  defaultValue?: unknown;
+  options?: ProviderFieldOption[];
 }
 
-export interface OpenEpaperLinkAccessPointStatus {
+export interface ProviderDescriptor {
+  id: string;
+  label: string;
+  domain: ProviderDomain;
+  capabilities: string[];
+  configFields: ProviderFieldDescriptor[];
+}
+
+export interface ProviderInstance {
+  id: string;
+  providerId: string;
+  name: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+}
+
+export interface ProviderConnectionStatus {
   ok: boolean;
   message: string;
-  tagCount?: number;
-  networkError?: boolean;
-}
-
-export interface HomeAssistantConnectionStatus {
-  ok: boolean;
-  mode: HomeAssistantConnectionSettings["mode"];
-  message: string;
-  serverVersion?: string;
-  authError?: boolean;
+  details?: Record<string, unknown>;
   networkError?: boolean;
 }
 
@@ -211,6 +226,7 @@ export interface LayoutInspectionResult {
   height: number;
   root?: LayoutInspectionNode;
   popup?: LayoutInspectionNode;
+  scriptWarnings?: string[];
 }
 
 export interface NumericThemeRule {
@@ -345,6 +361,25 @@ export interface UniqueLayoutNode extends LayoutNodeBase {
   child?: LayoutNode;
 }
 
+export interface ScriptLibraryEntry {
+  name: string;
+  source: string;
+}
+
+export interface ProjectScripting {
+  sharedSource?: string;
+  helpers?: ScriptLibraryEntry[];
+  filters?: ScriptLibraryEntry[];
+}
+
+export interface ScriptLayoutNode extends LayoutNodeBase {
+  type: "script";
+  source: string;
+  outputMode: "merge_object";
+  bindings?: Record<string, string>;
+  child?: LayoutNode;
+}
+
 export interface IfElseLayoutNode extends LayoutNodeBase {
   type: "if_else";
   condition: string;
@@ -362,6 +397,7 @@ export type LayoutNode =
   | DataQueryLayoutNode
   | FilterLayoutNode
   | UniqueLayoutNode
+  | ScriptLayoutNode
   | ForEachLayoutNode
   | IfElseLayoutNode;
 
@@ -379,8 +415,10 @@ export interface DisplayType {
 export interface ManagedDisplay {
   id: string;
   name: string;
-  providerKind: ProviderKind;
-  providerRef: string;
+  providerKind?: ProviderKind;
+  providerRef?: string;
+  displayProviderInstanceId?: string;
+  providerDeviceRef?: string;
   displayTypeId: string;
   managed: boolean;
   virtual: boolean;
@@ -390,8 +428,11 @@ export interface ManagedDisplay {
 export interface DiscoveredDisplayCandidate {
   id: string;
   name: string;
-  providerKind: ProviderKind;
-  providerRef: string;
+  providerKind?: ProviderKind;
+  providerRef?: string;
+  providerId: string;
+  providerInstanceId: string;
+  providerDeviceRef: string;
   suggestedDisplayTypeId?: string;
   suggestedDisplayType?: DisplayType;
   discoverySource?: "home-assistant" | "access-point";
@@ -589,6 +630,8 @@ export interface Project {
   name: string;
   version: number;
   locale?: string;
+  defaultSourceProviderInstanceId?: string;
+  scripting?: ProjectScripting;
   fontPresets: FontPresetValues;
   themes: WidgetTheme[];
   displayTypes?: DisplayType[];
@@ -599,7 +642,7 @@ export interface Project {
   screens: Screen[];
   overlays: Overlay[];
   widgets: WidgetInstance[];
-  queries: QueryDefinition[];
+  queries?: QueryDefinition[];
   scenarios: Scenario[];
 }
 
@@ -653,4 +696,5 @@ export interface RenderedImage {
   hash: string;
   activeScreenId: string;
   activeOverlayId?: string;
+  scriptWarnings?: string[];
 }

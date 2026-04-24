@@ -1,8 +1,11 @@
 import { LitElement, css, html, nothing, type TemplateResult } from "lit";
-import { BUILT_IN_WIDGET_DEFINITIONS, DISPLAY_PROFILES, ICON_DEFINITIONS, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FillRole, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type HomeAssistantConnectionSettings, type HomeAssistantConnectionStatus, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutInspectionResult, type LayoutNode, type ManagedDisplay, type OpenEpaperLinkAccessPointSettings, type OpenEpaperLinkAccessPointStatus, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
+import { BUILT_IN_WIDGET_DEFINITIONS, DISPLAY_PROFILES, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FillRole, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutInspectionResult, type LayoutNode, type ManagedDisplay, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type ProviderConnectionStatus, type ProviderDescriptor, type ProviderInstance, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
 import { SAMPLE_PROJECT } from "../../render-core/src/sample-project.js";
 import {
+  deleteProviderInstance,
   deleteFont,
+  fetchProviderKinds,
+  fetchProviderInstances,
   fetchDaFontPage,
   fetchAssignmentSchedules,
   fetchDevicePreview,
@@ -14,16 +17,20 @@ import {
   fetchIcons,
   fetchLayoutInspectionPreview,
   fetchLayoutPreview,
+  fetchLayoutPreviewBundle,
   fetchOpenEpaperLinkAccessPointSettings,
   fetchProject,
   fetchProjects,
+  fetchProviderEntities,
   fetchThemePreview,
   importDaFontFont as importDaFontFontFromApi,
   importFont,
   rescanFonts,
+  saveProviderInstance,
   saveHomeAssistantSettings,
   saveOpenEpaperLinkAccessPointSettings,
   saveProject,
+  testProviderInstance,
   testHomeAssistantConnection,
   testOpenEpaperLinkAccessPointConnection,
   uploadPreviewToOpenEpaperLinkAccessPoint,
@@ -35,10 +42,21 @@ import {
   type FontSpecimenResponse,
   type DaFontEntry,
   type LayoutInspectionPreviewResponse,
+  type LayoutPreviewBundleResponse,
   type OpenEpaperLinkAccessPointSettingsResponse,
   type PreviewResponse
 } from "./api.js";
-import { deriveStructureDropIntent, findInspectionNodeAtPoint, type StructureDropIntent } from "./structure-preview-model.js";
+import "./code-editor-field.js";
+import {
+  buildStructurePreviewTree,
+  STRUCTURE_PREVIEW_BOTTOM_PADDING,
+  STRUCTURE_PREVIEW_SIDE_PADDING,
+  STRUCTURE_PREVIEW_TOP_PADDING,
+  deriveStructureDropIntent,
+  findInspectionNodeAtPoint,
+  translateStructurePreviewTree,
+  type StructureDropIntent
+} from "./structure-preview-model.js";
 import { buildNodeTree, getNodeById, isContainerNode, isDescendant, moveNode, moveNodeAfter, moveNodeBefore, moveNodeToGridCell, removeNode } from "./tree-model.js";
 
 type PageId = "displays" | "display-types" | "widgets" | "layouts" | "themes" | "config" | "dafont";
@@ -74,6 +92,7 @@ type NodeCreateKind =
   | "filter"
   | "unique"
   | "foreach"
+  | "script"
   | "if_else";
 
 function maskToken(hasToken: boolean, token: string): string {
@@ -122,7 +141,7 @@ function defaultPrimitiveNode(kind: PrimitiveWidgetKind): PrimitiveInstanceNode 
         : kind === "number"
           ? { digits: 1, autoFit: true, placeholderValue: "88.8", horizontalAlign: "center", verticalAlign: "middle", paddingPx: 4 }
           : kind === "icon"
-            ? { icon: "warning" }
+            ? { icon: DEFAULT_ICON_ID }
             : kind === "line"
               ? { lineDirection: "horizontal" }
               : kind === "circle"
@@ -130,6 +149,8 @@ function defaultPrimitiveNode(kind: PrimitiveWidgetKind): PrimitiveInstanceNode 
                 : {}
   };
 }
+
+const DEFAULT_ICON_ID = "fa-solid:triangle-exclamation";
 
 function defaultCompoundRefNode(definitionId = ""): LayoutNode {
   return {
@@ -214,6 +235,19 @@ function defaultIfElseNode(): LayoutNode {
   };
 }
 
+function defaultScriptNode(): LayoutNode {
+  return {
+    id: nextId("node"),
+    type: "script",
+    source: 'return { derivedText: String(now ?? "").slice(11, 16) };',
+    outputMode: "merge_object",
+    bindings: {},
+    width: defaultSizeSpec("fill"),
+    height: defaultSizeSpec("fill"),
+    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+  };
+}
+
 function defaultNodeForKind(kind: NodeCreateKind, project: Project): LayoutNode {
   if (kind === "stack" || kind === "grid" || kind === "zstack") {
     return defaultRootNode(kind);
@@ -232,6 +266,9 @@ function defaultNodeForKind(kind: NodeCreateKind, project: Project): LayoutNode 
   }
   if (kind === "foreach") {
     return defaultForEachNode();
+  }
+  if (kind === "script") {
+    return defaultScriptNode();
   }
   if (kind === "if_else") {
     return defaultIfElseNode();
@@ -257,6 +294,9 @@ function labelForNode(node: LayoutNode): string {
   }
   if (node.type === "foreach") {
     return `foreach ${node.itemAlias || "item"}`;
+  }
+  if (node.type === "script") {
+    return "script";
   }
   if (node.type === "if_else") {
     return "if/else";
@@ -319,7 +359,7 @@ function emptyStackRoot(): LayoutNode {
 }
 
 function candidateMac(candidate: DiscoveredDisplayCandidate): string {
-  return String(candidate.metadata?.mac ?? candidate.providerRef ?? "");
+  return String(candidate.metadata?.mac ?? candidate.providerDeviceRef ?? candidate.providerRef ?? "");
 }
 
 function normalizedMac(value: string): string {
@@ -331,11 +371,11 @@ function lastSixMacDigits(value: string): string {
   return compact.length >= 6 ? compact.slice(-6) : compact;
 }
 
-function displayMac(display: Pick<ManagedDisplay, "metadata" | "providerRef">): string {
-  return String(display.metadata?.mac ?? display.providerRef ?? "");
+function displayMac(display: Pick<ManagedDisplay, "metadata" | "providerRef" | "providerDeviceRef">): string {
+  return String(display.metadata?.mac ?? display.providerDeviceRef ?? display.providerRef ?? "");
 }
 
-function displayTitle(display: Pick<ManagedDisplay, "name" | "metadata" | "providerRef">): string {
+function displayTitle(display: Pick<ManagedDisplay, "name" | "metadata" | "providerRef" | "providerDeviceRef">): string {
   const suffix = lastSixMacDigits(displayMac(display));
   return suffix ? `${display.name} · ${suffix}` : display.name;
 }
@@ -351,7 +391,7 @@ function parseAllowedPixelSizes(value: string): number[] {
       value
         .split(/[,\s]+/)
         .map((entry) => Number(entry))
-        .filter((entry) => Number.isInteger(entry) && entry >= 4 && entry <= 200)
+        .filter((entry) => Number.isInteger(entry) && entry >= 4)
     )
   ).sort((left, right) => left - right);
 }
@@ -392,7 +432,7 @@ function updateNode(node: LayoutNode, nodeId: string, updater: (current: LayoutN
       }))
     };
   }
-  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach") {
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach" || node.type === "script") {
     return {
       ...node,
       child: node.child ? updateNode(node.child, nodeId, updater) : undefined
@@ -428,7 +468,7 @@ function removeNodeById(node: LayoutNode, nodeId: string): LayoutNode {
         }))
     };
   }
-  if (node.type === "data_query" || node.type === "filter" || node.type === "unique") {
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "script") {
     return {
       ...node,
       child: node.child?.id === nodeId ? undefined : node.child ? removeNodeById(node.child, nodeId) : undefined
@@ -473,7 +513,7 @@ function stripCompoundRefs(node: LayoutNode, definitionId: string): LayoutNode |
         .filter((child): child is typeof node.children[number] => Boolean(child))
     };
   }
-  if (node.type === "data_query" || node.type === "filter" || node.type === "unique") {
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "script") {
     const child = node.child ? stripCompoundRefs(node.child, definitionId) : undefined;
     return { ...node, child };
   }
@@ -517,7 +557,7 @@ function clearThemeRefs(node: LayoutNode, themeId: string): LayoutNode {
       }))
     };
   }
-  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach") {
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach" || node.type === "script") {
     return {
       ...node,
       style: cleanedStyle,
@@ -557,7 +597,7 @@ function appendChild(node: LayoutNode, parentId: string, child: LayoutNode): Lay
       ]
     };
   }
-  if (node.id === parentId && (node.type === "data_query" || node.type === "filter" || node.type === "unique")) {
+  if (node.id === parentId && (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "script")) {
     return {
       ...node,
       child
@@ -584,7 +624,7 @@ function appendChild(node: LayoutNode, parentId: string, child: LayoutNode): Lay
       }))
     };
   }
-  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach") {
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach" || node.type === "script") {
     return {
       ...node,
       child: node.child ? appendChild(node.child, parentId, child) : node.child
@@ -630,7 +670,7 @@ function moveLayer(node: LayoutNode, parentId: string, childId: string, delta: -
       }))
     };
   }
-  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach") {
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach" || node.type === "script") {
     return {
       ...node,
       child: node.child ? moveLayer(node.child, parentId, childId, delta) : undefined
@@ -758,6 +798,8 @@ function defaultVirtualDisplay(displayTypeId: string): ManagedDisplay {
     name: "Virtual Display",
     providerKind: "virtual",
     providerRef: nextId("virtual"),
+    displayProviderInstanceId: "virtual-default",
+    providerDeviceRef: nextId("virtual-device"),
     displayTypeId,
     managed: true,
     virtual: true,
@@ -824,6 +866,10 @@ export class EpPaperEditorApp extends LitElement {
     confirmDeleteFontId: { state: true },
     previewViewportWidth: { state: true },
     previewViewportHeight: { state: true },
+    iconSearchQuery: { state: true },
+    providerKinds: { state: true },
+    providerInstances: { state: true },
+    providerStatuses: { state: true },
     homeAssistantSettings: { state: true },
     homeAssistantTokenDraft: { state: true },
     replaceHomeAssistantToken: { state: true },
@@ -855,7 +901,7 @@ export class EpPaperEditorApp extends LitElement {
     }
     .shell {
       display: grid;
-      grid-template-columns: 220px minmax(240px, 320px) minmax(420px, 1fr) minmax(420px, 1.2fr);
+      grid-template-columns: 220px minmax(240px, 320px) minmax(420px, 1fr) minmax(240px, 0.6fr);
       min-height: 100vh;
     }
     nav,
@@ -890,7 +936,8 @@ export class EpPaperEditorApp extends LitElement {
     button,
     input,
     select,
-    textarea {
+    textarea,
+    code-editor-field {
       font: inherit;
     }
     button {
@@ -924,16 +971,16 @@ export class EpPaperEditorApp extends LitElement {
       margin-bottom: 8px;
       font-size: 13px;
     }
-    input,
+    input:not(.ime-text-area):not(.inputarea),
     select,
-    textarea {
+    textarea:not(.ime-text-area):not(.inputarea) {
       width: 100%;
       box-sizing: border-box;
       border: 2px solid #111;
       padding: 6px;
       background: #fff;
     }
-    textarea {
+    textarea:not(.ime-text-area):not(.inputarea) {
       min-height: 96px;
       resize: vertical;
     }
@@ -960,10 +1007,9 @@ export class EpPaperEditorApp extends LitElement {
     }
     .structure-stage {
       position: relative;
-      overflow: hidden;
+      overflow: auto;
       touch-action: none;
       cursor: crosshair;
-      width: 100%;
       min-height: 220px;
       border: 2px solid #111;
       background:
@@ -972,19 +1018,19 @@ export class EpPaperEditorApp extends LitElement {
         repeating-linear-gradient(90deg, transparent, transparent 23px, rgba(17,17,17,0.04) 24px);
     }
     .structure-overlay {
-      position: absolute;
-      inset: 0;
+      position: relative;
     }
     .structure-node {
       position: absolute;
       box-sizing: border-box;
       border: 1px dashed rgba(17, 17, 17, 0.45);
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.16);
       color: #111;
       overflow: hidden;
+      pointer-events: none;
     }
     .structure-node.container {
-      background: rgba(255, 255, 255, 0.03);
+      background: rgba(255, 255, 255, 0.08);
     }
     .structure-node.hovered {
       border-color: #c98912;
@@ -998,18 +1044,22 @@ export class EpPaperEditorApp extends LitElement {
       border-color: #1f6f3a;
       background: rgba(31, 111, 58, 0.12);
     }
-    .structure-label {
+    .structure-node-header {
       position: absolute;
-      left: 2px;
-      top: 2px;
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 12px;
+      box-sizing: border-box;
       font-size: 11px;
-      background: rgba(247, 241, 229, 0.92);
-      border: 1px solid rgba(17, 17, 17, 0.25);
-      padding: 1px 4px;
-      max-width: calc(100% - 4px);
+      line-height: 10px;
+      background: rgba(247, 241, 229, 0.96);
+      border-bottom: 1px solid rgba(17, 17, 17, 0.2);
+      padding: 1px 3px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      pointer-events: none;
     }
     .editor-structure-preview {
       margin-bottom: 12px;
@@ -1080,32 +1130,6 @@ export class EpPaperEditorApp extends LitElement {
       border-left: 2px solid #ddd;
       padding-left: 8px;
     }
-    .editor-split {
-      display: grid;
-      grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
-      gap: 12px;
-      align-items: start;
-    }
-    .node-tree {
-      border: 2px solid #111;
-      background: #fff;
-      padding: 8px;
-    }
-    .tree-row {
-      display: grid;
-      grid-template-columns: 1fr auto auto;
-      gap: 6px;
-      align-items: center;
-      margin-bottom: 6px;
-    }
-    .tree-node {
-      width: 100%;
-      text-align: left;
-    }
-    .tree-drop {
-      padding: 4px 6px;
-      min-width: 58px;
-    }
     .inspector-panel {
       border: 2px solid #111;
       background: #fff;
@@ -1114,6 +1138,9 @@ export class EpPaperEditorApp extends LitElement {
     .danger {
       border-color: #7f1d1d;
       color: #7f1d1d;
+    }
+    .detail-danger-action {
+      margin: 8px 0 12px;
     }
     .empty-state {
       border: 2px dashed #111;
@@ -1188,12 +1215,16 @@ export class EpPaperEditorApp extends LitElement {
   declare private confirmDeleteFontId: string;
   declare private previewViewportWidth: number;
   declare private previewViewportHeight: number;
+  declare private iconSearchQuery: string;
+  declare private providerKinds: ProviderDescriptor[];
+  declare private providerInstances: ProviderInstance[];
+  declare private providerStatuses: Record<string, ProviderConnectionStatus | null>;
   declare private homeAssistantSettings: HomeAssistantSettingsResponse;
   declare private homeAssistantTokenDraft: string;
   declare private replaceHomeAssistantToken: boolean;
-  declare private homeAssistantStatus: HomeAssistantConnectionStatus | null;
+  declare private homeAssistantStatus: ProviderConnectionStatus | null;
   declare private openEpaperLinkAccessPointSettings: OpenEpaperLinkAccessPointSettingsResponse;
-  declare private openEpaperLinkAccessPointStatus: OpenEpaperLinkAccessPointStatus | null;
+  declare private openEpaperLinkAccessPointStatus: ProviderConnectionStatus | null;
   declare private uploadStatusMessage: string;
   declare private assignmentScheduleStatuses: Record<string, AssignmentScheduleStatusResponse>;
   declare private selectedPreviewTagMac: string;
@@ -1225,7 +1256,7 @@ export class EpPaperEditorApp extends LitElement {
     this.selectedPreviewThemeId = "";
     this.selectedAssignmentId = "";
     this.discoveredDisplays = [];
-    this.icons = ICON_DEFINITIONS;
+    this.icons = [];
     this.fonts = [];
     this.entityCatalog = [];
     this.previewRgba = new Uint8ClampedArray();
@@ -1243,6 +1274,10 @@ export class EpPaperEditorApp extends LitElement {
     this.confirmDeleteFontId = "";
     this.previewViewportWidth = 0;
     this.previewViewportHeight = 0;
+    this.iconSearchQuery = "";
+    this.providerKinds = [];
+    this.providerInstances = [];
+    this.providerStatuses = {};
     this.homeAssistantSettings = {
       host: "",
       token: "",
@@ -1306,19 +1341,21 @@ export class EpPaperEditorApp extends LitElement {
 
   private async initialize(): Promise<void> {
     try {
-      const [projectsResult, iconsResult, fontsResult, entitiesResult, settingsResult, accessPointSettingsResult] = await Promise.allSettled([
+      const [projectsResult, iconsResult, fontsResult, providerKindsResult, providerInstancesResult, settingsResult, accessPointSettingsResult] = await Promise.allSettled([
         fetchProjects(),
         fetchIcons(),
         fetchFonts(),
-        fetchHomeAssistantEntities(),
+        fetchProviderKinds(),
+        fetchProviderInstances(),
         fetchHomeAssistantSettings(),
         fetchOpenEpaperLinkAccessPointSettings()
       ]);
       const projects = projectsResult.status === "fulfilled" ? projectsResult.value : [];
       this.projectSummaries = projects;
-      this.icons = iconsResult.status === "fulfilled" ? iconsResult.value : ICON_DEFINITIONS;
+      this.icons = iconsResult.status === "fulfilled" ? iconsResult.value : [];
       this.fonts = fontsResult.status === "fulfilled" ? fontsResult.value : [];
-      this.entityCatalog = entitiesResult.status === "fulfilled" ? entitiesResult.value : [];
+      this.providerKinds = providerKindsResult.status === "fulfilled" ? providerKindsResult.value : [];
+      this.providerInstances = providerInstancesResult.status === "fulfilled" ? providerInstancesResult.value : [];
       this.homeAssistantSettings = settingsResult.status === "fulfilled"
         ? settingsResult.value
         : {
@@ -1333,6 +1370,8 @@ export class EpPaperEditorApp extends LitElement {
         ? accessPointSettingsResult.value
         : { url: "" };
       this.homeAssistantTokenDraft = maskToken(this.homeAssistantSettings.hasToken, "");
+      const sourceProvider = this.activeSourceProviderInstance;
+      this.entityCatalog = sourceProvider ? await fetchProviderEntities(sourceProvider.id).catch(() => []) : [];
       if (projects[0]) {
         this.project = cloneProject(await fetchProject(projects[0].id));
       }
@@ -1380,6 +1419,23 @@ export class EpPaperEditorApp extends LitElement {
     this.selectedNodeId = currentRoot && getNodeById(currentRoot, this.selectedNodeId)
       ? this.selectedNodeId
       : currentRoot?.id ?? "";
+  }
+
+  private filteredIcons(query: string, selectedIconId = ""): IconDefinition[] {
+    const needle = query.trim().toLowerCase();
+    const selected = this.icons.find((icon) => icon.id === selectedIconId);
+    const filtered = !needle
+      ? this.icons
+      : this.icons.filter((icon) =>
+          icon.id.toLowerCase().includes(needle) ||
+          icon.label.toLowerCase().includes(needle) ||
+          (icon.pack ?? "").toLowerCase().includes(needle) ||
+          (icon.keywords ?? []).some((keyword) => keyword.toLowerCase().includes(needle))
+        );
+    if (selected && !filtered.some((icon) => icon.id === selected.id)) {
+      return [selected, ...filtered];
+    }
+    return filtered.slice(0, 200);
   }
 
   updated(): void {
@@ -1442,10 +1498,7 @@ export class EpPaperEditorApp extends LitElement {
 
   private async refreshPreview(): Promise<void> {
     const requestId = ++this.previewRequestId;
-    const [preview, inspection] = await Promise.all([
-      this.fetchPagePreview().catch(() => undefined),
-      this.fetchPageInspection().catch(() => undefined)
-    ]);
+    const [preview, inspection] = await this.fetchPagePreviewAndInspection().catch(() => [undefined, undefined] as const);
     if (requestId !== this.previewRequestId) {
       return;
     }
@@ -1463,7 +1516,11 @@ export class EpPaperEditorApp extends LitElement {
     }
     this.previewRgba = new Uint8ClampedArray(preview.rgba);
     this.previewHash = preview.hash;
-    this.previewMessage = preview.dataSourceMessage ?? "";
+    this.previewMessage = [
+      preview.dataSourceMessage,
+      ...(preview.scriptWarnings ?? []),
+      ...(inspection?.scriptWarnings ?? [])
+    ].filter(Boolean).join("\n");
     this.previewWidth = preview.width;
     this.previewHeight = preview.height;
     this.layoutInspection = inspection ?? null;
@@ -1471,6 +1528,43 @@ export class EpPaperEditorApp extends LitElement {
       this.structureHoveredNodeId = "";
       this.structureDropIntent = null;
     }
+  }
+
+  private async fetchPagePreviewAndInspection(): Promise<readonly [PreviewResponse | undefined, LayoutInspectionPreviewResponse | undefined]> {
+    if (this.activePage === "layouts") {
+      if (!this.selectedLayoutId) {
+        return [undefined, undefined] as const;
+      }
+      const response = await fetchLayoutPreviewBundle(
+        this.project.id,
+        this.selectedLayoutId,
+        undefined,
+        this.projectWithPreviewThemeForLayout(this.selectedLayoutId),
+        false
+      );
+      return [response.preview, response.inspection] as const;
+    }
+    if (this.activePage === "widgets") {
+      const definition = this.selectedWidgetDefinition;
+      if (!definition?.rootNode) {
+        return [undefined, undefined] as const;
+      }
+      const displayTypeId = this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id;
+      if (!displayTypeId) {
+        return [undefined, undefined] as const;
+      }
+      const tempLayoutId = "__widget-preview-layout";
+      const tempProject = this.widgetPreviewProject(definition, displayTypeId);
+      const response = await fetchLayoutPreviewBundle(this.project.id, tempLayoutId, undefined, tempProject, true);
+      const inspection = response.inspection?.root?.nodeId === "__widget-preview-ref" && response.inspection.root.children[0]
+        ? {
+            ...response.inspection,
+            root: response.inspection.root.children[0]
+          }
+        : response.inspection;
+      return [response.preview, inspection] as const;
+    }
+    return [await this.fetchPagePreview(), await this.fetchPageInspection()] as const;
   }
 
   private ensureSelectedFontPreviewFamily(): void {
@@ -1779,7 +1873,10 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private async discoverDisplays(): Promise<void> {
-    this.discoveredDisplays = await fetchDiscoveredDisplays(this.project.id);
+    const providerInstance = this.activeDisplayProviderInstance;
+    this.discoveredDisplays = providerInstance
+      ? await fetchDiscoveredDisplays(this.project.id, providerInstance.id)
+      : [];
   }
 
   private addDiscoveredDisplay(candidate: DiscoveredDisplayCandidate): void {
@@ -1803,6 +1900,8 @@ export class EpPaperEditorApp extends LitElement {
       name: candidate.name,
       providerKind: candidate.providerKind,
       providerRef: candidate.providerRef,
+      displayProviderInstanceId: candidate.providerInstanceId,
+      providerDeviceRef: candidate.providerDeviceRef,
       displayTypeId,
       managed: true,
       virtual: false,
@@ -1979,15 +2078,15 @@ export class EpPaperEditorApp extends LitElement {
   private structurePreviewCoords(event: PointerEvent, target: HTMLElement): { x: number; y: number } {
     const rect = target.getBoundingClientRect();
     return {
-      x: Math.max(0, Math.floor(((event.clientX - rect.left) / Math.max(1, rect.width)) * this.previewWidth)),
-      y: Math.max(0, Math.floor(((event.clientY - rect.top) / Math.max(1, rect.height)) * this.previewHeight))
+      x: Math.max(0, Math.floor(event.clientX - rect.left + target.scrollLeft)),
+      y: Math.max(0, Math.floor(event.clientY - rect.top + target.scrollTop))
     };
   }
 
   private structureHitNode(event: PointerEvent, target: HTMLElement): LayoutInspectionNode | undefined {
     const { x, y } = this.structurePreviewCoords(event, target);
-    return findInspectionNodeAtPoint(this.layoutInspection?.popup ?? this.layoutInspection?.root, x, y)
-      ?? findInspectionNodeAtPoint(this.layoutInspection?.root, x, y);
+    const root = this.structurePreviewRoot();
+    return findInspectionNodeAtPoint(root, x, y);
   }
 
   private handleStructurePointerDown(event: PointerEvent): void {
@@ -2014,7 +2113,7 @@ export class EpPaperEditorApp extends LitElement {
       return;
     }
     const { x, y } = this.structurePreviewCoords(event, target);
-    const root = this.layoutInspection?.popup ?? this.layoutInspection?.root;
+    const root = this.structurePreviewRoot();
     const intent = deriveStructureDropIntent(root, this.structureDraggedNodeId, x, y);
     if (
       intent &&
@@ -2104,7 +2203,7 @@ export class EpPaperEditorApp extends LitElement {
     child: LayoutNode | undefined
   ): void {
     this.updateRootNode(owner, (root) => updateNode(root, nodeId, (current) => {
-      if (current.type === "data_query" || current.type === "filter" || current.type === "unique" || current.type === "foreach") {
+      if (current.type === "data_query" || current.type === "filter" || current.type === "unique" || current.type === "foreach" || current.type === "script") {
         return {
           ...current,
           child
@@ -2130,6 +2229,69 @@ export class EpPaperEditorApp extends LitElement {
         : current
     )));
     this.selectedNodeId = child?.id ?? nodeId;
+  }
+
+  private updateProjectScripting(mutator: (current: NonNullable<Project["scripting"]>) => NonNullable<Project["scripting"]>): void {
+    const current = this.project.scripting ?? { sharedSource: "", helpers: [], filters: [] };
+    this.project = {
+      ...this.project,
+      scripting: mutator(current)
+    };
+  }
+
+  private addScriptingLibraryEntry(kind: "helpers" | "filters"): void {
+    this.updateProjectScripting((current) => ({
+      ...current,
+      [kind]: [...(current[kind] ?? []), { name: "", source: kind === "filters" ? "(value) => value" : "() => undefined" }]
+    }));
+  }
+
+  private updateScriptingLibraryEntry(kind: "helpers" | "filters", index: number, field: "name" | "source", value: string): void {
+    this.updateProjectScripting((current) => ({
+      ...current,
+      [kind]: (current[kind] ?? []).map((entry, entryIndex) => (
+        entryIndex === index
+          ? { ...entry, [field]: value }
+          : entry
+      ))
+    }));
+  }
+
+  private removeScriptingLibraryEntry(kind: "helpers" | "filters", index: number): void {
+    this.updateProjectScripting((current) => ({
+      ...current,
+      [kind]: (current[kind] ?? []).filter((_entry, entryIndex) => entryIndex !== index)
+    }));
+  }
+
+  private addScriptBinding(owner: { id: string; rootNode?: LayoutNode }, nodeId: string): void {
+    this.updateRootNode(owner, (root) => updateNode(root, nodeId, (current) => {
+      if (current.type !== "script") {
+        return current;
+      }
+      const bindingName = `value${Object.keys(current.bindings ?? {}).length + 1}`;
+      return {
+        ...current,
+        bindings: {
+          ...(current.bindings ?? {}),
+          [bindingName]: ""
+        }
+      };
+    }));
+  }
+
+  private removeScriptBinding(owner: { id: string; rootNode?: LayoutNode }, nodeId: string, bindingKey: string): void {
+    this.updateRootNode(owner, (root) => updateNode(root, nodeId, (current) => {
+      if (current.type !== "script") {
+        return current;
+      }
+      const nextBindings = { ...(current.bindings ?? {}) };
+      delete nextBindings[bindingKey];
+      return {
+        ...current,
+        bindings: nextBindings
+      };
+    }));
   }
 
   private moveDraggedNodeToParent(owner: { id: string; rootNode?: LayoutNode }, targetParentId: string): void {
@@ -2166,6 +2328,118 @@ export class EpPaperEditorApp extends LitElement {
     }));
   }
 
+  private providerDescriptor(providerId: string): ProviderDescriptor | undefined {
+    return this.providerKinds.find((descriptor) => descriptor.id === providerId);
+  }
+
+  private providerInstancesByDomain(domain: "source" | "display"): ProviderInstance[] {
+    return this.providerInstances.filter((instance) => this.providerDescriptor(instance.providerId)?.domain === domain);
+  }
+
+  private sourceProviderOptions(): ProviderInstance[] {
+    return this.providerInstancesByDomain("source").filter((instance) => instance.enabled);
+  }
+
+  private createProviderDraft(providerId: string): void {
+    const descriptor = this.providerDescriptor(providerId);
+    if (!descriptor) {
+      return;
+    }
+    this.providerInstances = [
+      ...this.providerInstances,
+      {
+        id: nextId(`${providerId}-instance`),
+        providerId,
+        name: descriptor.label,
+        enabled: true,
+        config: Object.fromEntries(
+          descriptor.configFields.map((field) => [field.key, field.defaultValue ?? (field.kind === "checkbox" ? false : "")])
+        )
+      }
+    ];
+  }
+
+  private syncLegacyProviderSettings(): void {
+    const homeAssistant = this.providerInstances.find((instance) => instance.providerId === "home-assistant");
+    const accessPoint = this.providerInstances.find((instance) => instance.providerId === "openepaperlink-ap");
+    this.homeAssistantSettings = {
+      host: String(homeAssistant?.config.host ?? ""),
+      token: String(homeAssistant?.config.token ?? ""),
+      hasToken: String(homeAssistant?.config.token ?? "") === "********",
+      mode: homeAssistant?.config.mode === "supervisor" ? "supervisor" : "custom",
+      useSupervisorProxy: Boolean(homeAssistant?.config.useSupervisorProxy),
+      allowInsecureTls: Boolean(homeAssistant?.config.allowInsecureTls)
+    };
+    this.openEpaperLinkAccessPointSettings = {
+      url: String(accessPoint?.config.url ?? ""),
+      defaultTestDisplayMac: String(accessPoint?.config.defaultTestDisplayMac ?? "")
+    };
+    this.homeAssistantTokenDraft = maskToken(this.homeAssistantSettings.hasToken, "");
+  }
+
+  private async refreshProviderState(): Promise<void> {
+    this.providerKinds = await fetchProviderKinds().catch(() => this.providerKinds);
+    this.providerInstances = await fetchProviderInstances().catch(() => this.providerInstances);
+    this.syncLegacyProviderSettings();
+  }
+
+  private updateProviderInstanceDraft(instanceId: string, key: string, value: unknown): void {
+    this.providerInstances = this.providerInstances.map((instance) =>
+      instance.id === instanceId
+        ? {
+            ...instance,
+            config: {
+              ...instance.config,
+              [key]: value
+            }
+          }
+        : instance
+    );
+  }
+
+  private async saveProvider(instanceId: string): Promise<void> {
+    const instance = this.providerInstances.find((entry) => entry.id === instanceId);
+    if (!instance) {
+      return;
+    }
+    const descriptor = this.providerDescriptor(instance.providerId);
+    let payload = instance;
+    if (descriptor?.configFields.some((field) => field.key === "token")) {
+      const currentToken = String(instance.config.token ?? "");
+      payload = {
+        ...instance,
+        config: {
+          ...instance.config,
+          token: currentToken === "********" ? "" : currentToken
+        }
+      };
+    }
+    await saveProviderInstance(payload);
+    await this.refreshProviderState();
+    const sourceProvider = this.activeSourceProviderInstance;
+    this.entityCatalog = sourceProvider ? await fetchProviderEntities(sourceProvider.id).catch(() => this.entityCatalog) : [];
+    await this.refreshPreview();
+  }
+
+  private async testProvider(instanceId: string): Promise<void> {
+    this.providerStatuses = {
+      ...this.providerStatuses,
+      [instanceId]: await testProviderInstance(instanceId).catch((error) => ({
+        ok: false,
+        message: error instanceof Error ? error.message : "Provider test failed"
+      }))
+    };
+  }
+
+  private async deleteProvider(instanceId: string): Promise<void> {
+    await deleteProviderInstance(instanceId);
+    this.providerStatuses = Object.fromEntries(Object.entries(this.providerStatuses).filter(([key]) => key !== instanceId));
+    await this.refreshProviderState();
+    const sourceProvider = this.activeSourceProviderInstance;
+    this.entityCatalog = sourceProvider ? await fetchProviderEntities(sourceProvider.id).catch(() => this.entityCatalog) : [];
+    await this.refreshPreview();
+  }
+
   private async saveConnection(): Promise<void> {
     this.homeAssistantSettings = await saveHomeAssistantSettings({
       ...this.homeAssistantSettings,
@@ -2174,6 +2448,7 @@ export class EpPaperEditorApp extends LitElement {
     });
     this.replaceHomeAssistantToken = false;
     this.homeAssistantTokenDraft = maskToken(this.homeAssistantSettings.hasToken, "");
+    await this.refreshProviderState();
     this.entityCatalog = await fetchHomeAssistantEntities().catch(() => []);
     await this.refreshPreview();
   }
@@ -2191,6 +2466,7 @@ export class EpPaperEditorApp extends LitElement {
       url: this.openEpaperLinkAccessPointSettings.url,
       defaultTestDisplayMac: this.openEpaperLinkAccessPointSettings.defaultTestDisplayMac
     });
+    await this.refreshProviderState();
     this.discoveredDisplays = await fetchDiscoveredDisplays(this.project.id).catch(() => this.discoveredDisplays);
   }
 
@@ -2293,12 +2569,21 @@ export class EpPaperEditorApp extends LitElement {
     return this.project.displayTypes?.find((entry) => entry.id === this.selectedDisplayTypeId);
   }
 
+  private get activeSourceProviderInstance(): ProviderInstance | undefined {
+    return this.providerInstances.find((instance) => instance.id === (this.project.defaultSourceProviderInstanceId ?? "home-assistant-default"))
+      ?? this.providerInstances.find((instance) => this.providerKinds.find((kind) => kind.id === instance.providerId)?.domain === "source" && instance.enabled);
+  }
+
+  private get activeDisplayProviderInstance(): ProviderInstance | undefined {
+    return this.providerInstances.find((instance) => instance.providerId === "openepaperlink-ap" && instance.enabled);
+  }
+
   private get visibleDisplays(): ManagedDisplay[] {
-    return (this.project.devices ?? []).filter((entry) => entry.virtual || entry.providerKind === "openepaperlink-ap");
+    return this.project.devices ?? [];
   }
 
   private get accessPointTagCandidates(): DiscoveredDisplayCandidate[] {
-    return this.discoveredDisplays.filter((candidate) => candidate.providerKind === "openepaperlink-ap");
+    return this.discoveredDisplays.filter((candidate) => candidate.providerId === "openepaperlink-ap");
   }
 
   private get selectedDaFontEntry(): DaFontEntry | undefined {
@@ -2348,13 +2633,13 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private managedDisplayForCandidate(candidate: DiscoveredDisplayCandidate): ManagedDisplay | undefined {
-    const candidateRef = String(candidate.providerRef ?? "");
+    const candidateRef = String(candidate.providerDeviceRef ?? candidate.providerRef ?? "");
     const candidateMacKey = normalizedMac(candidateMac(candidate));
     return (this.project.devices ?? []).find((display) => {
-      if (display.providerKind !== "openepaperlink-ap") {
+      if ((display.displayProviderInstanceId ?? "") !== candidate.providerInstanceId) {
         return false;
       }
-      if (candidateRef && display.providerRef === candidateRef) {
+      if (candidateRef && (display.providerDeviceRef ?? display.providerRef) === candidateRef) {
         return true;
       }
       return Boolean(candidateMacKey) && normalizedMac(displayMac(display)) === candidateMacKey;
@@ -2452,7 +2737,6 @@ export class EpPaperEditorApp extends LitElement {
                   this.selectedAssignmentId = this.project.deviceAssignments?.find((entry) => entry.displayId === device.id)?.id ?? "";
                   void this.refreshPreview();
                 }}>${displayTitle(device)}</button>
-                <button @click=${() => this.removeDisplay(device.id)}>${device.virtual ? "Delete" : "Unmanage"}</button>
               </div>
             `
           )}
@@ -2491,7 +2775,6 @@ export class EpPaperEditorApp extends LitElement {
                   }
                   void this.refreshPreview();
                 }}>${displayType.name}</button>
-                <button @click=${() => this.removeDisplayType(displayType.id)}>Delete</button>
               </div>
             `
           )}
@@ -2516,7 +2799,6 @@ export class EpPaperEditorApp extends LitElement {
                     this.selectedWidgetDefinitionId = definition.id;
                     void this.refreshPreview();
                   }}>${definition.name}</button>
-                  <button @click=${() => this.removeWidgetDefinition(definition.id)}>Delete</button>
                 </div>
               `
             )}
@@ -2535,7 +2817,6 @@ export class EpPaperEditorApp extends LitElement {
                   this.selectedLayoutId = layout.id;
                   void this.refreshPreview();
                 }}>${layout.name}</button>
-                <button @click=${() => this.removeLayout(layout.id)}>Delete</button>
               </div>
             `
           )}
@@ -2611,17 +2892,29 @@ export class EpPaperEditorApp extends LitElement {
     ].filter(Boolean).join(" ");
   }
 
-  private renderStructureOverlayNode(node: LayoutInspectionNode, rootWidth: number, rootHeight: number, depth = 0): TemplateResult {
-    const left = (node.frame.x / Math.max(1, rootWidth)) * 100;
-    const top = (node.frame.y / Math.max(1, rootHeight)) * 100;
-    const width = (node.frame.w / Math.max(1, rootWidth)) * 100;
-    const height = (node.frame.h / Math.max(1, rootHeight)) * 100;
+  private structurePreviewVisualFrame(node: LayoutInspectionNode): { x: number; y: number; w: number; h: number } {
+    return {
+      x: node.frame.x,
+      y: node.frame.y,
+      w: node.frame.w,
+      h: node.frame.h
+    };
+  }
+
+  private structurePreviewRoot(): LayoutInspectionNode | undefined {
+    const owner = this.editorOwner;
+    const root = buildStructurePreviewTree(owner?.rootNode, labelForNode);
+    return root ? translateStructurePreviewTree(root, STRUCTURE_PREVIEW_SIDE_PADDING, STRUCTURE_PREVIEW_TOP_PADDING) : undefined;
+  }
+
+  private renderStructureOverlayBoxes(node: LayoutInspectionNode, rootWidth: number, rootHeight: number, depth = 0): TemplateResult {
+    const frame = this.structurePreviewVisualFrame(node);
     return html`
       <div
         class=${this.structureNodeClass(node)}
-        style=${`left:${left}%;top:${top}%;width:${width}%;height:${height}%;z-index:${depth + 1};`}
+        style=${`left:${frame.x}px;top:${frame.y}px;width:${frame.w}px;height:${frame.h}px;z-index:${depth + 1};`}
       >
-        <div class="structure-label">${node.label}</div>
+        <div class="structure-node-header">${node.label}</div>
       </div>
       ${node.gridCells?.map((cell) => html`
         <div
@@ -2634,30 +2927,31 @@ export class EpPaperEditorApp extends LitElement {
               ? "drop-target"
               : ""
           ].filter(Boolean).join(" ")}
-          style=${`left:${(cell.frame.x / Math.max(1, rootWidth)) * 100}%;top:${(cell.frame.y / Math.max(1, rootHeight)) * 100}%;width:${(cell.frame.w / Math.max(1, rootWidth)) * 100}%;height:${(cell.frame.h / Math.max(1, rootHeight)) * 100}%;z-index:${depth + 2};`}
+          style=${`left:${cell.frame.x}px;top:${cell.frame.y}px;width:${cell.frame.w}px;height:${cell.frame.h}px;z-index:${depth + 2};`}
         ></div>
       `) ?? nothing}
-      ${node.children.map((child) => this.renderStructureOverlayNode(child, rootWidth, rootHeight, depth + 1))}
+      ${node.children.map((child) => this.renderStructureOverlayBoxes(child, rootWidth, rootHeight, depth + 1))}
     `;
   }
 
   private renderStructurePreviewStage(): TemplateResult {
-    const root = this.layoutInspection?.popup ?? this.layoutInspection?.root;
-    if (!root || !this.previewWidth || !this.previewHeight) {
+    const root = this.structurePreviewRoot();
+    if (!root) {
       return html`<div class="muted">No structure preview.</div>`;
     }
+    const rootWidth = Math.max(1, root.frame.x + root.frame.w + STRUCTURE_PREVIEW_SIDE_PADDING);
+    const rootHeight = Math.max(1, root.frame.y + root.frame.h + STRUCTURE_PREVIEW_BOTTOM_PADDING);
     return html`
       <div
         class="preview-stage structure-stage"
-        style=${`aspect-ratio:${this.previewWidth} / ${this.previewHeight};`}
         @pointerdown=${(event: PointerEvent) => this.handleStructurePointerDown(event)}
         @pointermove=${(event: PointerEvent) => this.handleStructurePointerMove(event)}
         @pointerup=${(event: PointerEvent) => this.handleStructurePointerUp(event)}
         @pointercancel=${(event: PointerEvent) => this.handleStructurePointerUp(event)}
         @pointerleave=${() => this.handleStructurePointerLeave()}
       >
-        <div class="structure-overlay">
-          ${this.renderStructureOverlayNode(root, this.previewWidth, this.previewHeight)}
+        <div class="structure-overlay" style=${`width:${rootWidth}px;height:${rootHeight}px;`}>
+          ${this.renderStructureOverlayBoxes(root, rootWidth, rootHeight)}
         </div>
       </div>
     `;
@@ -3057,7 +3351,15 @@ export class EpPaperEditorApp extends LitElement {
         ? html`
             <label>
               Text
-              <textarea .value=${String(node.props?.text ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, text: (event.target as HTMLTextAreaElement).value } })))}></textarea>
+              <code-editor-field
+                language="plaintext"
+                min-lines="3"
+                .value=${String(node.props?.text ?? "")}
+                @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({
+                  ...(current as PrimitiveInstanceNode),
+                  props: { ...(current as PrimitiveInstanceNode).props, text: String((event.target as HTMLElement & { value?: string }).value ?? "") }
+                })))}
+              ></code-editor-field>
             </label>
             <div class="muted">Inputs in compound widgets: use <code>{{Input Name}}</code> or <code>\${Input Name}</code>.</div>
             <label>
@@ -3141,15 +3443,32 @@ export class EpPaperEditorApp extends LitElement {
           `
         : nothing}
       ${node.primitiveType === "icon"
-        ? html`
+        ? (() => {
+            const selectedIconId = String(node.props?.icon ?? DEFAULT_ICON_ID);
+            const iconOptions = this.filteredIcons(this.iconSearchQuery, selectedIconId);
+            return html`
+            <label>
+              Icon search
+              <input
+                placeholder="triangle, github, warehouse..."
+                .value=${this.iconSearchQuery}
+                @input=${(event: Event) => {
+                  this.iconSearchQuery = (event.target as HTMLInputElement).value;
+                }}
+              />
+            </label>
             <label>
               Icon
-              <select .value=${String(node.props?.icon ?? "warning")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, icon: (event.target as HTMLSelectElement).value } })))}>
-                ${this.icons.map((icon) => html`<option value=${icon.id}>${icon.label}</option>`)}
+              <select size="12" .value=${selectedIconId} @change=${(event: Event) => {
+                const iconId = (event.target as HTMLSelectElement).value;
+                this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, icon: iconId } })));
+              }}>
+                ${iconOptions.map((icon) => html`<option value=${icon.id}>${icon.pack ? `${icon.pack} · ` : ""}${icon.label} (${icon.id})</option>`)}
               </select>
             </label>
             ${this.renderContentAlignmentControls(node, owner, { horizontal: "center", vertical: "middle" })}
-          `
+          `;
+          })()
         : nothing}
       ${node.primitiveType === "state_tile"
         ? this.renderContentAlignmentControls(node, owner, { horizontal: "center", vertical: "middle" })
@@ -3196,81 +3515,6 @@ export class EpPaperEditorApp extends LitElement {
     `;
   }
 
-  private renderNodeTree(owner: { id: string; rootNode?: LayoutNode }): TemplateResult {
-    const entries = buildNodeTree(owner.rootNode);
-    return html`
-      <div class="node-tree">
-        <div class="row">
-          <strong>Node Tree</strong>
-          ${owner.rootNode
-            ? nothing
-            : html`
-                <div class="row">
-                  <button @click=${() => this.setRootNode(owner, defaultRootNode("stack"))}>Add Stack Root</button>
-                  <button @click=${() => this.setRootNode(owner, defaultRootNode("grid"))}>Add Grid Root</button>
-                  <button @click=${() => this.setRootNode(owner, defaultRootNode("zstack"))}>Add ZStack Root</button>
-                </div>
-              `}
-        </div>
-        ${entries.length
-          ? entries.map((entry) => {
-              const canDropInside = isContainerNode(entry.node);
-              const parent = entry.parentId ? getNodeById(owner.rootNode, entry.parentId) : undefined;
-              const canDropAfter = Boolean(
-                entry.parentId &&
-                parent &&
-                (parent.type === "stack" || parent.type === "zstack" || parent.type === "grid")
-              );
-              return html`
-                <div class="tree-row" style=${`padding-left:${entry.depth * 14}px;`}>
-                  <button
-                    class="tree-node ${this.selectedNodeId === entry.node.id ? "active" : ""}"
-                    draggable="true"
-                    @click=${() => this.selectNode(entry.node.id)}
-                    @dragstart=${() => {
-                      this.draggedNodeId = entry.node.id;
-                    }}
-                    @dragend=${() => {
-                      this.draggedNodeId = "";
-                    }}
-                    @dragover=${(event: DragEvent) => {
-                      if (canDropInside) {
-                        event.preventDefault();
-                      }
-                    }}
-                    @drop=${(event: DragEvent) => {
-                      event.preventDefault();
-                      if (canDropInside) {
-                        this.moveDraggedNodeToParent(owner, entry.node.id);
-                      }
-                    }}
-                  >
-                    ${entry.slotLabel ? `${entry.slotLabel}: ` : ""}${labelForNode(entry.node)}
-                  </button>
-                  ${canDropAfter
-                    ? html`
-                        <button
-                          class="tree-drop"
-                          title="Drop after"
-                          @dragover=${(event: DragEvent) => event.preventDefault()}
-                          @drop=${(event: DragEvent) => {
-                            event.preventDefault();
-                            this.moveDraggedNodeAfter(owner, entry.parentId!, entry.node.id);
-                          }}
-                        >
-                          After
-                        </button>
-                      `
-                    : html`<span></span>`}
-                  ${canDropInside ? html`<span class="muted">Drop into</span>` : html`<span></span>`}
-                </div>
-              `;
-            })
-          : html`<div class="muted">No root node.</div>`}
-      </div>
-    `;
-  }
-
   private renderNodeEditor(node: LayoutNode, owner: { id: string; rootNode?: LayoutNode }, parentId?: string): TemplateResult {
     return html`
       <div class="inspector-panel">
@@ -3310,6 +3554,7 @@ export class EpPaperEditorApp extends LitElement {
                 <button @click=${() => this.createChildNode(owner, node.id, "filter")}>Filter</button>
                 <button @click=${() => this.createChildNode(owner, node.id, "unique")}>Unique</button>
                 <button @click=${() => this.createChildNode(owner, node.id, "foreach")}>Foreach</button>
+                <button @click=${() => this.createChildNode(owner, node.id, "script")}>Script</button>
                 <button @click=${() => this.createChildNode(owner, node.id, "if_else")}>If/Else</button>
               </div>
             `
@@ -3424,6 +3669,7 @@ export class EpPaperEditorApp extends LitElement {
                 <button @click=${() => this.setMetaChildNode(owner, node.id, emptyStackRoot())}>${node.child ? "Replace" : "Add"} child stack</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultFilterNode())}>${node.child ? "Replace" : "Add"} filter</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultUniqueNode())}>${node.child ? "Replace" : "Add"} unique</button>
+                <button @click=${() => this.setMetaChildNode(owner, node.id, defaultScriptNode())}>${node.child ? "Replace" : "Add"} script</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultForEachNode())}>${node.child ? "Replace" : "Add"} foreach</button>
               </div>
               ${node.child ? nothing : html`<div class="muted">No child subtree.</div>`}
@@ -3433,7 +3679,12 @@ export class EpPaperEditorApp extends LitElement {
           ? html`
               <label>
                 Items expression
-                <input .value=${node.itemsRef} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), itemsRef: (event.target as HTMLInputElement).value } )))} />
+                <code-editor-field
+                  language="plaintext"
+                  single-line
+                  .value=${node.itemsRef}
+                  @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), itemsRef: String((event.target as HTMLElement & { value?: string }).value ?? "") } )))}
+                ></code-editor-field>
               </label>
               <label>
                 Output variable
@@ -3449,11 +3700,17 @@ export class EpPaperEditorApp extends LitElement {
               </label>
               <label>
                 Condition
-                <input .value=${node.condition} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), condition: (event.target as HTMLInputElement).value } )))} />
+                <code-editor-field
+                  language="plaintext"
+                  single-line
+                  .value=${node.condition}
+                  @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), condition: String((event.target as HTMLElement & { value?: string }).value ?? "") } )))}
+                ></code-editor-field>
               </label>
               <div class="row">
                 <button @click=${() => this.setMetaChildNode(owner, node.id, emptyStackRoot())}>${node.child ? "Replace" : "Add"} child stack</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultUniqueNode())}>${node.child ? "Replace" : "Add"} unique</button>
+                <button @click=${() => this.setMetaChildNode(owner, node.id, defaultScriptNode())}>${node.child ? "Replace" : "Add"} script</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultForEachNode())}>${node.child ? "Replace" : "Add"} foreach</button>
               </div>
               ${node.child ? nothing : html`<div class="muted">No child subtree.</div>`}
@@ -3463,7 +3720,12 @@ export class EpPaperEditorApp extends LitElement {
           ? html`
               <label>
                 Items expression
-                <input .value=${node.itemsRef} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), itemsRef: (event.target as HTMLInputElement).value } )))} />
+                <code-editor-field
+                  language="plaintext"
+                  single-line
+                  .value=${node.itemsRef}
+                  @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), itemsRef: String((event.target as HTMLElement & { value?: string }).value ?? "") } )))}
+                ></code-editor-field>
               </label>
               <label>
                 Output variable
@@ -3479,11 +3741,17 @@ export class EpPaperEditorApp extends LitElement {
               </label>
               <label>
                 Key template
-                <input .value=${node.keyTemplate} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), keyTemplate: (event.target as HTMLInputElement).value } )))} />
+                <code-editor-field
+                  language="plaintext"
+                  single-line
+                  .value=${node.keyTemplate}
+                  @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), keyTemplate: String((event.target as HTMLElement & { value?: string }).value ?? "") } )))}
+                ></code-editor-field>
               </label>
               <div class="row">
                 <button @click=${() => this.setMetaChildNode(owner, node.id, emptyStackRoot())}>${node.child ? "Replace" : "Add"} child stack</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultForEachNode())}>${node.child ? "Replace" : "Add"} foreach</button>
+                <button @click=${() => this.setMetaChildNode(owner, node.id, defaultScriptNode())}>${node.child ? "Replace" : "Add"} script</button>
               </div>
               ${node.child ? nothing : html`<div class="muted">No child subtree.</div>`}
             `
@@ -3492,7 +3760,12 @@ export class EpPaperEditorApp extends LitElement {
           ? html`
               <label>
                 Items expression
-                <input .value=${node.itemsRef} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), itemsRef: (event.target as HTMLInputElement).value } )))} />
+                <code-editor-field
+                  language="plaintext"
+                  single-line
+                  .value=${node.itemsRef}
+                  @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), itemsRef: String((event.target as HTMLElement & { value?: string }).value ?? "") } )))}
+                ></code-editor-field>
               </label>
               <label>
                 Item alias
@@ -3516,11 +3789,81 @@ export class EpPaperEditorApp extends LitElement {
               ${node.child ? nothing : html`<div class="muted">No template child.</div>`}
             `
           : nothing}
+        ${node.type === "script"
+          ? html`
+              <div class="muted">Returns object merged into child scope. Globals: now, today, locale, display, project.</div>
+              <label>
+                Source
+                <code-editor-field
+                  language="javascript"
+                  min-lines="8"
+                  .value=${node.source}
+                  @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), source: String((event.target as HTMLElement & { value?: string }).value ?? "") } )))}
+                ></code-editor-field>
+              </label>
+              <label>
+                Output mode
+                <input .value=${node.outputMode} disabled />
+              </label>
+              <div class="section-title">Bindings</div>
+              ${Object.entries(node.bindings ?? {}).map(([key, expression]) => html`
+                <div class="row">
+                  <input
+                    placeholder="name"
+                    .value=${key}
+                    @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => {
+                      if (current.type !== "script") {
+                        return current;
+                      }
+                      const nextBindings = Object.fromEntries(
+                        Object.entries(current.bindings ?? {}).map(([entryKey, entryValue]) => (
+                          entryKey === key
+                            ? [(event.target as HTMLInputElement).value, entryValue]
+                            : [entryKey, entryValue]
+                        ))
+                      );
+                      return { ...current, bindings: nextBindings };
+                    }))}
+                  />
+                  <code-editor-field
+                    language="plaintext"
+                    single-line
+                    placeholder="scope expression"
+                    .value=${String(expression)}
+                    @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => {
+                      if (current.type !== "script") {
+                        return current;
+                      }
+                      return {
+                        ...current,
+                        bindings: {
+                          ...(current.bindings ?? {}),
+                          [key]: String((event.target as HTMLElement & { value?: string }).value ?? "")
+                        }
+                      };
+                    }))}
+                  ></code-editor-field>
+                  <button @click=${() => this.removeScriptBinding(owner, node.id, key)}>Remove</button>
+                </div>
+              `)}
+              <div class="row">
+                <button @click=${() => this.addScriptBinding(owner, node.id)}>Add binding</button>
+                <button @click=${() => this.setMetaChildNode(owner, node.id, emptyStackRoot())}>${node.child ? "Replace" : "Add"} child stack</button>
+                <button @click=${() => this.setMetaChildNode(owner, node.id, defaultPrimitiveNode("text"))}>${node.child ? "Replace" : "Add"} child text</button>
+              </div>
+              ${node.child ? nothing : html`<div class="muted">No child subtree.</div>`}
+            `
+          : nothing}
         ${node.type === "if_else"
           ? html`
               <label>
                 Condition
-                <input .value=${node.condition} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), condition: (event.target as HTMLInputElement).value } )))} />
+                <code-editor-field
+                  language="plaintext"
+                  single-line
+                  .value=${node.condition}
+                  @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), condition: String((event.target as HTMLElement & { value?: string }).value ?? "") } )))}
+                ></code-editor-field>
               </label>
               <div class="row">
                 <button @click=${() => this.setConditionalBranchNode(owner, node.id, "thenChild", emptyStackRoot())}>${node.thenChild ? "Replace" : "Add"} then</button>
@@ -3947,6 +4290,91 @@ export class EpPaperEditorApp extends LitElement {
     `;
   }
 
+  private renderProviderField(instance: ProviderInstance, descriptor: ProviderDescriptor, fieldKey: string): TemplateResult {
+    const field = descriptor.configFields.find((entry) => entry.key === fieldKey);
+    if (!field) {
+      return html``;
+    }
+    const value = instance.config[field.key];
+    if (field.kind === "checkbox") {
+      return html`
+        <label>
+          <input
+            type="checkbox"
+            .checked=${Boolean(value)}
+            @change=${(event: Event) => this.updateProviderInstanceDraft(instance.id, field.key, (event.target as HTMLInputElement).checked)}
+          />
+          ${field.label}
+        </label>
+      `;
+    }
+    if (field.kind === "select") {
+      return html`
+        <label>
+          ${field.label}
+          <select
+            .value=${String(value ?? field.options?.[0]?.value ?? "")}
+            @change=${(event: Event) => this.updateProviderInstanceDraft(instance.id, field.key, (event.target as HTMLSelectElement).value)}
+          >
+            ${(field.options ?? []).map((option) => html`<option value=${option.value}>${option.label}</option>`)}
+          </select>
+        </label>
+      `;
+    }
+    return html`
+      <label>
+        ${field.label}
+        <input
+          type=${field.kind === "password" ? "password" : "text"}
+          .value=${String(value ?? "")}
+          placeholder=${field.placeholder ?? ""}
+          @input=${(event: Event) => this.updateProviderInstanceDraft(instance.id, field.key, (event.target as HTMLInputElement).value)}
+        />
+      </label>
+    `;
+  }
+
+  private renderProviderInstanceEditor(instance: ProviderInstance): TemplateResult {
+    const descriptor = this.providerDescriptor(instance.providerId);
+    if (!descriptor) {
+      return html``;
+    }
+    const status = this.providerStatuses[instance.id];
+    return html`
+      <div class="section">
+        <h2>${instance.name || descriptor.label}</h2>
+        <div class="muted">${descriptor.label}</div>
+        <label>
+          Name
+          <input .value=${instance.name} @input=${(event: Event) => {
+            this.providerInstances = this.providerInstances.map((entry) =>
+              entry.id === instance.id ? { ...entry, name: (event.target as HTMLInputElement).value } : entry
+            );
+          }} />
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            .checked=${Boolean(instance.enabled)}
+            @change=${(event: Event) => {
+              this.providerInstances = this.providerInstances.map((entry) =>
+                entry.id === instance.id ? { ...entry, enabled: (event.target as HTMLInputElement).checked } : entry
+              );
+            }}
+          />
+          Enabled
+        </label>
+        ${descriptor.configFields.map((field) => this.renderProviderField(instance, descriptor, field.key))}
+        <div class="row">
+          <button @click=${() => void this.testProvider(instance.id)}>Test</button>
+          <button class="primary" @click=${() => void this.saveProvider(instance.id)}>Save</button>
+          <button class="danger" @click=${() => void this.deleteProvider(instance.id)}>Delete</button>
+        </div>
+        ${status ? html`<div class=${status.ok ? "status-ok" : "status-error"}>${status.message}</div>` : nothing}
+      </div>
+    `;
+  }
+
   private renderDetailPanel() {
     if (this.activePage === "displays") {
       const device = this.selectedDisplay;
@@ -3960,6 +4388,9 @@ export class EpPaperEditorApp extends LitElement {
                     Name
                     <input .value=${device.name} @input=${(event: Event) => this.updateDisplay(device.id, { name: (event.target as HTMLInputElement).value })} />
                   </label>
+                  <div class="detail-danger-action">
+                    <button class="danger" @click=${() => this.removeDisplay(device.id)}>${device.virtual ? "Delete virtual display" : "Unmanage device"}</button>
+                  </div>
                   <label>
                     Provider
                     <input .value=${device.providerKind} disabled />
@@ -3981,7 +4412,6 @@ export class EpPaperEditorApp extends LitElement {
                     ${this.renderDisplayAssignmentEditor(device)}
                   </div>
                   ${this.uploadStatusMessage ? html`<div class="muted">${this.uploadStatusMessage}</div>` : nothing}
-                  <button @click=${() => this.removeDisplay(device.id)}>${device.virtual ? "Delete virtual display" : "Unmanage device"}</button>
                 `
               : html`<div class="muted">Select display.</div>`}
           </div>
@@ -3998,6 +4428,9 @@ export class EpPaperEditorApp extends LitElement {
             ${displayType
               ? html`
                   <label>Name <input .value=${displayType.name} @input=${(event: Event) => this.updateDisplayType(displayType.id, { name: (event.target as HTMLInputElement).value })} /></label>
+                  <div class="detail-danger-action">
+                    <button class="danger" @click=${() => this.removeDisplayType(displayType.id)}>Delete display type</button>
+                  </div>
                   <div class="row">
                     <label>Width <input type="number" .value=${String(displayType.width)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { width: Number((event.target as HTMLInputElement).value) })} /></label>
                     <label>Height <input type="number" .value=${String(displayType.height)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { height: Number((event.target as HTMLInputElement).value) })} /></label>
@@ -4014,7 +4447,6 @@ export class EpPaperEditorApp extends LitElement {
                   <label>Background <input .value=${displayType.palette.bg} @input=${(event: Event) => this.updateDisplayType(displayType.id, { palette: { ...displayType.palette, bg: (event.target as HTMLInputElement).value } })} /></label>
                   <label>Foreground <input .value=${displayType.palette.fg} @input=${(event: Event) => this.updateDisplayType(displayType.id, { palette: { ...displayType.palette, fg: (event.target as HTMLInputElement).value } })} /></label>
                   <label>Accent <input .value=${displayType.palette.accent} @input=${(event: Event) => this.updateDisplayType(displayType.id, { palette: { ...displayType.palette, accent: (event.target as HTMLInputElement).value } })} /></label>
-                  <button @click=${() => this.removeDisplayType(displayType.id)}>Delete display type</button>
                 `
               : html`<div class="muted">Select display type.</div>`}
           </div>
@@ -4031,6 +4463,9 @@ export class EpPaperEditorApp extends LitElement {
             ${definition
               ? html`
                   <label>Name <input .value=${definition.name} @input=${(event: Event) => this.updateWidgetDefinition(definition.id, (current) => ({ ...current, name: (event.target as HTMLInputElement).value }))} /></label>
+                  <div class="detail-danger-action">
+                    <button class="danger" @click=${() => this.removeWidgetDefinition(definition.id)}>Delete compound widget</button>
+                  </div>
                   <div class="section">
                     <h3>Inputs</h3>
                     <button @click=${() => this.addCompoundInput(definition.id)}>Add input</button>
@@ -4097,7 +4532,6 @@ export class EpPaperEditorApp extends LitElement {
                       `
                     )}
                   </div>
-                  <button @click=${() => this.removeWidgetDefinition(definition.id)}>Delete compound widget</button>
                   <div class="editor-structure-preview">
                     <div class="row">
                       <strong>Visual Structure</strong>
@@ -4105,23 +4539,20 @@ export class EpPaperEditorApp extends LitElement {
                     </div>
                     ${this.renderStructurePreviewStage()}
                   </div>
-                  <div class="editor-split">
-                    ${this.renderNodeTree(definition)}
-                    ${definition.rootNode
-                      ? this.selectedEditorNode
-                        ? this.renderNodeEditor(this.selectedEditorNode, definition, parentIdForNode(definition.rootNode, this.selectedEditorNode.id))
-                        : html`<div class="empty-state">Select node.</div>`
-                      : html`
-                          <div class="empty-state">
-                            <div class="muted">No root node.</div>
-                            <div class="row">
-                              <button @click=${() => this.setRootNode(definition, defaultRootNode("stack"))}>Add Stack Root</button>
-                              <button @click=${() => this.setRootNode(definition, defaultRootNode("grid"))}>Add Grid Root</button>
-                              <button @click=${() => this.setRootNode(definition, defaultRootNode("zstack"))}>Add ZStack Root</button>
-                            </div>
+                  ${definition.rootNode
+                    ? this.selectedEditorNode
+                      ? this.renderNodeEditor(this.selectedEditorNode, definition, parentIdForNode(definition.rootNode, this.selectedEditorNode.id))
+                      : html`<div class="empty-state">Select node.</div>`
+                    : html`
+                        <div class="empty-state">
+                          <div class="muted">No root node.</div>
+                          <div class="row">
+                            <button @click=${() => this.setRootNode(definition, defaultRootNode("stack"))}>Add Stack Root</button>
+                            <button @click=${() => this.setRootNode(definition, defaultRootNode("grid"))}>Add Grid Root</button>
+                            <button @click=${() => this.setRootNode(definition, defaultRootNode("zstack"))}>Add ZStack Root</button>
                           </div>
-                        `}
-                  </div>
+                        </div>
+                      `}
                 `
               : html`<div class="muted">Select compound widget.</div>`}
           </div>
@@ -4138,6 +4569,9 @@ export class EpPaperEditorApp extends LitElement {
             ${layout
               ? html`
                   <label>Name <input .value=${layout.name} @input=${(event: Event) => this.updateLayout(layout.id, (current) => ({ ...current, name: (event.target as HTMLInputElement).value }))} /></label>
+                  <div class="detail-danger-action">
+                    <button class="danger" @click=${() => this.removeLayout(layout.id)}>Delete layout</button>
+                  </div>
                   <label>
                     Kind
                     <select .value=${layout.kind} @change=${(event: Event) => this.updateLayout(layout.id, (current) => ({ ...current, kind: (event.target as HTMLSelectElement).value as LayoutDefinition["kind"] }))}>
@@ -4159,7 +4593,6 @@ export class EpPaperEditorApp extends LitElement {
                         </div>
                       `
                     : nothing}
-                  <button @click=${() => this.removeLayout(layout.id)}>Delete layout</button>
                   <div class="editor-structure-preview">
                     <div class="row">
                       <strong>Visual Structure</strong>
@@ -4167,23 +4600,20 @@ export class EpPaperEditorApp extends LitElement {
                     </div>
                     ${this.renderStructurePreviewStage()}
                   </div>
-                  <div class="editor-split">
-                    ${this.renderNodeTree(layout)}
-                    ${layout.rootNode
-                      ? this.selectedEditorNode
-                        ? this.renderNodeEditor(this.selectedEditorNode, layout, parentIdForNode(layout.rootNode, this.selectedEditorNode.id))
-                        : html`<div class="empty-state">Select node.</div>`
-                      : html`
-                          <div class="empty-state">
-                            <div class="muted">No root node.</div>
-                            <div class="row">
-                              <button @click=${() => this.setRootNode(layout, defaultRootNode("stack"))}>Add Stack Root</button>
-                              <button @click=${() => this.setRootNode(layout, defaultRootNode("grid"))}>Add Grid Root</button>
-                              <button @click=${() => this.setRootNode(layout, defaultRootNode("zstack"))}>Add ZStack Root</button>
-                            </div>
+                  ${layout.rootNode
+                    ? this.selectedEditorNode
+                      ? this.renderNodeEditor(this.selectedEditorNode, layout, parentIdForNode(layout.rootNode, this.selectedEditorNode.id))
+                      : html`<div class="empty-state">Select node.</div>`
+                    : html`
+                        <div class="empty-state">
+                          <div class="muted">No root node.</div>
+                          <div class="row">
+                            <button @click=${() => this.setRootNode(layout, defaultRootNode("stack"))}>Add Stack Root</button>
+                            <button @click=${() => this.setRootNode(layout, defaultRootNode("grid"))}>Add Grid Root</button>
+                            <button @click=${() => this.setRootNode(layout, defaultRootNode("zstack"))}>Add ZStack Root</button>
                           </div>
-                        `}
-                  </div>
+                        </div>
+                      `}
                 `
               : html`<div class="muted">Select layout.</div>`}
           </div>
@@ -4200,6 +4630,9 @@ export class EpPaperEditorApp extends LitElement {
             ${theme
               ? html`
                   <label>Name <input .value=${theme.name} @input=${(event: Event) => this.updateTheme(theme.id, (current) => ({ ...current, name: (event.target as HTMLInputElement).value }))} /></label>
+                  <div class="detail-danger-action">
+                    <button class="danger" @click=${() => this.removeTheme(theme.id)}>Delete theme</button>
+                  </div>
                   <label>
                     Background fill
                     <select .value=${theme.surface.fillRole ?? "none"} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({
@@ -4275,7 +4708,6 @@ export class EpPaperEditorApp extends LitElement {
                       </select>
                     </label>
                   </details>
-                  <button @click=${() => this.removeTheme(theme.id)}>Delete theme</button>
                 `
               : html`<div class="muted">Select theme.</div>`}
           </div>
@@ -4300,95 +4732,97 @@ export class EpPaperEditorApp extends LitElement {
               }} />
             </label>
             <div class="muted">Used by template format filters, for example en-US or nl-NL.</div>
-          </div>
-          <div class="section">
-            <h2>Home Assistant</h2>
             <label>
-              Mode
-              <select .value=${this.homeAssistantSettings.mode} @change=${(event: Event) => (this.homeAssistantSettings = { ...this.homeAssistantSettings, mode: (event.target as HTMLSelectElement).value as HomeAssistantConnectionSettings["mode"] })}>
-                <option value="custom">Custom host</option>
-                <option value="supervisor">Use local HA</option>
+              Default source provider
+              <select .value=${this.project.defaultSourceProviderInstanceId ?? this.activeSourceProviderInstance?.id ?? ""} @change=${async (event: Event) => {
+                this.project = {
+                  ...this.project,
+                  defaultSourceProviderInstanceId: (event.target as HTMLSelectElement).value || undefined
+                };
+                const sourceProvider = this.activeSourceProviderInstance;
+                this.entityCatalog = sourceProvider ? await fetchProviderEntities(sourceProvider.id).catch(() => this.entityCatalog) : [];
+                await this.refreshPreview();
+              }}>
+                <option value="">Auto</option>
+                ${this.sourceProviderOptions().map((instance) => html`<option value=${instance.id}>${instance.name || this.providerDescriptor(instance.providerId)?.label || instance.providerId}</option>`)}
               </select>
             </label>
-            <label>
-              Host
-              <input .value=${this.homeAssistantSettings.host} ?disabled=${this.homeAssistantSettings.mode === "supervisor"} @input=${(event: Event) => (this.homeAssistantSettings = { ...this.homeAssistantSettings, host: (event.target as HTMLInputElement).value })} />
-            </label>
-            <label>
-              <input type="checkbox" .checked=${this.homeAssistantSettings.useSupervisorProxy} @change=${(event: Event) => (this.homeAssistantSettings = { ...this.homeAssistantSettings, useSupervisorProxy: (event.target as HTMLInputElement).checked })} />
-              Use Supervisor proxy
-            </label>
-            <label>
-              <input type="checkbox" .checked=${Boolean(this.homeAssistantSettings.allowInsecureTls)} @change=${(event: Event) => (this.homeAssistantSettings = { ...this.homeAssistantSettings, allowInsecureTls: (event.target as HTMLInputElement).checked })} />
-              Allow insecure TLS (self-signed certs)
-            </label>
-            <label>
-              <input type="checkbox" .checked=${this.replaceHomeAssistantToken} @change=${(event: Event) => {
-                this.replaceHomeAssistantToken = (event.target as HTMLInputElement).checked;
-                this.homeAssistantTokenDraft = this.replaceHomeAssistantToken ? "" : maskToken(this.homeAssistantSettings.hasToken, "");
-              }} />
-              Replace token
-            </label>
-            <label>
-              Token
-              <input type="password" .value=${this.homeAssistantTokenDraft} @input=${(event: Event) => (this.homeAssistantTokenDraft = (event.target as HTMLInputElement).value)} />
-            </label>
-            <div class="row">
-              <button @click=${() => void this.testConnection()}>Test</button>
-              <button class="primary" @click=${() => void this.saveConnection()}>Save</button>
-            </div>
-            ${this.homeAssistantStatus ? html`<div class=${this.homeAssistantStatus.ok ? "status-ok" : "status-error"}>${this.homeAssistantStatus.message}</div>` : nothing}
+            <div class="muted">Live data and widget entity lists use this provider.</div>
           </div>
           <div class="section">
-            <h2>OpenEPaperLink Access Point</h2>
-            <label>
-              URL
-              <input
-                .value=${this.openEpaperLinkAccessPointSettings.url}
-                placeholder="http://192.168.1.170"
-                @input=${(event: Event) =>
-                  (this.openEpaperLinkAccessPointSettings = {
-                    ...this.openEpaperLinkAccessPointSettings,
-                    url: (event.target as HTMLInputElement).value
-                  })}
-              />
-            </label>
+            <h2>Sources</h2>
             <div class="row">
-              <button @click=${() => void this.testAccessPointConnection()}>Test</button>
-              <button class="primary" @click=${() => void this.saveAccessPointSettings()}>Save</button>
+              ${this.providerKinds
+                .filter((entry) => entry.domain === "source")
+                .map((descriptor) => html`<button @click=${() => this.createProviderDraft(descriptor.id)}>Add ${descriptor.label}</button>`)}
             </div>
+            ${this.providerInstances
+              .filter((instance) => this.providerDescriptor(instance.providerId)?.domain === "source")
+              .map((instance) => this.renderProviderInstanceEditor(instance))}
+          </div>
+          <div class="section">
+            <h2>Display Systems</h2>
+            <div class="row">
+              ${this.providerKinds
+                .filter((entry) => entry.domain === "display")
+                .map((descriptor) => html`<button @click=${() => this.createProviderDraft(descriptor.id)}>Add ${descriptor.label}</button>`)}
+            </div>
+            ${this.providerInstances
+              .filter((instance) => this.providerDescriptor(instance.providerId)?.domain === "display")
+              .map((instance) => this.renderProviderInstanceEditor(instance))}
+          </div>
+          <div class="section">
+            <h2>Scripting</h2>
+            <div class="muted">Globals in templates and scripts: <code>now</code>, <code>today</code>, <code>locale</code>, <code>display</code>, <code>project</code>.</div>
+            <div class="muted">Helpers: JS function source. Filters: JS function source with signature <code>(value, args, context) =&gt; result</code>.</div>
             <label>
-              Default test display
-              <select
-                .value=${this.openEpaperLinkAccessPointSettings.defaultTestDisplayMac ?? ""}
-                @change=${(event: Event) =>
-                  (this.openEpaperLinkAccessPointSettings = {
-                    ...this.openEpaperLinkAccessPointSettings,
-                    defaultTestDisplayMac: (event.target as HTMLSelectElement).value
-                  })}
-              >
-                <option value="">None</option>
-                ${this.accessPointTagCandidates.map((candidate) => {
-                  const mac = candidateMac(candidate);
-                  const displayType = candidate.suggestedDisplayType;
-                  return html`
-                    <option value=${mac}>
-                      ${candidate.name} ${mac}${displayType ? ` (${displayType.width}x${displayType.height})` : ""}
-                    </option>
-                  `;
-                })}
-              </select>
+              Shared source
+              <code-editor-field language="javascript" min-lines="6" .value=${this.project.scripting?.sharedSource ?? ""} @input=${(event: Event) => {
+                const value = String((event.target as HTMLElement & { value?: string }).value ?? "");
+                this.updateProjectScripting((current) => ({ ...current, sharedSource: value }));
+              }}></code-editor-field>
             </label>
-            ${this.openEpaperLinkAccessPointStatus
-              ? html`
-                  <div class=${this.openEpaperLinkAccessPointStatus.ok ? "status-ok" : "status-error"}>
-                    ${this.openEpaperLinkAccessPointStatus.message}
-                    ${typeof this.openEpaperLinkAccessPointStatus.tagCount === "number"
-                      ? html`<span class="muted"> (${this.openEpaperLinkAccessPointStatus.tagCount} tags on first page)</span>`
-                      : nothing}
-                  </div>
-                `
-              : nothing}
+            <div class="section-title">Helpers</div>
+            ${(this.project.scripting?.helpers ?? []).map((entry, index) => html`
+              <div class="card">
+                <label>
+                  Name
+                  <input .value=${entry.name} @input=${(event: Event) => this.updateScriptingLibraryEntry("helpers", index, "name", (event.target as HTMLInputElement).value)} />
+                </label>
+                <label>
+                  Source
+                  <code-editor-field
+                    language="javascript"
+                    min-lines="5"
+                    .value=${entry.source}
+                    @input=${(event: Event) => this.updateScriptingLibraryEntry("helpers", index, "source", String((event.target as HTMLElement & { value?: string }).value ?? ""))}
+                  ></code-editor-field>
+                </label>
+                <button @click=${() => this.removeScriptingLibraryEntry("helpers", index)}>Remove helper</button>
+              </div>
+            `)}
+            <button @click=${() => this.addScriptingLibraryEntry("helpers")}>Add helper</button>
+            <div class="section-title">Filters</div>
+            ${(this.project.scripting?.filters ?? []).map((entry, index) => html`
+              <div class="card">
+                <label>
+                  Name
+                  <input .value=${entry.name} @input=${(event: Event) => this.updateScriptingLibraryEntry("filters", index, "name", (event.target as HTMLInputElement).value)} />
+                </label>
+                <label>
+                  Source
+                  <code-editor-field
+                    language="javascript"
+                    min-lines="5"
+                    .value=${entry.source}
+                    @input=${(event: Event) => this.updateScriptingLibraryEntry("filters", index, "source", String((event.target as HTMLElement & { value?: string }).value ?? ""))}
+                  ></code-editor-field>
+                </label>
+                <button @click=${() => this.removeScriptingLibraryEntry("filters", index)}>Remove filter</button>
+              </div>
+            `)}
+            <button @click=${() => this.addScriptingLibraryEntry("filters")}>Add filter</button>
+            <div class="muted">Preview warnings surface compile/runtime script errors without crashing render.</div>
           </div>
           <div class="section">
             <h2>Fonts</h2>
@@ -4527,7 +4961,7 @@ export class EpPaperEditorApp extends LitElement {
                     <a href=${entry.downloadUrl} target="_blank" rel="noreferrer">Open download</a>
                   </div>
                   <div class="muted">
-                    Import whitelists ${entry.pixelSize ? `${entry.pixelSize}px multiples` : "all sizes"} up to 200.
+                    Import whitelists ${entry.pixelSize ? `${entry.pixelSize}px multiples` : "all sizes"}.
                   </div>
                   <div class="row">
                     <button

@@ -1,0 +1,449 @@
+use axum::Json;
+use serde_json::{json, Value};
+use tokio::time::{sleep, Duration};
+
+use crate::{
+    app::AppState, display_provider, find_provider_instance, load_user_font_data, now_ms,
+    openepaperlink_settings_from_instance, project_file_path, read_json_file, read_settings,
+    rgba_to_jpeg, routes::projects::list_projects, run_bridge_value,
+    services::render_data::resolve_project_render_data_value, upload_image_to_access_point, ApiError,
+    AssignmentConfig, AssignmentForceUpdateResponse,
+    AssignmentScheduleStatusResponse, BridgeRenderResponse, ProjectSummary, SchedulerState, StoredSettings,
+};
+
+fn string_at(value: &Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for segment in path {
+        current = current.get(*segment)?;
+    }
+    current.as_str().map(ToString::to_string)
+}
+
+fn bool_at(value: &Value, path: &[&str]) -> Option<bool> {
+    let mut current = value;
+    for segment in path {
+        current = current.get(*segment)?;
+    }
+    current.as_bool()
+}
+
+fn u64_at(value: &Value, path: &[&str]) -> Option<u64> {
+    let mut current = value;
+    for segment in path {
+        current = current.get(*segment)?;
+    }
+    current.as_u64()
+}
+
+fn iso_string(timestamp_ms: Option<u64>) -> Option<String> {
+    timestamp_ms.map(|value| {
+        let secs = (value / 1000) as i64;
+        let millis = (value % 1000) as u32;
+        let datetime = chrono::DateTime::<chrono::Utc>::from_timestamp(secs, millis * 1_000_000)
+            .unwrap_or_else(chrono::Utc::now);
+        datetime.to_rfc3339()
+    })
+}
+
+fn assignment_configs(project: &Value, settings: Option<&StoredSettings>) -> Vec<AssignmentConfig> {
+    let devices = project
+        .get("devices")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    project
+        .get("deviceAssignments")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|assignment| {
+            let assignment_id = assignment.get("id")?.as_str()?.to_string();
+            let display_id = assignment.get("displayId")?.as_str()?.to_string();
+            let display = devices
+                .iter()
+                .find(|entry| entry.get("id").and_then(Value::as_str) == Some(display_id.as_str()))?;
+            let enabled = bool_at(&assignment, &["schedule", "enabled"]).unwrap_or(false);
+            let interval_minutes = u64_at(&assignment, &["schedule", "intervalMinutes"]).unwrap_or(15).max(1);
+            let managed = display.get("managed").and_then(Value::as_bool).unwrap_or(false);
+            let provider_kind = display
+                .get("displayProviderInstanceId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let legacy_provider_kind = display
+                .get("providerKind")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let provider_instance_id = if provider_kind.is_empty() {
+                if legacy_provider_kind == "openepaperlink-ap" {
+                    "openepaperlink-ap-default".to_string()
+                } else if display.get("virtual").and_then(Value::as_bool).unwrap_or(false) {
+                    "virtual-default".to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                provider_kind
+            };
+            let provider_device_ref = display
+                .get("providerDeviceRef")
+                .or_else(|| display.get("providerRef"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let mac = string_at(display, &["metadata", "mac"]).unwrap_or_else(|| provider_device_ref.clone());
+            let provider_supports_scheduling = settings
+                .and_then(|document| find_provider_instance(document, &provider_instance_id))
+                .and_then(|instance| display_provider(&instance.provider_id).map(|provider| provider.supports_scheduling()))
+                .unwrap_or(legacy_provider_kind == "openepaperlink-ap"
+                    || provider_instance_id == "openepaperlink-ap-default"
+                    || provider_instance_id.contains("openepaperlink-ap"));
+            Some(AssignmentConfig {
+                assignment_id,
+                display_id,
+                enabled,
+                interval_minutes,
+                schedulable: managed && provider_supports_scheduling,
+                provider_instance_id,
+                provider_device_ref,
+                mac,
+            })
+        })
+        .collect()
+}
+
+fn assignment_key(project_id: &str, assignment_id: &str) -> String {
+    format!("{project_id}:{assignment_id}")
+}
+
+fn build_assignment_status(
+    state: &AppState,
+    project_id: &str,
+    config: &AssignmentConfig,
+) -> AssignmentScheduleStatusResponse {
+    let key = assignment_key(project_id, &config.assignment_id);
+    let states = state.assignment_states.lock().expect("assignment state mutex poisoned");
+    let scheduler_state = states.get(&key).cloned().unwrap_or(SchedulerState {
+        config_signature: None,
+        next_run_at: None,
+        last_run_at: None,
+        last_completed_at: None,
+        last_result: None,
+        last_error: None,
+        last_hash: None,
+        running: false,
+    });
+    AssignmentScheduleStatusResponse {
+        assignment_id: config.assignment_id.clone(),
+        display_id: config.display_id.clone(),
+        enabled: config.enabled,
+        interval_minutes: config.interval_minutes,
+        schedulable: config.schedulable,
+        running: scheduler_state.running,
+        next_run_at: iso_string(scheduler_state.next_run_at),
+        last_run_at: iso_string(scheduler_state.last_run_at),
+        last_completed_at: iso_string(scheduler_state.last_completed_at),
+        last_result: scheduler_state.last_result,
+        last_error: scheduler_state.last_error,
+        last_hash: scheduler_state.last_hash,
+    }
+}
+
+pub(crate) async fn render_assigned_live(
+    state: &AppState,
+    project_id: &str,
+    project: &Value,
+    display_id: &str,
+) -> Result<BridgeRenderResponse, ApiError> {
+    let (data, message) = resolve_project_render_data_value(state, project, None).await?;
+    let user_fonts = load_user_font_data(state).await?;
+    serde_json::from_value(
+        run_bridge_value(
+            state,
+            json!({
+                "op": "render-assigned-live",
+                "projectId": project_id,
+                "body": {
+                    "project": project,
+                    "displayId": display_id,
+                    "data": data,
+                    "userFonts": user_fonts,
+                    "dataSourceMessage": message
+                }
+            }),
+        )
+        .await?,
+    )
+    .map_err(|error| ApiError::internal(error.to_string()))
+}
+
+pub(crate) async fn run_assignment_update(
+    state: &AppState,
+    project_id: &str,
+    project: &Value,
+    assignment_id: &str,
+    force: bool,
+) -> Result<AssignmentForceUpdateResponse, ApiError> {
+    let settings_doc = read_settings(state).await?;
+    let config = assignment_configs(project, Some(&settings_doc))
+        .into_iter()
+        .find(|entry| entry.assignment_id == assignment_id)
+        .ok_or_else(|| ApiError::not_found(format!("Unknown assignment {assignment_id}")))?;
+    let key = assignment_key(project_id, assignment_id);
+    {
+        let mut states = state.assignment_states.lock().expect("assignment state mutex poisoned");
+        let entry = states.entry(key.clone()).or_insert(SchedulerState {
+            config_signature: None,
+            next_run_at: None,
+            last_run_at: None,
+            last_completed_at: None,
+            last_result: None,
+            last_error: None,
+            last_hash: None,
+            running: false,
+        });
+        entry.running = true;
+        entry.last_run_at = Some(now_ms());
+    }
+
+    let result = async {
+        if !config.schedulable {
+            return Err(ApiError::bad_request(
+                "Scheduling requires a managed OpenEPaperLink AP display.",
+            ));
+        }
+        let provider_instance = find_provider_instance(&settings_doc, &config.provider_instance_id)
+            .ok_or_else(|| ApiError::bad_request("Display provider instance is not configured."))?;
+        let settings = openepaperlink_settings_from_instance(&provider_instance);
+        if settings.url.trim().is_empty() {
+            return Err(ApiError::bad_request(
+                "OpenEPaperLink access point URL is not configured.",
+            ));
+        }
+        let rendered = render_assigned_live(state, project_id, project, &config.display_id).await?;
+        let previous_hash = {
+            let states = state.assignment_states.lock().expect("assignment state mutex poisoned");
+            states.get(&key).and_then(|entry| entry.last_hash.clone())
+        };
+        if !force && previous_hash.as_deref() == Some(rendered.hash.as_str()) {
+            let mut states = state.assignment_states.lock().expect("assignment state mutex poisoned");
+            if let Some(entry) = states.get_mut(&key) {
+                entry.last_completed_at = Some(now_ms());
+                entry.last_result = Some("skipped_unchanged".into());
+                entry.last_error = None;
+                entry.next_run_at = if config.enabled {
+                    Some(now_ms() + config.interval_minutes * 60_000)
+                } else {
+                    None
+                };
+                entry.running = false;
+            }
+            return Ok(AssignmentForceUpdateResponse {
+                assignment_id: config.assignment_id,
+                display_id: config.display_id,
+                updated: false,
+                skipped: true,
+                hash: Some(rendered.hash),
+                active_screen_id: Some(rendered.active_screen_id),
+                active_overlay_id: rendered.active_overlay_id,
+                message: "Skipped unchanged image.".into(),
+            });
+        }
+        let jpeg = rgba_to_jpeg(&rendered.rgba, rendered.width, rendered.height)?;
+        upload_image_to_access_point(
+            &state.http,
+            &settings,
+            &config.mac,
+            jpeg,
+            format!("{}.jpg", config.provider_device_ref),
+        )
+        .await?;
+        let mut states = state.assignment_states.lock().expect("assignment state mutex poisoned");
+        if let Some(entry) = states.get_mut(&key) {
+            entry.last_hash = Some(rendered.hash.clone());
+            entry.last_completed_at = Some(now_ms());
+            entry.last_result = Some("updated".into());
+            entry.last_error = None;
+            entry.next_run_at = if config.enabled {
+                Some(now_ms() + config.interval_minutes * 60_000)
+            } else {
+                None
+            };
+            entry.running = false;
+        }
+        Ok(AssignmentForceUpdateResponse {
+            assignment_id: config.assignment_id,
+            display_id: config.display_id,
+            updated: true,
+            skipped: false,
+            hash: Some(rendered.hash),
+            active_screen_id: Some(rendered.active_screen_id),
+            active_overlay_id: rendered.active_overlay_id,
+            message: if force {
+                "Forced update uploaded.".into()
+            } else {
+                "Scheduled update uploaded.".into()
+            },
+        })
+    }
+    .await;
+
+    if let Err(error) = &result {
+        let mut states = state.assignment_states.lock().expect("assignment state mutex poisoned");
+        if let Some(entry) = states.get_mut(&key) {
+            entry.last_completed_at = Some(now_ms());
+            entry.last_result = Some("error".into());
+            entry.last_error = Some(error.message.clone());
+            entry.next_run_at = if config.enabled && !force {
+                Some(now_ms() + config.interval_minutes * 60_000)
+            } else {
+                None
+            };
+            entry.running = false;
+        }
+    }
+    result
+}
+
+pub(crate) async fn list_assignment_schedule_statuses(
+    state: &AppState,
+    project_id: &str,
+) -> Result<Vec<AssignmentScheduleStatusResponse>, ApiError> {
+    let project = read_json_file(&project_file_path(&state.data_dir, project_id)).await?;
+    let settings = read_settings(state).await?;
+    Ok(assignment_configs(&project, Some(&settings))
+        .iter()
+        .map(|entry| build_assignment_status(state, project_id, entry))
+        .collect())
+}
+
+pub(crate) async fn upload_device_image_for_display(
+    state: &AppState,
+    project_id: &str,
+    project: &Value,
+    display_id: &str,
+) -> Result<Value, ApiError> {
+    let display = project
+        .get("devices")
+        .and_then(Value::as_array)
+        .and_then(|devices| {
+            devices
+                .iter()
+                .find(|entry| entry.get("id").and_then(Value::as_str) == Some(display_id))
+                .cloned()
+        })
+        .ok_or_else(|| ApiError::not_found(format!("Unknown display {display_id}")))?;
+    if display.get("providerKind").and_then(Value::as_str) != Some("openepaperlink-ap") {
+        return Err(ApiError::bad_request(
+            "Display is not managed by an OpenEPaperLink access point",
+        ));
+    }
+    let settings = read_settings(state)
+        .await?
+        .openepaperlink_access_point
+        .unwrap_or_else(crate::default_openepaperlink_settings);
+    if settings.url.trim().is_empty() {
+        return Err(ApiError::bad_request(
+            "OpenEPaperLink access point URL is not configured",
+        ));
+    }
+    let rendered = render_assigned_live(state, project_id, project, display_id).await?;
+    let jpeg = rgba_to_jpeg(&rendered.rgba, rendered.width, rendered.height)?;
+    let provider_ref = display
+        .get("providerDeviceRef")
+        .or_else(|| display.get("providerRef"))
+        .and_then(Value::as_str)
+        .unwrap_or(display_id);
+    let mac = string_at(&display, &["metadata", "mac"]).unwrap_or_else(|| provider_ref.to_string());
+    upload_image_to_access_point(
+        &state.http,
+        &settings,
+        &mac,
+        jpeg,
+        format!("{provider_ref}.jpg"),
+    )
+    .await?;
+    Ok(json!({
+        "uploaded": true,
+        "hash": rendered.hash,
+        "width": rendered.width,
+        "height": rendered.height,
+        "dataSourceMessage": rendered.data_source_message,
+        "scriptWarnings": rendered.script_warnings
+    }))
+}
+
+pub(crate) async fn tick_assignment_scheduler(state: AppState) {
+    let mut valid_keys = Vec::new();
+    let settings = read_settings(&state).await.ok();
+    let projects: Vec<ProjectSummary> = if let Ok(Json(projects)) = list_projects(axum::extract::State(state.clone())).await {
+        projects
+    } else {
+        Vec::new()
+    };
+    for project in projects {
+        if let Ok(project_value) = read_json_file(&project_file_path(&state.data_dir, &project.id)).await {
+            for config in assignment_configs(&project_value, settings.as_ref()) {
+                let key = assignment_key(&project.id, &config.assignment_id);
+                valid_keys.push(key.clone());
+                let signature = format!(
+                    "{}:{}:{}:{}",
+                    config.enabled, config.interval_minutes, config.display_id, config.schedulable
+                );
+                let mut should_run = false;
+                {
+                    let mut states = state.assignment_states.lock().expect("assignment state mutex poisoned");
+                    let entry = states.entry(key.clone()).or_insert(SchedulerState {
+                        config_signature: None,
+                        next_run_at: None,
+                        last_run_at: None,
+                        last_completed_at: None,
+                        last_result: None,
+                        last_error: None,
+                        last_hash: None,
+                        running: false,
+                    });
+                    if entry.config_signature.as_deref() != Some(signature.as_str()) {
+                        entry.config_signature = Some(signature.clone());
+                        entry.next_run_at = if config.enabled && config.schedulable {
+                            Some(now_ms() + config.interval_minutes * 60_000)
+                        } else {
+                            None
+                        };
+                        if !config.enabled {
+                            if !matches!(entry.last_result.as_deref(), Some("updated" | "skipped_unchanged")) {
+                                entry.last_result = Some("disabled".into());
+                            }
+                        } else if !config.schedulable {
+                            entry.last_result = Some("error".into());
+                            entry.last_error = Some("Scheduling requires a managed OpenEPaperLink AP display.".into());
+                        }
+                    }
+                    if config.enabled
+                        && config.schedulable
+                        && !entry.running
+                        && entry.next_run_at.is_some_and(|value| value <= now_ms())
+                    {
+                        should_run = true;
+                    }
+                }
+                if should_run {
+                    let _ = run_assignment_update(&state, &project.id, &project_value, &config.assignment_id, false).await;
+                }
+            }
+        }
+    }
+    let mut states = state.assignment_states.lock().expect("assignment state mutex poisoned");
+    states.retain(|key, _| valid_keys.iter().any(|candidate| candidate == key));
+}
+
+pub(crate) fn spawn_assignment_scheduler(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            tick_assignment_scheduler(state.clone()).await;
+            sleep(Duration::from_secs(30)).await;
+        }
+    });
+}

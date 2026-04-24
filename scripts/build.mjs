@@ -1,4 +1,4 @@
-import { mkdir, copyFile } from "node:fs/promises";
+import { mkdir, copyFile, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
@@ -10,7 +10,15 @@ const distDir = path.join(rootDir, "dist");
 
 const target = process.argv[2] ?? "all";
 
+function generateFontAwesomeAssets() {
+  execFileSync("node", [path.join(rootDir, "scripts", "generate-font-awesome.mjs")], {
+    stdio: "inherit",
+    cwd: rootDir
+  });
+}
+
 async function buildEditor() {
+  generateFontAwesomeAssets();
   const outdir = path.join(distDir, "editor-ui");
   await mkdir(outdir, { recursive: true });
   await esbuild.build({
@@ -19,35 +27,53 @@ async function buildEditor() {
     format: "esm",
     sourcemap: true,
     outfile: path.join(outdir, "app.js"),
-    target: "es2022"
+    target: "es2022",
+    loader: {
+      ".ttf": "file",
+      ".woff": "file",
+      ".woff2": "file",
+      ".eot": "file"
+    }
   });
-  await copyFile(
-    path.join(rootDir, "packages/editor-ui/index.html"),
-    path.join(outdir, "index.html")
-  );
+  const indexHtml = await readFile(path.join(rootDir, "packages/editor-ui/index.html"), "utf8");
+  const htmlWithCss = indexHtml.includes("./app.css")
+    ? indexHtml
+    : indexHtml.replace("</head>", '    <link rel="stylesheet" href="./app.css" />\n  </head>');
+  await writeFile(path.join(outdir, "index.html"), htmlWithCss, "utf8");
 }
 
 async function buildBackend() {
+  generateFontAwesomeAssets();
   const outdir = path.join(distDir, "addon-backend");
   const binDir = path.join(outdir, "bin");
+  const rustOutDir = path.join(distDir, "rust-backend");
   await mkdir(outdir, { recursive: true });
   await mkdir(binDir, { recursive: true });
+  await mkdir(rustOutDir, { recursive: true });
   execFileSync("cargo", ["build", "--manifest-path", path.join(rootDir, "rust", "text-engine", "Cargo.toml"), "--release"], {
+    stdio: "inherit",
+    cwd: rootDir
+  });
+  execFileSync("cargo", ["build", "--manifest-path", path.join(rootDir, "rust", "backend-api", "Cargo.toml"), "--release"], {
     stdio: "inherit",
     cwd: rootDir
   });
   const suffix = process.platform === "win32" ? ".exe" : "";
   await copyFile(
-    path.join(rootDir, "rust", "text-engine", "target", "release", `epd-text-engine${suffix}`),
+    path.join(rootDir, "rust", "target", "release", `epd-text-engine${suffix}`),
     path.join(binDir, `epd-text-engine${suffix}`)
   );
+  await copyFile(
+    path.join(rootDir, "rust", "target", "release", `epd-backend-api${suffix}`),
+    path.join(rustOutDir, `epd-backend-api${suffix}`)
+  );
   await esbuild.build({
-    entryPoints: [path.join(rootDir, "packages/addon-backend/src/server.ts")],
+    entryPoints: [path.join(rootDir, "packages/addon-backend/src/render-bridge.ts")],
     bundle: true,
     platform: "node",
     format: "cjs",
     sourcemap: true,
-    outfile: path.join(outdir, "server.cjs"),
+    outfile: path.join(outdir, "render-bridge.cjs"),
     target: "node22"
   });
 }

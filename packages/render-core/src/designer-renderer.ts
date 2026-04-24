@@ -1,9 +1,10 @@
 import { createStableHash } from "./hash.js";
-import { ICONS } from "./icons.js";
-import { applyScopeTemplate, evaluateArrayExpression, evaluateScopeExpression, resolveScopePath, stringifyScopeValue, type ScopeContext } from "./layout-meta.js";
+import { defaultIconId } from "./icons.js";
+import { applyScopeTemplate, evaluateArrayExpression, evaluateScopeExpression, evaluateScopeValueExpression, resolveScopePath, stringifyScopeValue, type ScopeContext } from "./layout-meta.js";
 import { COLOR_ACCENT, COLOR_BG, COLOR_FG, PixelBuffer, type PixelClipRect, type PixelPaint } from "./pixel-buffer.js";
 import { formatQuantizedNumber } from "./quantize.js";
 import { evaluateCondition } from "./resolve.js";
+import { createActiveRenderScripting, type ActiveRenderScripting } from "./scripting.js";
 import { DEFAULT_WIDGET_THEME_ID, DEFAULT_WIDGET_THEMES } from "./themes.js";
 import type {
   BorderToken,
@@ -26,6 +27,7 @@ import type {
   Project,
   RenderData,
   RenderedImage,
+  ScriptLayoutNode,
   SizeSpec,
   TextStyle,
   UniqueLayoutNode,
@@ -38,6 +40,29 @@ interface PixelFrame {
   y: number;
   w: number;
   h: number;
+}
+
+let activeRenderScripting: ActiveRenderScripting | undefined;
+
+function withActiveRenderScripting<T>(value: ActiveRenderScripting, work: () => T): T {
+  const previous = activeRenderScripting;
+  activeRenderScripting = value;
+  try {
+    return work();
+  } finally {
+    activeRenderScripting = previous;
+  }
+}
+
+function templateOptions(scope: ScopeContext, locale = "en-US") {
+  return {
+    locale,
+    scope,
+    globals: activeRenderScripting?.globals,
+    helpers: activeRenderScripting?.helpers as Record<string, unknown> | undefined,
+    filters: activeRenderScripting?.filters,
+    warn: (message: string) => activeRenderScripting?.warnings.push(message)
+  };
 }
 
 function parseHexColor(value: string): [number, number, number] {
@@ -200,6 +225,9 @@ function nodeLabel(project: Project, node: LayoutNode): string {
   if (node.type === "foreach") {
     return `foreach:${node.itemAlias || "item"}`;
   }
+  if (node.type === "script") {
+    return "script";
+  }
   if (node.type === "if_else") {
     return "if/else";
   }
@@ -231,6 +259,7 @@ function buildInspectionNode(
       node.type === "filter" ||
       node.type === "unique" ||
       node.type === "foreach" ||
+      node.type === "script" ||
       node.type === "if_else",
     ...extras
   };
@@ -494,6 +523,13 @@ function fitContentWidth(
       : 0) + chrome;
   }
 
+  if (node.type === "script") {
+    const nestedContext = scriptNodeScope(node, inputContext, locale);
+    return (node.child
+      ? intrinsicWidthForNode(node.child, innerWidth, buffer, theme, fontPresets, data, nestedContext, locale)
+      : 0) + chrome;
+  }
+
   if (node.type === "foreach") {
     return (node.child
       ? intrinsicWidthForNode(node.child, innerWidth, buffer, theme, fontPresets, data, inputContext, locale)
@@ -533,8 +569,7 @@ function fitContentWidth(
   }
 
   if (node.primitiveType === "icon") {
-    const iconRows = ICONS[String(node.props?.icon ?? "warning")] ?? ICONS.warning;
-    return (iconRows[0]?.length ?? 0) + chrome;
+    return 10 + chrome;
   }
 
   if (node.primitiveType === "line") {
@@ -595,6 +630,13 @@ function fitContentHeight(
         : node.type === "filter"
           ? filterNodeScope(node, inputContext, locale)
           : uniqueNodeScope(node, inputContext, locale);
+    return (node.child
+      ? intrinsicHeightForNode(node.child, innerWidth, buffer, theme, fontPresets, data, nestedContext, locale)
+      : 0) + chrome;
+  }
+
+  if (node.type === "script") {
+    const nestedContext = scriptNodeScope(node, inputContext, locale);
     return (node.child
       ? intrinsicHeightForNode(node.child, innerWidth, buffer, theme, fontPresets, data, nestedContext, locale)
       : 0) + chrome;
@@ -665,8 +707,7 @@ function fitContentHeight(
   }
 
   if (node.primitiveType === "icon") {
-    const iconRows = ICONS[String(node.props?.icon ?? "warning")] ?? ICONS.warning;
-    return iconRows.length + chrome;
+    return 10 + chrome;
   }
 
   if (node.primitiveType === "line") {
@@ -1027,21 +1068,6 @@ function layoutTextLines(
   return lines.map((line) => truncateTextToWidth(buffer, line, style, maxWidth));
 }
 
-function linesFit(
-  buffer: PixelBuffer,
-  lines: string[],
-  style: Partial<TextStyle>,
-  frame: PixelFrame,
-  lineSpacingPx = 0,
-  topPaddingPx = 0
-): boolean {
-  const metrics = lines.map((line) => buffer.measureText(line, style));
-  return (
-    metrics.every((entry) => entry.width <= frame.w) &&
-    adjustedTextBlockHeight(totalTextBlockHeight(metrics, lineSpacingPx), topPaddingPx) <= frame.h
-  );
-}
-
 function pickAutoTextStyle(
   buffer: PixelBuffer,
   frame: PixelFrame,
@@ -1051,27 +1077,46 @@ function pickAutoTextStyle(
   wrap: boolean,
   lineSpacingPx = 0
 ): Partial<TextStyle> {
-  for (let pixelSize = 36; pixelSize >= 4; pixelSize -= 1) {
+  const topPaddingPx = Math.round(Number(baseStyle.topPaddingPx ?? 0));
+  const fitsAtSize = (pixelSize: number): boolean => {
     const candidate = { ...baseStyle, pixelSize };
     const entries = [value, placeholder].filter((entry): entry is string => Boolean(entry));
-    const fits = entries.every((entry) => {
+    return entries.every((entry) => {
       if (!wrap) {
-        return buffer.measureText(entry, candidate).width <= frame.w && buffer.measureText(entry, candidate).height <= frame.h;
+        return (
+          buffer.measureText(entry, candidate).width <= frame.w &&
+          adjustedTextBlockHeight(
+            renderedTextBlockHeight(buffer, [entry], candidate, frame.w, 0),
+            topPaddingPx
+          ) <= frame.h
+        );
       }
-      return linesFit(
-        buffer,
-        wrapText(buffer, entry, candidate, frame.w),
-        candidate,
-        frame,
-        lineSpacingPx,
-        Math.round(Number(candidate.topPaddingPx ?? 0))
-      );
+      return adjustedTextBlockHeight(
+        renderedTextBlockHeight(
+          buffer,
+          wrapText(buffer, entry, candidate, frame.w),
+          candidate,
+          frame.w,
+          lineSpacingPx
+        ),
+        topPaddingPx
+      ) <= frame.h;
     });
-    if (fits) {
-      return candidate;
+  };
+  const maxPixelSize = Math.max(4, Math.ceil(Math.max(frame.w, frame.h)));
+  let low = 4;
+  let high = maxPixelSize;
+  let best = 4;
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (fitsAtSize(mid)) {
+      best = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
     }
   }
-  return { ...baseStyle, pixelSize: 4 };
+  return { ...baseStyle, pixelSize: best };
 }
 
 function drawGlyphOutlinedText(
@@ -1231,7 +1276,7 @@ function resolveEntityState(entityRef: string | undefined, data: RenderData, inp
 }
 
 function applyInputTemplate(template: string, inputContext: ScopeContext, locale = "en-US"): string {
-  return applyScopeTemplate(template, inputContext, { locale });
+  return applyScopeTemplate(template, inputContext, templateOptions(inputContext, locale));
 }
 
 function resolveArrayItems(
@@ -1241,7 +1286,11 @@ function resolveArrayItems(
   itemAlias?: string,
   indexAlias?: string
 ): ScopeContext[string][] {
-  return evaluateArrayExpression(expression, inputContext, { locale, itemAlias, indexAlias }) as ScopeContext[string][];
+  return evaluateArrayExpression(expression, inputContext, {
+    ...templateOptions(inputContext, locale),
+    itemAlias,
+    indexAlias
+  }) as ScopeContext[string][];
 }
 
 function dataQueryScope(node: DataQueryLayoutNode, data: RenderData, inputContext: ScopeContext): ScopeContext {
@@ -1284,6 +1333,33 @@ function uniqueNodeScope(node: UniqueLayoutNode, inputContext: ScopeContext, loc
       node.indexAlias
     )
   };
+}
+
+function resolveScriptBindingValue(expression: string, inputContext: ScopeContext, locale = "en-US"): ScopeContext[string] {
+  const trimmed = expression.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (
+    (trimmed.startsWith("{{") && trimmed.endsWith("}}")) ||
+    (trimmed.startsWith("${") && trimmed.endsWith("}"))
+  ) {
+    return applyInputTemplate(trimmed, inputContext, locale);
+  }
+  return evaluateScopeValueExpression(trimmed, inputContext, templateOptions(inputContext, locale)) as ScopeContext[string];
+}
+
+function scriptNodeScope(node: ScriptLayoutNode, inputContext: ScopeContext, locale = "en-US"): ScopeContext {
+  const bindings = Object.fromEntries(
+    Object.entries(node.bindings ?? {}).map(([key, expression]) => [
+      key,
+      resolveScriptBindingValue(String(expression ?? ""), inputContext, locale)
+    ])
+  ) as ScopeContext;
+  const output = activeRenderScripting?.executeScriptNode(String(node.source ?? ""), inputContext, bindings, locale);
+  return output && typeof output === "object" && !Array.isArray(output)
+    ? { ...inputContext, ...output }
+    : inputContext;
 }
 
 function drawGraph(buffer: PixelBuffer, frame: PixelFrame, data: RenderData, queryId: string | undefined, paint: PixelPaint): void {
@@ -1418,10 +1494,9 @@ function drawPrimitiveNode(
   }
 
   if (node.primitiveType === "icon") {
-    const iconRows = ICONS[String(node.props?.icon ?? "warning")] ?? ICONS.warning;
-    const scale = Math.max(1, Math.floor(Math.min(innerFrame.w / iconRows[0].length, innerFrame.h / iconRows.length)));
-    const iconWidth = iconRows[0].length * scale;
-    const iconHeight = iconRows.length * scale;
+    const scale = Math.max(1, Math.floor(Math.min(innerFrame.w / 10, innerFrame.h / 10)));
+    const iconWidth = 10 * scale;
+    const iconHeight = 10 * scale;
     const x = alignedOffset(
       innerFrame.x,
       innerFrame.w,
@@ -1434,7 +1509,7 @@ function drawPrimitiveNode(
       iconHeight,
       (node.props?.verticalAlign ?? "middle") as "top" | "middle" | "bottom"
     );
-    buffer.drawIcon(String(node.props?.icon ?? "warning"), x, y, scale, roleToColor(theme.text.body), toClipRect(visibleInnerFrame));
+    buffer.drawIcon(String(node.props?.icon ?? defaultIconId()), x, y, scale, roleToColor(theme.text.body), toClipRect(visibleInnerFrame));
     return;
   }
 
@@ -1731,6 +1806,16 @@ function renderNode(
       : undefined;
   }
 
+  if (node.type === "script") {
+    const nestedContext = scriptNodeScope(node, inputContext, project.locale);
+    const childInspection = node.child
+      ? renderNode(buffer, project, node.child, innerFrame, data, resolvedThemeId, nestedContext, collectInspection, expandCompoundRefs, visibleInnerFrame)
+      : undefined;
+    return collectInspection
+      ? buildInspectionNode(project, node, frame, innerFrame, resolvedThemeId, childInspection ? [childInspection] : [])
+      : undefined;
+  }
+
   if (node.type === "foreach") {
     const values = resolveArrayItems(node.itemsRef, inputContext, project.locale, node.itemAlias, node.indexAlias);
     const maxItems = typeof node.maxItems === "number" && Number.isFinite(node.maxItems)
@@ -1878,34 +1963,37 @@ export function renderLayoutDefinition(
   const rootContentPadding = layout.kind === "fullscreen" ? displayType.contentPadding : undefined;
   const buffer = new PixelBuffer(displayType.width, displayType.height, COLOR_BG, project.fontPresets);
   buffer.fill(COLOR_BG);
-  if (layout.rootNode) {
-    renderNode(
-      buffer,
-      project,
-      layout.rootNode,
-      { x: 0, y: 0, w: displayType.width, h: displayType.height },
-      data,
-      themeId,
-      {},
-      false,
-      false,
-      undefined,
-      rootContentPadding
-    );
-  }
-  if (popup) {
-    const popupWidth = Math.min(displayType.width, popup.popupDefaults?.widthPx ?? Math.floor(displayType.width * 0.8));
-    const popupHeight = Math.min(displayType.height, popup.popupDefaults?.heightPx ?? Math.floor(displayType.height * 0.5));
-    const popupFrame = {
-      x: Math.floor((displayType.width - popupWidth) / 2),
-      y: Math.floor((displayType.height - popupHeight) / 2),
-      w: popupWidth,
-      h: popupHeight
-    };
-    if (popup.rootNode) {
-      renderNode(buffer, project, popup.rootNode, popupFrame, data, themeId, {}, false);
+  const scripting = createActiveRenderScripting(project, data, displayType);
+  withActiveRenderScripting(scripting, () => {
+    if (layout.rootNode) {
+      renderNode(
+        buffer,
+        project,
+        layout.rootNode,
+        { x: 0, y: 0, w: displayType.width, h: displayType.height },
+        data,
+        themeId,
+        scripting.globals,
+        false,
+        false,
+        undefined,
+        rootContentPadding
+      );
     }
-  }
+    if (popup) {
+      const popupWidth = Math.min(displayType.width, popup.popupDefaults?.widthPx ?? Math.floor(displayType.width * 0.8));
+      const popupHeight = Math.min(displayType.height, popup.popupDefaults?.heightPx ?? Math.floor(displayType.height * 0.5));
+      const popupFrame = {
+        x: Math.floor((displayType.width - popupWidth) / 2),
+        y: Math.floor((displayType.height - popupHeight) / 2),
+        w: popupWidth,
+        h: popupHeight
+      };
+      if (popup.rootNode) {
+        renderNode(buffer, project, popup.rootNode, popupFrame, data, themeId, scripting.globals, false);
+      }
+    }
+  });
   const rgba = rgbaFromPixels(buffer, displayType);
   const hash = createStableHash([displayType.id, layout.id, popup?.id ?? "", buffer.pixels]);
   return {
@@ -1915,7 +2003,8 @@ export function renderLayoutDefinition(
     rgba,
     hash,
     activeScreenId: layout.id,
-    activeOverlayId: popup?.id
+    activeOverlayId: popup?.id,
+    scriptWarnings: scripting.warnings.length ? [...new Set(scripting.warnings)] : undefined
   };
 }
 
@@ -1930,38 +2019,43 @@ export function inspectLayoutDefinition(
   const displayType = resolveDisplayType(project, layout.displayTypeId);
   const rootContentPadding = layout.kind === "fullscreen" ? displayType.contentPadding : undefined;
   const buffer = new PixelBuffer(displayType.width, displayType.height, COLOR_BG, project.fontPresets);
-  const root = layout.rootNode
-    ? renderNode(
-        buffer,
-        project,
-        layout.rootNode,
-        { x: 0, y: 0, w: displayType.width, h: displayType.height },
-        data,
-        themeId,
-        {},
-        true,
-        expandCompoundRefs,
-        undefined,
-        rootContentPadding
-      )
-    : undefined;
+  const scripting = createActiveRenderScripting(project, data, displayType);
+  let root: LayoutInspectionNode | undefined;
   let popupInspection: LayoutInspectionNode | undefined;
-  if (popup?.rootNode) {
-    const popupWidth = Math.min(displayType.width, popup.popupDefaults?.widthPx ?? Math.floor(displayType.width * 0.8));
-    const popupHeight = Math.min(displayType.height, popup.popupDefaults?.heightPx ?? Math.floor(displayType.height * 0.5));
-    const popupFrame = {
-      x: Math.floor((displayType.width - popupWidth) / 2),
-      y: Math.floor((displayType.height - popupHeight) / 2),
-      w: popupWidth,
-      h: popupHeight
-    };
-    popupInspection = renderNode(buffer, project, popup.rootNode, popupFrame, data, themeId, {}, true, expandCompoundRefs);
-  }
+  withActiveRenderScripting(scripting, () => {
+    root = layout.rootNode
+      ? renderNode(
+          buffer,
+          project,
+          layout.rootNode,
+          { x: 0, y: 0, w: displayType.width, h: displayType.height },
+          data,
+          themeId,
+          scripting.globals,
+          true,
+          expandCompoundRefs,
+          undefined,
+          rootContentPadding
+        )
+      : undefined;
+    if (popup?.rootNode) {
+      const popupWidth = Math.min(displayType.width, popup.popupDefaults?.widthPx ?? Math.floor(displayType.width * 0.8));
+      const popupHeight = Math.min(displayType.height, popup.popupDefaults?.heightPx ?? Math.floor(displayType.height * 0.5));
+      const popupFrame = {
+        x: Math.floor((displayType.width - popupWidth) / 2),
+        y: Math.floor((displayType.height - popupHeight) / 2),
+        w: popupWidth,
+        h: popupHeight
+      };
+      popupInspection = renderNode(buffer, project, popup.rootNode, popupFrame, data, themeId, scripting.globals, true, expandCompoundRefs);
+    }
+  });
   return {
     width: displayType.width,
     height: displayType.height,
     root,
-    popup: popupInspection
+    popup: popupInspection,
+    scriptWarnings: scripting.warnings.length ? [...new Set(scripting.warnings)] : undefined
   };
 }
 

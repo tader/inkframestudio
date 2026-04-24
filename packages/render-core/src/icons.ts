@@ -1,163 +1,38 @@
+import { FONT_AWESOME_ICON_DEFINITIONS, FONT_AWESOME_ICON_GLYPHS, type FontAwesomeIconGlyphDefinition } from "./generated-font-awesome-icons.js";
 import type { IconDefinition } from "./types.js";
 
-export const ICONS: Record<string, string[]> = {
-  garage: [
-    "0011111100",
-    "0111111110",
-    "1110000111",
-    "1111111111",
-    "1001111001",
-    "1001111001",
-    "1001111001",
-    "1111111111",
-    "1000000001",
-    "1111111111"
-  ],
-  warning: [
-    "0000100000",
-    "0001110000",
-    "0011111000",
-    "0111111100",
-    "0111011100",
-    "1111011110",
-    "1111111110",
-    "0001110000",
-    "0001110000",
-    "0001110000"
-  ],
-  calendar: [
-    "1111111111",
-    "1011111101",
-    "1111111111",
-    "1000000001",
-    "1011011011",
-    "1000000001",
-    "1011011011",
-    "1000000001",
-    "1011011011",
-    "1111111111"
-  ],
-  door: [
-    "0011111000",
-    "0111111100",
-    "0110001100",
-    "0110001100",
-    "0110001100",
-    "0110011100",
-    "0110001100",
-    "0110001100",
-    "0111111100",
-    "0011111000"
-  ],
-  lock: [
-    "0001110000",
-    "0010001000",
-    "0010001000",
-    "0011111000",
-    "0111111100",
-    "0110011100",
-    "0110011100",
-    "0111111100",
-    "0111111100",
-    "0011111000"
-  ],
-  thermometer: [
-    "0001100000",
-    "0010010000",
-    "0010010000",
-    "0010010000",
-    "0010010000",
-    "0010010000",
-    "0010010000",
-    "0011110000",
-    "0111111000",
-    "0011110000"
-  ],
-  humidity: [
-    "0001100000",
-    "0011110000",
-    "0111111000",
-    "0111111000",
-    "1111111100",
-    "1111111100",
-    "1111111100",
-    "0111111000",
-    "0011110000",
-    "0001100000"
-  ],
-  power: [
-    "0001110000",
-    "0011111000",
-    "0011011000",
-    "0000110000",
-    "0001100000",
-    "0011000000",
-    "0011111000",
-    "0001110000",
-    "0001110000",
-    "0001110000"
-  ],
-  clock: [
-    "0011111000",
-    "0111111100",
-    "1110001110",
-    "1110011110",
-    "1110110110",
-    "1111100110",
-    "1110001110",
-    "1110001110",
-    "0111111100",
-    "0011111000"
-  ],
-  bolt: [
-    "0001111000",
-    "0011110000",
-    "0011100000",
-    "0111111100",
-    "0001111000",
-    "0000111100",
-    "0011111100",
-    "0011110000",
-    "0011100000",
-    "0001000000"
-  ],
-  window: [
-    "0011111100",
-    "0111111110",
-    "0110011110",
-    "0110011110",
-    "0111111110",
-    "0111111110",
-    "0111100110",
-    "0111100110",
-    "0111111110",
-    "0011111100"
-  ],
-  battery: [
-    "0011111110",
-    "0111111111",
-    "1100000001",
-    "1101111101",
-    "1101111101",
-    "1101111101",
-    "1101111101",
-    "1100000001",
-    "0111111111",
-    "0011111110"
-  ]
+const LEGACY_ICON_ALIASES: Record<string, string> = {
+  garage: "fa-solid:warehouse",
+  warning: "fa-solid:triangle-exclamation",
+  calendar: "fa-regular:calendar",
+  door: "fa-solid:door-open",
+  lock: "fa-solid:lock",
+  thermometer: "fa-solid:temperature-half",
+  humidity: "fa-solid:droplet",
+  power: "fa-solid:power-off",
+  clock: "fa-regular:clock",
+  bolt: "fa-solid:bolt",
+  window: "fa-regular:window-maximize",
+  battery: "fa-solid:battery-half"
 };
 
-export const ICON_DEFINITIONS: IconDefinition[] = [
-  { id: "garage", label: "Garage" },
-  { id: "warning", label: "Warning" },
-  { id: "calendar", label: "Calendar" },
-  { id: "door", label: "Door" },
-  { id: "lock", label: "Lock" },
-  { id: "thermometer", label: "Thermometer" },
-  { id: "humidity", label: "Humidity" },
-  { id: "power", label: "Power" },
-  { id: "clock", label: "Clock" },
-  { id: "bolt", label: "Bolt" },
-  { id: "window", label: "Window" },
-  { id: "battery", label: "Battery" }
-];
+const DEFAULT_ICON_ID = "fa-solid:triangle-exclamation";
+
+export const ICON_DEFINITIONS: IconDefinition[] = FONT_AWESOME_ICON_DEFINITIONS;
+
+export function normalizeIconId(iconId: string | undefined): string {
+  const raw = String(iconId ?? "").trim();
+  if (!raw) {
+    return DEFAULT_ICON_ID;
+  }
+  return LEGACY_ICON_ALIASES[raw] ?? raw;
+}
+
+export function resolveIconDefinition(iconId: string | undefined): FontAwesomeIconGlyphDefinition | undefined {
+  const normalized = normalizeIconId(iconId);
+  return FONT_AWESOME_ICON_GLYPHS[normalized] ?? FONT_AWESOME_ICON_GLYPHS[DEFAULT_ICON_ID];
+}
+
+export function defaultIconId(): string {
+  return DEFAULT_ICON_ID;
+}

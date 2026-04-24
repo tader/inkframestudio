@@ -15,7 +15,8 @@ export function isContainerNode(node: LayoutNode | undefined): boolean {
     node.type === "data_query" ||
     node.type === "filter" ||
     node.type === "unique" ||
-    node.type === "foreach"
+    node.type === "foreach" ||
+    node.type === "script"
   ));
 }
 
@@ -42,7 +43,7 @@ export function getNodeById(node: LayoutNode | undefined, nodeId: string): Layou
       }
     }
   }
-  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach") {
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach" || node.type === "script") {
     return getNodeById(node.child, nodeId);
   }
   if (node.type === "if_else") {
@@ -81,6 +82,9 @@ export function buildNodeTree(root: LayoutNode | undefined): NodeTreeEntry[] {
     if (node.type === "foreach" && node.child) {
       visit(node.child, depth + 1, node.id, "Template");
     }
+    if (node.type === "script" && node.child) {
+      visit(node.child, depth + 1, node.id, "Child");
+    }
     if (node.type === "if_else") {
       if (node.thenChild) {
         visit(node.thenChild, depth + 1, node.id, "Then");
@@ -112,7 +116,7 @@ function mapChildren(node: LayoutNode, mapper: (child: LayoutNode) => LayoutNode
       }))
     };
   }
-  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach") {
+  if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "foreach" || node.type === "script") {
     return {
       ...node,
       child: node.child ? mapper(node.child) : undefined
@@ -162,7 +166,7 @@ export function removeNode(root: LayoutNode, nodeId: string): { root: LayoutNode
           }))
       };
     }
-    if (node.type === "data_query" || node.type === "filter" || node.type === "unique") {
+    if (node.type === "data_query" || node.type === "filter" || node.type === "unique" || node.type === "script") {
       if (node.child?.id === nodeId) {
         removed = node.child;
         return { ...node, child: undefined };
@@ -239,7 +243,7 @@ export function insertNode(root: LayoutNode, parentId: string, child: LayoutNode
     if (root.type === "grid") {
       return { ...root, children: appendIntoGrid(root.children, child, index) };
     }
-    if (root.type === "data_query" || root.type === "filter" || root.type === "unique" || root.type === "foreach") {
+    if (root.type === "data_query" || root.type === "filter" || root.type === "unique" || root.type === "foreach" || root.type === "script") {
       return { ...root, child };
     }
     return root;

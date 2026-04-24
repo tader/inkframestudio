@@ -1,5 +1,6 @@
 #!/usr/bin/with-contenv bashio
-export PORT=8099
-export NODE_ENV=production
+set -euo pipefail
+
 cd /app
-node dist/addon-backend/server.cjs
+export NODE_ENV=production
+exec dist/rust-backend/epd-backend-api

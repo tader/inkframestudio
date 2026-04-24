@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { applyScopeTemplate, evaluateArrayExpression } from "./layout-meta.js";
+import { createActiveRenderScripting } from "./scripting.js";
+import { normalizeProject } from "./themes.js";
+import { SAMPLE_DATA, SAMPLE_PROJECT } from "./sample-project.js";
+import { installProjectScriptingRuntime } from "../../addon-backend/src/script-runtime.js";
+
+installProjectScriptingRuntime();
 
 describe("layout meta templates", () => {
   it("formats ISO event times with template filters", () => {
@@ -145,5 +151,32 @@ describe("layout meta templates", () => {
       { start: "2026-04-17T09:00:00.000Z", summary: "Standup" },
       { start: "2026-04-17T10:00:00.000Z", summary: "Standup" }
     ]);
+  });
+
+  it("injects render globals and project filters into templates", () => {
+    const project = normalizeProject({
+      ...SAMPLE_PROJECT,
+      scripting: {
+        filters: [{
+          name: "fuzzy_time",
+          source: "() => 'vijf voor tien'"
+        }]
+      }
+    });
+    const displayType = project.displayTypes?.[0]!;
+    const scripting = createActiveRenderScripting(project, SAMPLE_DATA, displayType);
+    expect(
+      applyScopeTemplate(
+        "{{ now | fuzzy_time }} {{ today }} {{ display.width }} {{ project.name }}",
+        scripting.globals,
+        {
+          locale: project.locale,
+          scope: scripting.globals,
+          globals: scripting.globals,
+          filters: scripting.filters,
+          helpers: scripting.helpers as Record<string, unknown>
+        }
+      )
+    ).toContain("vijf voor tien");
   });
 });

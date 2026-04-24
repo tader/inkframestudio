@@ -1,5 +1,6 @@
 import * as fontkit from "fontkit";
 import { DEFAULT_FONT_PRESETS } from "./font-presets.js";
+import { FONT_AWESOME_FONT_BINARY_BASE64 } from "./generated-font-awesome-data.js";
 import { FONT_BINARY_BASE64 } from "./generated-font-data.js";
 import type { FontFamily, FontOption, FontPresetValues, FontSize, FontSlope, FontVariantKey, FontWeight, TextStyle } from "./types.js";
 
@@ -92,6 +93,10 @@ const userFontData = new Map<string, { regular?: string; italic?: string; bold?:
 const missingFontFamilyWarnings = new Set<string>();
 let textLayoutAdapter: TextLayoutAdapter | undefined;
 const DEFAULT_FALLBACK_FAMILY: ResolvedFontFamily = "px-sans";
+const EMBEDDED_FONT_BINARY_BASE64 = {
+  ...FONT_BINARY_BASE64,
+  ...FONT_AWESOME_FONT_BINARY_BASE64
+} as const;
 
 export interface FontFamilyData {
   regular?: string;
@@ -114,7 +119,10 @@ export type TextLayoutAdapter = (request: TextLayoutAdapterRequest) => TextLayou
 export const BUILT_IN_FONT_OPTIONS: FontOption[] = [
   { id: "px-sans", label: "PX Sans", source: "built-in", variants: ["regular", "bold"] },
   { id: "px-mono-special", label: "PX Mono Special", source: "built-in", variants: ["regular"] },
-  { id: "ui-sans", label: "Legacy UI Sans", source: "built-in", variants: ["regular", "bold"] }
+  { id: "ui-sans", label: "Legacy UI Sans", source: "built-in", variants: ["regular", "bold"] },
+  { id: "fa-solid", label: "Font Awesome Solid", source: "built-in", variants: ["regular"] },
+  { id: "fa-regular", label: "Font Awesome Regular", source: "built-in", variants: ["regular"] },
+  { id: "fa-brands", label: "Font Awesome Brands", source: "built-in", variants: ["regular"] }
 ];
 
 function clearFontCaches(): void {
@@ -139,7 +147,7 @@ export function registerUserFonts(fonts: Record<string, { regular?: string; ital
 
 function resolveFamily(family: FontFamily): ResolvedFontFamily {
   const resolved = family === "ui-sans" ? "px-sans" : family;
-  if (userFontData.has(resolved) || FONT_BINARY_BASE64[resolved as keyof typeof FONT_BINARY_BASE64]) {
+  if (userFontData.has(resolved) || EMBEDDED_FONT_BINARY_BASE64[resolved as keyof typeof EMBEDDED_FONT_BINARY_BASE64]) {
     return resolved;
   }
   if (!missingFontFamilyWarnings.has(resolved)) {
@@ -169,8 +177,8 @@ function fontDataFor(family: ResolvedFontFamily, weight: FontWeight, slope: Font
     return imported[preferredVariant] ?? imported.regular ?? imported.bold ?? "";
   }
   const familyData =
-    (FONT_BINARY_BASE64[family as keyof typeof FONT_BINARY_BASE64] as EmbeddedFontFamilyData | undefined) ??
-    (FONT_BINARY_BASE64[DEFAULT_FALLBACK_FAMILY as keyof typeof FONT_BINARY_BASE64] as EmbeddedFontFamilyData);
+    (EMBEDDED_FONT_BINARY_BASE64[family as keyof typeof EMBEDDED_FONT_BINARY_BASE64] as EmbeddedFontFamilyData | undefined) ??
+    (EMBEDDED_FONT_BINARY_BASE64[DEFAULT_FALLBACK_FAMILY as keyof typeof EMBEDDED_FONT_BINARY_BASE64] as EmbeddedFontFamilyData);
   return familyData[preferredVariant] ?? familyData.regular;
 }
 
@@ -179,7 +187,7 @@ function fontFamilyDataFor(family: ResolvedFontFamily): FontFamilyData {
   if (imported) {
     return imported;
   }
-  const familyData = FONT_BINARY_BASE64[family as keyof typeof FONT_BINARY_BASE64] as EmbeddedFontFamilyData | undefined;
+  const familyData = EMBEDDED_FONT_BINARY_BASE64[family as keyof typeof EMBEDDED_FONT_BINARY_BASE64] as EmbeddedFontFamilyData | undefined;
   if (!familyData) {
     return {};
   }
@@ -197,7 +205,7 @@ function hasRealVariant(family: ResolvedFontFamily, weight: FontWeight, slope: F
   if (imported) {
     return Boolean(imported[preferredVariant]);
   }
-  const familyData = FONT_BINARY_BASE64[family as keyof typeof FONT_BINARY_BASE64] as EmbeddedFontFamilyData | undefined;
+  const familyData = EMBEDDED_FONT_BINARY_BASE64[family as keyof typeof EMBEDDED_FONT_BINARY_BASE64] as EmbeddedFontFamilyData | undefined;
   if (!familyData) {
     return false;
   }

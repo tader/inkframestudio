@@ -2,5 +2,6 @@ node_modules
 dist
 data
 coverage
+rust/target
 *.log
 *.DS_Store

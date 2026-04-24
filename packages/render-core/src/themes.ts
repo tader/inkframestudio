@@ -1,5 +1,7 @@
 import { BUILT_IN_WIDGET_DEFINITIONS, defaultDisplayTypes, defaultVirtualDevices, migrateLegacyAssignments, migrateLegacyLayouts } from "./designer-defaults.js";
 import { DEFAULT_FONT_PRESETS, normalizeFontPresets } from "./font-presets.js";
+import { normalizeIconId } from "./icons.js";
+import { normalizeScriptLibraryEntries } from "./scripting.js";
 import type { DeviceAssignment, DisplayType, EdgeInsets, LayoutDefinition, LayoutNode, ManagedDisplay, Project, Screen, ThemeRef, WidgetInstance, WidgetTheme, WidgetThemeId } from "./types.js";
 
 export const DEFAULT_WIDGET_THEME_ID = "classic-outline";
@@ -159,7 +161,7 @@ function normalizeLayoutNode(node: LayoutNode | undefined): LayoutNode | undefin
       child: normalizeLayoutNode(node.child)
     };
   }
-  if (node.type === "foreach" || node.type === "filter" || node.type === "unique") {
+  if (node.type === "foreach" || node.type === "filter" || node.type === "unique" || node.type === "script") {
     return {
       ...node,
       child: normalizeLayoutNode(node.child)
@@ -177,6 +179,15 @@ function normalizeLayoutNode(node: LayoutNode | undefined): LayoutNode | undefin
     return {
       ...node,
       props
+    };
+  }
+  if (node.type === "primitive_instance" && typeof node.props?.icon === "string") {
+    return {
+      ...node,
+      props: {
+        ...node.props,
+        icon: normalizeIconId(node.props.icon)
+      }
     };
   }
   return node;
@@ -246,7 +257,12 @@ export function normalizeProject(project: Project): Project {
   }));
   const displayTypes = (project.displayTypes?.length ? project.displayTypes : defaultDisplayTypes())
     .map((displayType) => normalizeDisplayType(displayType as DisplayType & { safeMarginPx?: unknown }));
-  const devices = project.devices?.length ? project.devices : defaultVirtualDevices(displayTypes);
+  const devices = (project.devices?.length ? project.devices : defaultVirtualDevices(displayTypes)).map((device) => ({
+    ...device,
+    displayProviderInstanceId: device.displayProviderInstanceId
+      ?? (device.virtual ? "virtual-default" : device.providerKind === "openepaperlink-ap" ? "openepaperlink-ap-default" : undefined),
+    providerDeviceRef: device.providerDeviceRef ?? device.providerRef ?? device.id
+  }));
   const layoutDefinitions = (project.layoutDefinitions?.length ? project.layoutDefinitions : migrateLegacyLayouts(project))
     .map((layout) => ({
       ...layout,
@@ -258,9 +274,18 @@ export function normalizeProject(project: Project): Project {
   const deviceAssignments = project.deviceAssignments?.length
     ? normalizeDeviceAssignments(project, devices, layoutDefinitions)
     : migrateLegacyAssignments(project, devices, layoutDefinitions);
+  const scripting = project.scripting
+    ? {
+        sharedSource: typeof project.scripting.sharedSource === "string" ? project.scripting.sharedSource : undefined,
+        helpers: normalizeScriptLibraryEntries(project.scripting.helpers),
+        filters: normalizeScriptLibraryEntries(project.scripting.filters)
+      }
+    : undefined;
   return {
     ...project,
     locale: project.locale?.trim() || "en-US",
+    defaultSourceProviderInstanceId: project.defaultSourceProviderInstanceId ?? "home-assistant-default",
+    scripting,
     fontPresets: normalizeFontPresets(project.fontPresets ?? DEFAULT_FONT_PRESETS),
     themes,
     displayTypes,
@@ -273,7 +298,17 @@ export function normalizeProject(project: Project): Project {
     screens: project.screens.map((screen) => ({
       ...screen,
       widgetThemeId: screen.widgetThemeId ?? DEFAULT_WIDGET_THEME_ID
-    }))
+    })),
+    widgets: project.widgets.map((widget) => widget.props?.icon
+      ? {
+          ...widget,
+          props: {
+            ...widget.props,
+            icon: normalizeIconId(String(widget.props.icon))
+          }
+        }
+      : widget),
+    queries: project.queries ?? []
   };
 }
 

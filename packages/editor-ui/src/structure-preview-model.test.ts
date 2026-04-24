@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { LayoutInspectionNode } from "../../render-core/src/types.js";
-import { deriveStructureDropIntent, findInspectionNodeAtPoint } from "./structure-preview-model.js";
+import type { LayoutInspectionNode, LayoutNode } from "../../render-core/src/types.js";
+import { buildStructurePreviewTree, deriveStructureDropIntent, findInspectionNodeAtPoint } from "./structure-preview-model.js";
 
 function sampleInspection(): LayoutInspectionNode {
   return {
@@ -74,5 +74,58 @@ describe("structure preview model", () => {
       row: 1,
       column: 0
     });
+  });
+
+  it("builds schematic tree with both if branches", () => {
+    const root: LayoutNode = {
+      id: "root",
+      type: "stack",
+      axis: "vertical",
+      children: [
+        {
+          id: "cond",
+          type: "if_else",
+          condition: "foo",
+          thenChild: {
+            id: "then-stack",
+            type: "stack",
+            axis: "vertical",
+            children: []
+          },
+          elseChild: {
+            id: "else-stack",
+            type: "stack",
+            axis: "vertical",
+            children: []
+          }
+        }
+      ]
+    };
+    const schematic = buildStructurePreviewTree(root, (node) => node.type === "if_else" ? "if/else" : node.type);
+    const ifNode = schematic?.children[0];
+    expect(ifNode?.label).toBe("if/else");
+    expect(ifNode?.children.map((child) => child.label)).toEqual(["Then: stack", "Else: stack"]);
+  });
+
+  it("builds foreach as one template node with repeat hint", () => {
+    const root: LayoutNode = {
+      id: "foreach",
+      type: "foreach",
+      itemsRef: "events",
+      itemAlias: "event",
+      indexAlias: "index",
+      axis: "vertical",
+      maxItems: 5,
+      child: {
+        id: "template-text",
+        type: "primitive_instance",
+        primitiveType: "text",
+        props: { text: "Hello" }
+      }
+    };
+    const schematic = buildStructurePreviewTree(root, (node) => node.type === "foreach" ? "foreach event" : node.type === "primitive_instance" ? "text" : node.type);
+    expect(schematic?.label).toBe("foreach event x5");
+    expect(schematic?.children).toHaveLength(1);
+    expect(schematic?.children[0]?.label).toBe("Template: text");
   });
 });

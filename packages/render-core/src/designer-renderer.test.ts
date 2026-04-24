@@ -4,6 +4,9 @@ import { layoutText } from "./bitmap-font.js";
 import { normalizeProject } from "./themes.js";
 import { SAMPLE_DATA, SAMPLE_PROJECT } from "./sample-project.js";
 import type { LayoutDefinition, Project } from "./types.js";
+import { installProjectScriptingRuntime } from "../../addon-backend/src/script-runtime.js";
+
+installProjectScriptingRuntime();
 
 function pixelBounds(rendered: { width: number; height: number; pixels: Uint8Array }, x0: number, y0: number, w: number, h: number) {
   let minX = x0 + w;
@@ -244,6 +247,98 @@ describe("designer renderer", () => {
     const inspection = inspectLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
     expect(inspection.root?.gridCells).toHaveLength(4);
     expect(inspection.root?.children[0]?.gridPlacement).toEqual({ row: 1, column: 0 });
+  });
+
+  it("renders script-node derived text into child scope", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const displayTypeId = normalized.displayTypes?.[0]?.id ?? "tri296x128-red";
+    const scriptProject: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [{
+        id: "layout-script-derived",
+        name: "Script Derived",
+        kind: "fullscreen",
+        displayTypeId,
+        rootNode: {
+          id: "script-root",
+          type: "script",
+          source: 'return { fuzzy: "vijf voor tien" };',
+          outputMode: "merge_object",
+          bindings: {},
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          child: {
+            id: "text-root",
+            type: "primitive_instance",
+            primitiveType: "text",
+            width: { mode: "fill" },
+            height: { mode: "fill" },
+            props: { text: "{{ fuzzy }}", autoFit: true, paddingPx: 0 }
+          }
+        }
+      }, {
+        id: "layout-script-blank",
+        name: "Blank",
+        kind: "fullscreen",
+        displayTypeId,
+        rootNode: {
+          id: "script-blank",
+          type: "script",
+          source: "return {};",
+          outputMode: "merge_object",
+          bindings: {},
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          child: {
+            id: "text-blank",
+            type: "primitive_instance",
+            primitiveType: "text",
+            width: { mode: "fill" },
+            height: { mode: "fill" },
+            props: { text: "{{ fuzzy }}", autoFit: true, paddingPx: 0 }
+          }
+        }
+      }]
+    });
+    const derived = renderLayoutDefinition(scriptProject, scriptProject.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const blank = renderLayoutDefinition(scriptProject, scriptProject.layoutDefinitions?.[1]!, SAMPLE_DATA);
+    expect(derived.hash).not.toBe(blank.hash);
+    expect(derived.scriptWarnings).toBeUndefined();
+  });
+
+  it("surfaces non-fatal script warnings", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const displayTypeId = normalized.displayTypes?.[0]?.id ?? "tri296x128-red";
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [{
+        id: "layout-script-warning",
+        name: "Script Warning",
+        kind: "fullscreen",
+        displayTypeId,
+        rootNode: {
+          id: "script-root",
+          type: "script",
+          source: 'throw new Error("boom");',
+          outputMode: "merge_object",
+          bindings: {},
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          child: {
+            id: "text-root",
+            type: "primitive_instance",
+            primitiveType: "text",
+            width: { mode: "fill" },
+            height: { mode: "fill" },
+            props: { text: "{{ derivedText }}", autoFit: true, paddingPx: 0 }
+          }
+        }
+      }]
+    });
+    const rendered = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const inspected = inspectLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    expect(rendered.scriptWarnings?.join("\n")).toContain("boom");
+    expect(inspected.scriptWarnings?.join("\n")).toContain("boom");
   });
 
   it("uses content, primitive padding, and border in fit-content sizing", () => {
@@ -990,6 +1085,45 @@ describe("designer renderer", () => {
     }, project.fontPresets);
     const expectedHeight = Math.max(...expected.glyphs.filter((glyph) => glyph.height > 0).map((glyph) => glyph.height));
     expect(bounds?.height).toBe(expectedHeight);
+  });
+
+  it("auto-fit text can grow beyond the old 36px cap when frame allows", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [{
+        id: "layout-autofit-large",
+        name: "Auto Fit Large",
+        kind: "fullscreen",
+        displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
+        rootNode: {
+          id: "root",
+          type: "stack",
+          axis: "vertical",
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          children: [{
+            id: "text",
+            type: "primitive_instance",
+            primitiveType: "text",
+            width: { mode: "fixed_px", value: 220 },
+            height: { mode: "fixed_px", value: 96 },
+            props: {
+              text: "half vier",
+              fontRole: "header",
+              autoFit: true,
+              paddingPx: 0,
+              horizontalAlign: "center",
+              verticalAlign: "middle"
+            }
+          }]
+        }
+      }]
+    });
+    const rendered = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const bounds = pixelBounds(rendered, 0, 0, 220, 96);
+    expect(bounds).not.toBeNull();
+    expect(bounds?.height ?? 0).toBeGreaterThan(36);
   });
 
   it("applies icon alignment within the content frame", () => {

@@ -9,53 +9,264 @@ import {
   resolveProjectState
 } from "./index.js";
 import { normalizeProject } from "./themes.js";
+import type { Project, RenderData } from "./types.js";
+
+const LEGACY_PROJECT: Project = {
+  id: "legacy-home-demo",
+  name: "Legacy Home Demo",
+  version: 1,
+  locale: SAMPLE_PROJECT.locale,
+  fontPresets: SAMPLE_PROJECT.fontPresets,
+  themes: SAMPLE_PROJECT.themes,
+  screens: [
+    {
+      id: "calendar-main-296",
+      name: "Calendar Main 296",
+      displayProfileId: "tri296x128-red",
+      default: true,
+      widgetThemeId: "classic-outline",
+      baseWidgetIds: ["agenda-main", "datetime-main", "status-main"],
+      overlayIds: ["garage-warning-overlay"],
+      rules: [
+        {
+          id: "overlay-garage-warning",
+          scope: "overlay_activation",
+          priority: 100,
+          condition: {
+            kind: "entity_duration_ge",
+            entityId: "cover.garage_door",
+            state: "open",
+            minutes: 15
+          },
+          action: { type: "activate_overlay", overlayId: "garage-warning-overlay" }
+        }
+      ]
+    },
+    {
+      id: "calendar-empty-296",
+      name: "Calendar Empty 296",
+      displayProfileId: "tri296x128-red",
+      default: false,
+      widgetThemeId: "accent-header",
+      baseWidgetIds: ["empty-banner", "datetime-main"],
+      overlayIds: [],
+      rules: [
+        {
+          id: "show-empty-calendar",
+          scope: "screen_activation",
+          priority: 50,
+          condition: { kind: "query_empty", queryId: "agenda-today" },
+          action: { type: "activate_screen", screenId: "calendar-empty-296" }
+        }
+      ]
+    },
+    {
+      id: "overview-400",
+      name: "Overview 400",
+      displayProfileId: "tri400x300-red",
+      default: true,
+      widgetThemeId: "classic-outline",
+      baseWidgetIds: ["agenda-large", "garage-state-large", "history-large"],
+      overlayIds: [],
+      rules: []
+    }
+  ],
+  overlays: [
+    {
+      id: "garage-warning-overlay",
+      name: "Garage Warning",
+      screenId: "calendar-main-296",
+      frame: { x: 4, y: 4, w: 28, h: 8 },
+      widgetIds: ["garage-warning-widget"],
+      priority: 100
+    }
+  ],
+  widgets: [
+    {
+      id: "agenda-main",
+      type: "agenda_list",
+      screenId: "calendar-main-296",
+      frame: { x: 0, y: 0, w: 25, h: 12 },
+      bindings: { query: "agenda-today" },
+      props: { title: "TODAY", maxItems: 4, emptyText: "NO EVENTS" }
+    },
+    {
+      id: "datetime-main",
+      type: "date_time_compact",
+      screenId: "calendar-main-296",
+      frame: { x: 25, y: 0, w: 12, h: 6 },
+      bindings: {},
+      props: {}
+    },
+    {
+      id: "status-main",
+      type: "status_strip",
+      screenId: "calendar-main-296",
+      frame: { x: 0, y: 14, w: 37, h: 2 },
+      bindings: {},
+      props: {
+        items: [
+          { label: "GARAGE", color: "accent" },
+          { label: "TEMP 21C" },
+          { label: "RH 49%" }
+        ]
+      }
+    },
+    {
+      id: "empty-banner",
+      type: "alert_banner",
+      screenId: "calendar-empty-296",
+      frame: { x: 3, y: 4, w: 30, h: 7 },
+      bindings: {},
+      props: { headline: "NO EVENTS", detail: "SHOW PRICE OR CLOCK HERE" }
+    },
+    {
+      id: "garage-warning-widget",
+      type: "alert_banner",
+      overlayId: "garage-warning-overlay",
+      frame: { x: 1, y: 1, w: 26, h: 6 },
+      bindings: {},
+      props: { headline: "GARAGE OPEN", detail: "OPEN FOR 15+ MIN" }
+    },
+    {
+      id: "agenda-large",
+      type: "agenda_list",
+      screenId: "overview-400",
+      frame: { x: 0, y: 0, w: 20, h: 14 },
+      bindings: { query: "agenda-today" },
+      props: { title: "AGENDA", maxItems: 6, emptyText: "FREE DAY" }
+    },
+    {
+      id: "garage-state-large",
+      type: "state_tile",
+      screenId: "overview-400",
+      frame: { x: 21, y: 0, w: 18, h: 12 },
+      bindings: { entity: "cover.garage_door" },
+      props: { label: "GARAGE", icon: "fa-solid:warehouse", showDuration: true }
+    },
+    {
+      id: "history-large",
+      type: "history_bars",
+      screenId: "overview-400",
+      frame: { x: 0, y: 16, w: 39, h: 10 },
+      bindings: { query: "garage-temp-history" },
+      props: { title: "GARAGE TREND" }
+    }
+  ],
+  queries: [
+    {
+      id: "agenda-today",
+      kind: "calendar_range",
+      params: { entityId: "calendar.family", range: "today" },
+      refreshPolicy: { mode: "poll", intervalSeconds: 120 }
+    },
+    {
+      id: "garage-temp-history",
+      kind: "history_range",
+      params: { entityId: "sensor.garage_temperature", hours: 12 },
+      refreshPolicy: { mode: "poll", intervalSeconds: 300 }
+    }
+  ],
+  scenarios: [
+    {
+      id: "garage-warning-demo",
+      name: "Garage Warning",
+      frozenNow: "2026-04-17T14:32:00.000Z",
+      entityOverrides: {
+        "cover.garage_door": {
+          entityId: "cover.garage_door",
+          state: "open",
+          attributes: {},
+          lastChanged: "2026-04-17T14:10:00.000Z"
+        }
+      }
+    },
+    {
+      id: "empty-calendar-demo",
+      name: "Empty Calendar",
+      frozenNow: "2026-04-17T08:00:00.000Z",
+      queryOverrides: {
+        "agenda-today": {
+          kind: "calendar_range",
+          items: []
+        }
+      }
+    }
+  ]
+};
+
+const LEGACY_DATA: RenderData = {
+  ...SAMPLE_DATA,
+  queries: {
+    "agenda-today": {
+      kind: "calendar_range",
+      items: [
+        { start: "2026-04-17T15:00:00.000Z", summary: "Dentist" },
+        { start: "2026-04-17T17:15:00.000Z", summary: "Hockey Training" },
+        { start: "2026-04-17T20:00:00.000Z", summary: "Take Bins Out" }
+      ]
+    },
+    "garage-temp-history": {
+      kind: "history_range",
+      points: [
+        { timestamp: "2026-04-17T02:00:00.000Z", value: 13.5 },
+        { timestamp: "2026-04-17T04:00:00.000Z", value: 13.7 },
+        { timestamp: "2026-04-17T06:00:00.000Z", value: 14.0 },
+        { timestamp: "2026-04-17T08:00:00.000Z", value: 14.2 },
+        { timestamp: "2026-04-17T10:00:00.000Z", value: 14.1 },
+        { timestamp: "2026-04-17T12:00:00.000Z", value: 14.4 },
+        { timestamp: "2026-04-17T14:00:00.000Z", value: 14.6 }
+      ]
+    }
+  }
+};
 
 describe("render-core", () => {
   it("renders a stable golden hash for 296 default screen", () => {
-    const rendered = renderProject(SAMPLE_PROJECT, "tri296x128-red", SAMPLE_DATA);
+    const rendered = renderProject(LEGACY_PROJECT, "tri296x128-red", LEGACY_DATA);
     expect(rendered.width).toBe(296);
     expect(rendered.height).toBe(128);
     expect(rendered.hash).toBe("fc1b91f6c2697288cfee46d66e6be2510a521d61f7d9540ec31d15d245e32e3b");
   });
 
   it("renders a stable golden hash for 400 default screen", () => {
-    const rendered = renderProject(SAMPLE_PROJECT, "tri400x300-red", SAMPLE_DATA);
+    const rendered = renderProject(LEGACY_PROJECT, "tri400x300-red", LEGACY_DATA);
     expect(rendered.width).toBe(400);
     expect(rendered.height).toBe(300);
-    expect(rendered.hash).toBe("1d0ef6f00f42772994cae68c664cd1a06d9950f3273fd99071e3457ec74867ed");
+    expect(rendered.hash).toBe("e553967166face29c4507072935c81784b65e7da22cabcfb8aef1556242e73ee");
   });
 
   it("keeps palette-indexed pixels identical across accent profiles", () => {
-    const red = renderProject(SAMPLE_PROJECT, "tri296x128-red", SAMPLE_DATA);
+    const red = renderProject(LEGACY_PROJECT, "tri296x128-red", LEGACY_DATA);
     const yellow = renderProject(
       {
-        ...SAMPLE_PROJECT,
-        screens: SAMPLE_PROJECT.screens.map((screen) => ({
+        ...LEGACY_PROJECT,
+        screens: LEGACY_PROJECT.screens.map((screen) => ({
           ...screen,
           displayProfileId: screen.displayProfileId.replace("-red", "-yellow")
         }))
       },
       "tri296x128-yellow",
-      SAMPLE_DATA
+      LEGACY_DATA
     );
     expect(Array.from(red.pixels)).toEqual(Array.from(yellow.pixels));
     expect(red.rgba).not.toEqual(yellow.rgba);
   });
 
   it("chooses the empty calendar fallback screen", () => {
-    const resolved = resolveProjectState(SAMPLE_PROJECT, "tri296x128-red", SAMPLE_DATA, "empty-calendar-demo");
+    const resolved = resolveProjectState(LEGACY_PROJECT, "tri296x128-red", LEGACY_DATA, "empty-calendar-demo");
     expect(resolved.activeScreen.id).toBe("calendar-empty-296");
   });
 
   it("activates the garage overlay after 15 minutes", () => {
-    const resolved = resolveProjectState(SAMPLE_PROJECT, "tri296x128-red", SAMPLE_DATA, "garage-warning-demo");
+    const resolved = resolveProjectState(LEGACY_PROJECT, "tri296x128-red", LEGACY_DATA, "garage-warning-demo");
     expect(resolved.activeOverlay?.id).toBe("garage-warning-overlay");
   });
 
   it("uses the highest-priority matching rule", () => {
     const project = {
-      ...SAMPLE_PROJECT,
-      screens: SAMPLE_PROJECT.screens.map((screen) =>
+      ...LEGACY_PROJECT,
+      screens: LEGACY_PROJECT.screens.map((screen) =>
         screen.id === "calendar-empty-296"
           ? {
               ...screen,
@@ -73,7 +284,7 @@ describe("render-core", () => {
           : screen
       )
     };
-    const resolved = resolveProjectState(project, "tri296x128-red", SAMPLE_DATA, "empty-calendar-demo");
+    const resolved = resolveProjectState(project, "tri296x128-red", LEGACY_DATA, "empty-calendar-demo");
     expect(resolved.activeScreen.id).toBe("calendar-empty-296");
   });
 
@@ -83,7 +294,7 @@ describe("render-core", () => {
 
   it("merges adjacent widget borders into a single divider", () => {
     const project = normalizeProject({
-      ...SAMPLE_PROJECT,
+      ...LEGACY_PROJECT,
       screens: [
         {
           id: "merge-screen",
@@ -117,7 +328,7 @@ describe("render-core", () => {
       ],
       scenarios: []
     });
-    const rendered = renderProject(project, "tri296x128-red", SAMPLE_DATA);
+    const rendered = renderProject(project, "tri296x128-red", LEGACY_DATA);
     const dividerX = 5 * DISPLAY_PROFILES[0].gridUnitPx - 1;
     const adjacentX = dividerX + 1;
     let dividerInterior = 0;
@@ -132,7 +343,7 @@ describe("render-core", () => {
 
   it("applies screen default theme and widget override", () => {
     const project = normalizeProject({
-      ...SAMPLE_PROJECT,
+      ...LEGACY_PROJECT,
       screens: [
         {
           id: "theme-screen",
@@ -166,7 +377,7 @@ describe("render-core", () => {
       ],
       scenarios: []
     });
-    const rendered = renderProject(project, "tri296x128-red", SAMPLE_DATA);
+    const rendered = renderProject(project, "tri296x128-red", LEGACY_DATA);
     const grid = DISPLAY_PROFILES[0].gridUnitPx;
     const inheritedBorderPixel = rendered.pixels[0 * rendered.width + 0];
     const overrideInteriorPixel = rendered.pixels[(2 * grid) * rendered.width + (6 * grid + 2)];
@@ -176,9 +387,9 @@ describe("render-core", () => {
 
   it("normalizes legacy projects with default themes", () => {
     const legacy = {
-      ...SAMPLE_PROJECT,
-      themes: [] as typeof SAMPLE_PROJECT.themes,
-      screens: SAMPLE_PROJECT.screens.map((screen) => {
+      ...LEGACY_PROJECT,
+      themes: [] as typeof LEGACY_PROJECT.themes,
+      screens: LEGACY_PROJECT.screens.map((screen) => {
         const { widgetThemeId: _widgetThemeId, ...rest } = screen as typeof screen & { widgetThemeId?: string };
         return rest;
       })
@@ -190,19 +401,19 @@ describe("render-core", () => {
 
   it("applies project font presets during rendering", () => {
     const compact = normalizeProject({
-      ...SAMPLE_PROJECT,
+      ...LEGACY_PROJECT,
       fontPresets: {
         tiny: 6,
         normal: 10,
         header: 14
       }
     });
-    const rendered = renderProject(compact, "tri296x128-red", SAMPLE_DATA);
+    const rendered = renderProject(compact, "tri296x128-red", LEGACY_DATA);
     expect(rendered.hash).not.toBe("fff63df1e7cce9c0ed78dc556a1f81bba76eb2401eef85dcc94cb892e905bb63");
   });
 
   it("renders font specimen sheets for available family variants", () => {
-    const families = renderFontSpecimenSheets(DISPLAY_PROFILES[0], SAMPLE_PROJECT, "Ag 09:45", 4, 6);
+    const families = renderFontSpecimenSheets(DISPLAY_PROFILES[0], LEGACY_PROJECT, "Ag 09:45", 4, 6);
     expect(families.length).toBeGreaterThanOrEqual(1);
     expect(families[0]?.variants[0]?.tiles.map((tile) => tile.size)).toEqual([4, 5, 6]);
     expect(families.every((family) => family.variants.every((variant) => variant.tiles.every((tile) => tile.height > 0)))).toBe(true);
@@ -210,7 +421,7 @@ describe("render-core", () => {
   });
 
   it("renders text outline in theme preview when enabled", () => {
-    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const normalized = normalizeProject(LEGACY_PROJECT);
     const displayType = normalized.displayTypes![0]!;
     const baseTheme = normalized.themes!.find((entry) => entry.id === "classic-outline")!;
     const noOutline = renderThemePreviewImage(baseTheme, displayType, normalized.fontPresets);
@@ -232,7 +443,7 @@ describe("render-core", () => {
   });
 
   it("does not render a solid outline block when text fill uses background color", () => {
-    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const normalized = normalizeProject(LEGACY_PROJECT);
     const displayType = normalized.displayTypes![0]!;
     const baseTheme = normalized.themes!.find((entry) => entry.id === "soft-fill")!;
     const withOutline = renderThemePreviewImage(
@@ -260,7 +471,7 @@ describe("render-core", () => {
   });
 
   it("keeps header glyph shapes stable when themes differ only by color", () => {
-    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const normalized = normalizeProject(LEGACY_PROJECT);
     const displayType = normalized.displayTypes![0]!;
     const fontPresets = normalized.fontPresets;
     const baseTheme = {
@@ -315,7 +526,7 @@ describe("render-core", () => {
 
   it("switches numeric-state theme on threshold and unavailable value", () => {
     const project = normalizeProject({
-      ...SAMPLE_PROJECT,
+      ...LEGACY_PROJECT,
       screens: [
         {
           id: "numeric-screen",
@@ -346,7 +557,7 @@ describe("render-core", () => {
       ],
       scenarios: []
     });
-    const hot = renderProject(project, "tri296x128-red", SAMPLE_DATA);
+    const hot = renderProject(project, "tri296x128-red", LEGACY_DATA);
     const grid = DISPLAY_PROFILES[0].gridUnitPx;
     const hotInterior = [];
     for (let y = 1 * grid; y < 5 * grid; y += 1) {
@@ -360,7 +571,7 @@ describe("render-core", () => {
       project,
       "tri296x128-red",
       {
-        ...SAMPLE_DATA,
+        ...LEGACY_DATA,
         entities: {}
       }
     );
@@ -375,7 +586,7 @@ describe("render-core", () => {
 
   it("clips fixed-size numeric-state text to widget bounds", () => {
     const project = normalizeProject({
-      ...SAMPLE_PROJECT,
+      ...LEGACY_PROJECT,
       screens: [
         {
           id: "clip-screen",
@@ -407,7 +618,7 @@ describe("render-core", () => {
       ],
       scenarios: []
     });
-    const rendered = renderProject(project, "tri296x128-red", SAMPLE_DATA);
+    const rendered = renderProject(project, "tri296x128-red", LEGACY_DATA);
     const frameX = 2 * DISPLAY_PROFILES[0].gridUnitPx;
     const frameY = 2 * DISPLAY_PROFILES[0].gridUnitPx;
     const frameW = 4 * DISPLAY_PROFILES[0].gridUnitPx;
@@ -424,7 +635,7 @@ describe("render-core", () => {
 
   it("renders primitive widgets", () => {
     const project = normalizeProject({
-      ...SAMPLE_PROJECT,
+      ...LEGACY_PROJECT,
       screens: [
         {
           id: "primitive-screen",
@@ -474,7 +685,7 @@ describe("render-core", () => {
       ],
       scenarios: []
     });
-    const rendered = renderProject(project, "tri296x128-red", SAMPLE_DATA);
+    const rendered = renderProject(project, "tri296x128-red", LEGACY_DATA);
     const width = rendered.width;
     const grid = DISPLAY_PROFILES[0].gridUnitPx;
     expect(rendered.pixels[0 * width + 9 * grid]).toBe(1);

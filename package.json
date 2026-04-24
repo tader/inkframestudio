@@ -7,15 +7,19 @@
     "build": "node scripts/build.mjs",
     "build:editor": "node scripts/build.mjs editor",
     "build:backend": "node scripts/build.mjs backend",
-    "dev:backend": "tsx packages/addon-backend/src/server.ts",
+    "build:rust-api": "cargo build --manifest-path rust/backend-api/Cargo.toml --release",
+    "dev:backend": "PORT=${PORT:-8099} cargo run --manifest-path rust/backend-api/Cargo.toml",
+    "generate:font-awesome": "node scripts/generate-font-awesome.mjs",
     "import:pixel-fonts": "node scripts/import-pixel-fonts.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@fortawesome/fontawesome-free": "^7.2.0",
     "express": "^4.21.2",
     "fontkit": "^2.0.4",
     "lit": "^3.2.1",
+    "monaco-editor": "^0.55.1",
     "pngjs": "^7.0.0"
   },
   "devDependencies": {

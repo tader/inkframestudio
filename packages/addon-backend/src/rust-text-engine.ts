@@ -19,6 +19,19 @@ interface RustLayoutRequest {
   oversampleFactor: number;
 }
 
+function embeddedFontContainer(base64: string | undefined): "ttf-ish" | "woff" | "woff2" | "unknown" {
+  if (!base64) {
+    return "unknown";
+  }
+  if (base64.startsWith("d09GRg")) {
+    return "woff";
+  }
+  if (base64.startsWith("d09GMg")) {
+    return "woff2";
+  }
+  return "ttf-ish";
+}
+
 function rustBinaryCandidates(): string[] {
   const suffix = process.platform === "win32" ? ".exe" : "";
   return [
@@ -75,6 +88,12 @@ export function installRustTextLayoutAdapter(): void {
     return;
   }
   setTextLayoutAdapter(({ text, style, fontPresets, fontFamilyData }): TextLayoutRun | undefined => {
+    const container = embeddedFontContainer(
+      fontFamilyData.regular ?? fontFamilyData.bold ?? fontFamilyData.italic ?? fontFamilyData.boldItalic
+    );
+    if (container === "woff" || container === "woff2") {
+      return undefined;
+    }
     const request: RustLayoutRequest = {
       op: "layout",
       text,

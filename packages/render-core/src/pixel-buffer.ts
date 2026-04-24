@@ -1,6 +1,6 @@
 import { DEFAULT_FONT_PRESETS } from "./font-presets.js";
 import { layoutText, resolveTextStyle } from "./bitmap-font.js";
-import { ICONS } from "./icons.js";
+import { resolveIconDefinition } from "./icons.js";
 import type { FontPresetValues, TextStyle } from "./types.js";
 
 export const COLOR_BG = 0;
@@ -17,6 +17,8 @@ export interface PixelClipRect {
 export type PixelPaint =
   | { kind: "solid"; color: number }
   | { kind: "checker"; primary: number; secondary: number };
+
+const iconPixelSizeCache = new Map<string, number>();
 
 function clipContains(clip: PixelClipRect | undefined, x: number, y: number): boolean {
   if (!clip) {
@@ -156,21 +158,59 @@ export class PixelBuffer {
     color: number,
     clip?: PixelClipRect
   ): void {
-    const icon = ICONS[name];
+    const icon = resolveIconDefinition(name);
     if (!icon) {
       return;
     }
-    for (let py = 0; py < icon.length; py += 1) {
-      for (let px = 0; px < icon[py].length; px += 1) {
-        if (icon[py][px] !== "1") {
-          continue;
-        }
-        for (let sy = 0; sy < scale; sy += 1) {
-          for (let sx = 0; sx < scale; sx += 1) {
-            this.setPixel(x + px * scale + sx, y + py * scale + sy, color, clip);
-          }
-        }
+    const boxSize = Math.max(1, scale * 10);
+    const pixelSize = this.pickIconPixelSize(icon.id, icon.char, icon.fontFamily, boxSize, boxSize);
+    const style = {
+      family: icon.fontFamily,
+      weight: "regular",
+      slope: "roman",
+      size: "normal",
+      pixelSize,
+      bypassAllowedPixelSizes: true
+    } satisfies Partial<TextStyle>;
+    const run = layoutText(icon.char, resolveTextStyle(style), this.fontPresets);
+    const drawX = x + Math.floor((boxSize - run.width) / 2);
+    const drawY = y + Math.floor((boxSize - run.height) / 2);
+    this.drawText(icon.char, drawX, drawY, style, color, clip);
+  }
+
+  private pickIconPixelSize(
+    iconId: string,
+    char: string,
+    family: string,
+    boxWidth: number,
+    boxHeight: number
+  ): number {
+    const cacheKey = `${iconId}:${boxWidth}x${boxHeight}`;
+    const cached = iconPixelSizeCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    let low = 1;
+    let high = Math.max(boxWidth, boxHeight) * 3;
+    let best = 1;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const metrics = this.measureText(char, {
+        family,
+        weight: "regular",
+        slope: "roman",
+        size: "normal",
+        pixelSize: mid,
+        bypassAllowedPixelSizes: true
+      });
+      if (metrics.width <= boxWidth && metrics.height <= boxHeight) {
+        best = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
       }
     }
+    iconPixelSizeCache.set(cacheKey, best);
+    return best;
   }
 }

@@ -10,6 +10,7 @@ export * from "./quantize.js";
 export * from "./renderer.js";
 export * from "./resolve.js";
 export * from "./sample-project.js";
+export * from "./scripting.js";
 export * from "./themes.js";
 export * from "./theme-preview.js";
 export * from "./types.js";

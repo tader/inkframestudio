@@ -13,7 +13,29 @@ export type ScopeContext = Record<string, ScopeValue>;
 
 export interface ScopeTemplateOptions {
   locale?: string;
+  scope?: ScopeContext;
+  globals?: ScopeContext;
+  helpers?: Record<string, unknown>;
+  warn?: (message: string) => void;
+  filters?: Record<string, TemplateFilterHandler>;
 }
+
+export type TemplateFilterArgument = string | number | boolean;
+
+export interface TemplateFilterContext {
+  locale: string;
+  scope: ScopeContext;
+  globals?: ScopeContext;
+  shared?: ScopeContext;
+  helpers?: Record<string, unknown>;
+  warn?: (message: string) => void;
+}
+
+export type TemplateFilterHandler = (
+  value: ScopeValue,
+  args: TemplateFilterArgument[],
+  context: TemplateFilterContext
+) => ScopeValue;
 
 export interface ArrayExpressionOptions extends ScopeTemplateOptions {
   itemAlias?: string;
@@ -101,7 +123,7 @@ function splitTopLevel(input: string, separator: string): string[] {
   return parts;
 }
 
-function parseFilterArgument(argument: string): string | number | boolean {
+function parseFilterArgument(argument: string): TemplateFilterArgument {
   const trimmed = argument.trim();
   if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
     return trimmed.slice(1, -1).replace(/\\(["'])/g, "$1");
@@ -519,23 +541,11 @@ function applyStringCaseTransform(
   ));
 }
 
-function applyTemplateFilter(value: ScopeValue, filterExpression: string, options: ScopeTemplateOptions): ScopeValue {
-  const match = filterExpression.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)\s*(?:\((.*)\))?$/);
-  if (!match) {
-    return value;
-  }
-  const [, filterName, rawArgs = ""] = match;
-  const args = rawArgs.trim() ? splitTopLevel(rawArgs, ",").map(parseFilterArgument) : [];
-  if (filterName === "format") {
-    return formatScopeValue(value, String(args[0] ?? ""), options.locale ?? "en-US");
-  }
-  if (filterName === "keys") {
-    return value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : value;
-  }
-  if (filterName === "to_json") {
-    return JSON.stringify(value);
-  }
-  if (filterName === "count") {
+const BUILT_IN_FILTERS: Record<string, TemplateFilterHandler> = {
+  format: (value, args, context) => formatScopeValue(value, String(args[0] ?? ""), context.locale),
+  keys: (value) => value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : value,
+  to_json: (value) => JSON.stringify(value),
+  count: (value) => {
     if (value === undefined || value === null) {
       return 0;
     }
@@ -546,11 +556,36 @@ function applyTemplateFilter(value: ScopeValue, filterExpression: string, option
       return Object.keys(value).length;
     }
     return 1;
+  },
+  downcase: (value, _args, context) => applyStringCaseTransform(value, "downcase", context.locale),
+  upcase: (value, _args, context) => applyStringCaseTransform(value, "upcase", context.locale),
+  title: (value, _args, context) => applyStringCaseTransform(value, "title", context.locale)
+};
+
+function applyTemplateFilter(value: ScopeValue, filterExpression: string, options: ScopeTemplateOptions): ScopeValue {
+  const match = filterExpression.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)\s*(?:\((.*)\))?$/);
+  if (!match) {
+    return value;
   }
-  if (filterName === "downcase" || filterName === "upcase" || filterName === "title") {
-    return applyStringCaseTransform(value, filterName, options.locale ?? "en-US");
+  const [, filterName, rawArgs = ""] = match;
+  const args = rawArgs.trim() ? splitTopLevel(rawArgs, ",").map(parseFilterArgument) : [];
+  const handler = options.filters?.[filterName] ?? BUILT_IN_FILTERS[filterName];
+  if (!handler) {
+    return value;
   }
-  return value;
+  try {
+    return handler(value, args, {
+      locale: options.locale ?? "en-US",
+      scope: options.scope ?? {},
+      globals: options.globals,
+      shared: undefined,
+      helpers: options.helpers,
+      warn: options.warn
+    });
+  } catch (error) {
+    options.warn?.(`Filter "${filterName}" failed: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
 }
 
 function resolveTemplateExpression(scope: ScopeContext, expression: string, options: ScopeTemplateOptions): ScopeValue {
@@ -563,6 +598,17 @@ function resolveTemplateExpression(scope: ScopeContext, expression: string, opti
     current = applyTemplateFilter(current, segments[index] ?? "", options);
   }
   return current;
+}
+
+export function evaluateScopeValueExpression(
+  expression: string,
+  scope: ScopeContext,
+  options: ScopeTemplateOptions = {}
+): ScopeValue {
+  return resolveTemplateExpression(scope, expression, {
+    ...options,
+    scope
+  });
 }
 
 export function resolveScopePath(scope: ScopeContext, path: string | undefined): ScopeValue {
@@ -599,7 +645,7 @@ export function stringifyScopeValue(value: ScopeValue): string {
 
 export function applyScopeTemplate(template: string, scope: ScopeContext, options: ScopeTemplateOptions = {}): string {
   return template.replace(/\{\{\s*([^}]+?)\s*\}\}|\$\{\s*([^}]+?)\s*\}/g, (_match, left, right) => {
-    const resolved = resolveTemplateExpression(scope, String(left ?? right ?? "").trim(), options);
+    const resolved = resolveTemplateExpression(scope, String(left ?? right ?? "").trim(), { ...options, scope });
     return stringifyScopeValue(resolved);
   });
 }
@@ -871,7 +917,7 @@ export function walkLayoutNode(
     node.children.forEach((child) => walkLayoutNode(child.node, visitor));
     return;
   }
-  if (node.type === "data_query" || node.type === "foreach" || node.type === "filter" || node.type === "unique") {
+  if (node.type === "data_query" || node.type === "foreach" || node.type === "filter" || node.type === "unique" || node.type === "script") {
     walkLayoutNode(node.child, visitor);
     return;
   }

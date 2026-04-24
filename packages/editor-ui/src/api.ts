@@ -3,11 +3,11 @@ import type {
   DisplayProfile,
   EntityCatalogEntry,
   FontOption,
-  HomeAssistantConnectionSettings,
-  HomeAssistantConnectionStatus,
+  ProviderDomain,
   IconDefinition,
-  OpenEpaperLinkAccessPointSettings,
-  OpenEpaperLinkAccessPointStatus,
+  ProviderConnectionStatus,
+  ProviderDescriptor,
+  ProviderInstance,
   Project,
   RenderData,
   Scenario,
@@ -21,10 +21,16 @@ export interface PreviewResponse {
   activeScreenId: string;
   activeOverlayId?: string;
   dataSourceMessage?: string;
+  scriptWarnings?: string[];
   rgba: number[];
 }
 
 export type LayoutInspectionPreviewResponse = LayoutInspectionResult;
+
+export interface LayoutPreviewBundleResponse {
+  preview: PreviewResponse;
+  inspection?: LayoutInspectionPreviewResponse;
+}
 
 export interface FontSpecimenResponse {
   families: Array<{
@@ -71,13 +77,6 @@ export interface DaFontPageResponse {
   entries: DaFontEntry[];
 }
 
-export interface HomeAssistantSettingsResponse extends Omit<HomeAssistantConnectionSettings, "token"> {
-  token: string;
-  hasToken: boolean;
-}
-
-export interface OpenEpaperLinkAccessPointSettingsResponse extends OpenEpaperLinkAccessPointSettings {}
-
 export interface AssignmentScheduleStatusResponse {
   assignmentId: string;
   displayId: string;
@@ -104,6 +103,20 @@ export interface AssignmentForceUpdateResponse {
   message: string;
 }
 
+export interface HomeAssistantSettingsResponse {
+  host: string;
+  token: string;
+  hasToken: boolean;
+  mode: "custom" | "supervisor";
+  useSupervisorProxy: boolean;
+  allowInsecureTls?: boolean;
+}
+
+export interface OpenEpaperLinkAccessPointSettingsResponse {
+  url: string;
+  defaultTestDisplayMac?: string;
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -118,27 +131,29 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+const V2_API_BASE = "/api/v2";
+
 export function fetchProfiles(): Promise<DisplayProfile[]> {
-  return requestJson("/api/display-profiles");
+  return requestJson(`${V2_API_BASE}/display-profiles`);
 }
 
 export function fetchIcons(): Promise<IconDefinition[]> {
-  return requestJson("/api/icons");
+  return requestJson(`${V2_API_BASE}/icons`);
 }
 
 export function fetchFonts(): Promise<FontOption[]> {
-  return requestJson("/api/fonts");
+  return requestJson(`${V2_API_BASE}/fonts`);
 }
 
 export function importFont(filename: string, base64: string): Promise<{ id: string; label: string; variant: string }> {
-  return requestJson("/api/fonts/import", {
+  return requestJson(`${V2_API_BASE}/fonts/import`, {
     method: "POST",
     body: JSON.stringify({ filename, base64 })
   });
 }
 
 export async function deleteFont(id: string): Promise<void> {
-  await fetch(`/api/fonts/${id}`, {
+  await fetch(`${V2_API_BASE}/fonts/${id}`, {
     method: "DELETE"
   }).then((response) => {
     if (!response.ok) {
@@ -148,54 +163,220 @@ export async function deleteFont(id: string): Promise<void> {
 }
 
 export function rescanFonts(): Promise<FontOption[]> {
-  return requestJson("/api/fonts/rescan", {
+  return requestJson(`${V2_API_BASE}/fonts/rescan`, {
     method: "POST"
   });
 }
 
 export function updateFontMetadata(id: string, allowedPixelSizes: number[]): Promise<FontOption | null> {
-  return requestJson(`/api/fonts/${id}`, {
+  return requestJson(`${V2_API_BASE}/fonts/${id}`, {
     method: "PATCH",
     body: JSON.stringify({ allowedPixelSizes })
   });
 }
 
 export function fetchDaFontPage(page = 1): Promise<DaFontPageResponse> {
-  return requestJson(`/api/dafont?page=${page}`);
+  return requestJson(`${V2_API_BASE}/dafont?page=${page}`);
 }
 
 export function importDaFontFont(entry: DaFontEntry): Promise<FontOption | null> {
-  return requestJson("/api/dafont/import", {
+  return requestJson(`${V2_API_BASE}/dafont/import`, {
     method: "POST",
     body: JSON.stringify(entry)
   });
 }
 
-export function fetchHomeAssistantEntities(): Promise<EntityCatalogEntry[]> {
-  return requestJson("/api/home-assistant/entities");
+export async function fetchProviderKinds(): Promise<ProviderDescriptor[]> {
+  const payload = await requestJson<ProviderDescriptor[] | { providerKinds?: ProviderDescriptor[]; provider_kinds?: ProviderDescriptor[] }>(`${V2_API_BASE}/provider-kinds`);
+  return Array.isArray(payload) ? payload : payload.providerKinds ?? payload.provider_kinds ?? [];
+}
+
+export function fetchProviderInstances(): Promise<ProviderInstance[]> {
+  return requestJson(`${V2_API_BASE}/provider-instances`);
+}
+
+export function createProviderInstance(instance: Omit<ProviderInstance, "id"> & { id?: string }): Promise<ProviderInstance> {
+  return requestJson(`${V2_API_BASE}/provider-instances`, {
+    method: "POST",
+    body: JSON.stringify(instance)
+  });
+}
+
+export function saveProviderInstance(instance: ProviderInstance): Promise<ProviderInstance> {
+  return requestJson(`${V2_API_BASE}/provider-instances/${instance.id}`, {
+    method: "PUT",
+    body: JSON.stringify(instance)
+  });
+}
+
+export async function deleteProviderInstance(id: string): Promise<void> {
+  await fetch(`${V2_API_BASE}/provider-instances/${id}`, {
+    method: "DELETE"
+  }).then((response) => {
+    if (!response.ok) {
+      throw new Error(`Request failed with ${response.status}`);
+    }
+  });
+}
+
+export function testProviderInstance(id: string, instance?: Partial<ProviderInstance>): Promise<ProviderConnectionStatus> {
+  return requestJson(`${V2_API_BASE}/provider-instances/${id}/test`, {
+    method: "POST",
+    body: JSON.stringify(instance ?? {})
+  });
+}
+
+export function fetchProviderEntities(id: string): Promise<EntityCatalogEntry[]> {
+  return requestJson(`${V2_API_BASE}/provider-instances/${id}/entities`);
+}
+
+function providerById(instances: ProviderInstance[], providerId: string): ProviderInstance | undefined {
+  return instances.find((instance) => instance.providerId === providerId);
 }
 
 export function fetchProjects(): Promise<Array<Pick<Project, "id" | "name" | "version">>> {
-  return requestJson("/api/projects");
+  return requestJson(`${V2_API_BASE}/projects`);
 }
 
 export function fetchProject(id: string): Promise<Project> {
-  return requestJson(`/api/projects/${id}`);
+  return requestJson(`${V2_API_BASE}/projects/${id}`);
 }
 
-export function fetchDiscoveredDisplays(projectId: string): Promise<DiscoveredDisplayCandidate[]> {
-  return requestJson(`/api/projects/${projectId}/displays/discover`);
+export async function fetchDiscoveredDisplays(projectId: string, providerInstanceId?: string): Promise<DiscoveredDisplayCandidate[]> {
+  let effectiveProviderInstanceId = providerInstanceId;
+  if (!effectiveProviderInstanceId) {
+    const instances = await fetchProviderInstances();
+    effectiveProviderInstanceId = providerById(instances, "openepaperlink-ap")?.id;
+  }
+  if (!effectiveProviderInstanceId) {
+    return [];
+  }
+  return requestJson(`${V2_API_BASE}/projects/${projectId}/displays/discover?providerInstanceId=${encodeURIComponent(effectiveProviderInstanceId)}`);
+}
+
+export async function fetchHomeAssistantSettings(): Promise<HomeAssistantSettingsResponse> {
+  const instances = await fetchProviderInstances();
+  const instance = providerById(instances, "home-assistant");
+  return {
+    host: String(instance?.config.host ?? ""),
+    token: String(instance?.config.token ? "********" : ""),
+    hasToken: Boolean(instance?.config.token),
+    mode: (instance?.config.mode === "supervisor" ? "supervisor" : "custom"),
+    useSupervisorProxy: Boolean(instance?.config.useSupervisorProxy),
+    allowInsecureTls: Boolean(instance?.config.allowInsecureTls)
+  };
+}
+
+export async function saveHomeAssistantSettings(
+  settings: Partial<HomeAssistantSettingsResponse> & { replaceToken?: boolean }
+): Promise<HomeAssistantSettingsResponse> {
+  const instances = await fetchProviderInstances();
+  const current = providerById(instances, "home-assistant");
+  const next: ProviderInstance = {
+    id: current?.id ?? "home-assistant-default",
+    providerId: "home-assistant",
+    name: current?.name ?? "Home Assistant",
+    enabled: current?.enabled ?? true,
+    config: {
+      ...(current?.config ?? {}),
+      host: settings.host ?? current?.config.host ?? "",
+      mode: settings.mode ?? current?.config.mode ?? "custom",
+      useSupervisorProxy: settings.useSupervisorProxy ?? current?.config.useSupervisorProxy ?? false,
+      allowInsecureTls: settings.allowInsecureTls ?? current?.config.allowInsecureTls ?? false,
+      token: settings.replaceToken || !current?.config.token ? settings.token ?? "" : current?.config.token ?? ""
+    }
+  };
+  await saveProviderInstance(next);
+  return fetchHomeAssistantSettings();
+}
+
+export async function testHomeAssistantConnection(
+  settings: Partial<HomeAssistantSettingsResponse> & { replaceToken?: boolean }
+): Promise<ProviderConnectionStatus> {
+  const instances = await fetchProviderInstances();
+  const current = providerById(instances, "home-assistant");
+  const temp: ProviderInstance = {
+    id: current?.id ?? "home-assistant-default",
+    providerId: "home-assistant",
+    name: current?.name ?? "Home Assistant",
+    enabled: current?.enabled ?? true,
+    config: {
+      ...(current?.config ?? {}),
+      host: settings.host ?? current?.config.host ?? "",
+      mode: settings.mode ?? current?.config.mode ?? "custom",
+      useSupervisorProxy: settings.useSupervisorProxy ?? current?.config.useSupervisorProxy ?? false,
+      allowInsecureTls: settings.allowInsecureTls ?? current?.config.allowInsecureTls ?? false,
+      token: settings.replaceToken || !current?.config.token ? settings.token ?? "" : current?.config.token ?? ""
+    }
+  };
+  await saveProviderInstance(temp);
+  return testProviderInstance(temp.id);
+}
+
+export async function fetchOpenEpaperLinkAccessPointSettings(): Promise<OpenEpaperLinkAccessPointSettingsResponse> {
+  const instances = await fetchProviderInstances();
+  const instance = providerById(instances, "openepaperlink-ap");
+  return {
+    url: String(instance?.config.url ?? ""),
+    defaultTestDisplayMac: String(instance?.config.defaultTestDisplayMac ?? "")
+  };
+}
+
+export async function saveOpenEpaperLinkAccessPointSettings(
+  settings: Partial<OpenEpaperLinkAccessPointSettingsResponse>
+): Promise<OpenEpaperLinkAccessPointSettingsResponse> {
+  const instances = await fetchProviderInstances();
+  const current = providerById(instances, "openepaperlink-ap");
+  const next: ProviderInstance = {
+    id: current?.id ?? "openepaperlink-ap-default",
+    providerId: "openepaperlink-ap",
+    name: current?.name ?? "OpenEPaperLink Access Point",
+    enabled: current?.enabled ?? true,
+    config: {
+      ...(current?.config ?? {}),
+      url: settings.url ?? current?.config.url ?? "",
+      defaultTestDisplayMac: settings.defaultTestDisplayMac ?? current?.config.defaultTestDisplayMac ?? ""
+    }
+  };
+  await saveProviderInstance(next);
+  return fetchOpenEpaperLinkAccessPointSettings();
+}
+
+export async function testOpenEpaperLinkAccessPointConnection(
+  settings: Partial<OpenEpaperLinkAccessPointSettingsResponse>
+): Promise<ProviderConnectionStatus> {
+  const instances = await fetchProviderInstances();
+  const current = providerById(instances, "openepaperlink-ap");
+  const temp: ProviderInstance = {
+    id: current?.id ?? "openepaperlink-ap-default",
+    providerId: "openepaperlink-ap",
+    name: current?.name ?? "OpenEPaperLink Access Point",
+    enabled: current?.enabled ?? true,
+    config: {
+      ...(current?.config ?? {}),
+      url: settings.url ?? current?.config.url ?? "",
+      defaultTestDisplayMac: settings.defaultTestDisplayMac ?? current?.config.defaultTestDisplayMac ?? ""
+    }
+  };
+  await saveProviderInstance(temp);
+  return testProviderInstance(temp.id);
+}
+
+export async function fetchHomeAssistantEntities(): Promise<EntityCatalogEntry[]> {
+  const instances = await fetchProviderInstances();
+  const instance = providerById(instances, "home-assistant");
+  return instance ? fetchProviderEntities(instance.id) : [];
 }
 
 export function saveProject(project: Project): Promise<Project> {
-  return requestJson(`/api/projects/${project.id}`, {
+  return requestJson(`${V2_API_BASE}/projects/${project.id}`, {
     method: "PUT",
     body: JSON.stringify(project)
   });
 }
 
 export function fetchAssignmentSchedules(projectId: string): Promise<AssignmentScheduleStatusResponse[]> {
-  return requestJson(`/api/projects/${projectId}/assignment-schedules`);
+  return requestJson(`${V2_API_BASE}/projects/${projectId}/assignment-schedules`);
 }
 
 export function forceAssignmentUpdate(
@@ -203,58 +384,14 @@ export function forceAssignmentUpdate(
   assignmentId: string,
   project?: Project
 ): Promise<AssignmentForceUpdateResponse> {
-  return requestJson(`/api/projects/${projectId}/assignments/${assignmentId}/force-update`, {
+  return requestJson(`${V2_API_BASE}/projects/${projectId}/assignments/${assignmentId}/force-update`, {
     method: "POST",
     body: JSON.stringify(project ? { project } : {})
   });
 }
 
-export function fetchHomeAssistantSettings(): Promise<HomeAssistantSettingsResponse> {
-  return requestJson("/api/settings/home-assistant");
-}
-
-export function fetchOpenEpaperLinkAccessPointSettings(): Promise<OpenEpaperLinkAccessPointSettingsResponse> {
-  return requestJson("/api/settings/openepaperlink-access-point");
-}
-
-export function saveHomeAssistantSettings(
-  settings: Partial<HomeAssistantConnectionSettings> & { replaceToken?: boolean }
-): Promise<HomeAssistantSettingsResponse> {
-  return requestJson("/api/settings/home-assistant", {
-    method: "PUT",
-    body: JSON.stringify(settings)
-  });
-}
-
-export function testHomeAssistantConnection(
-  settings: Partial<HomeAssistantConnectionSettings> & { replaceToken?: boolean }
-): Promise<HomeAssistantConnectionStatus> {
-  return requestJson("/api/settings/home-assistant/test", {
-    method: "POST",
-    body: JSON.stringify(settings)
-  });
-}
-
-export function saveOpenEpaperLinkAccessPointSettings(
-  settings: Partial<OpenEpaperLinkAccessPointSettings>
-): Promise<OpenEpaperLinkAccessPointSettingsResponse> {
-  return requestJson("/api/settings/openepaperlink-access-point", {
-    method: "PUT",
-    body: JSON.stringify(settings)
-  });
-}
-
-export function testOpenEpaperLinkAccessPointConnection(
-  settings: Partial<OpenEpaperLinkAccessPointSettings>
-): Promise<OpenEpaperLinkAccessPointStatus> {
-  return requestJson("/api/settings/openepaperlink-access-point/test", {
-    method: "POST",
-    body: JSON.stringify(settings)
-  });
-}
-
 export function fetchLiveData(projectId: string): Promise<RenderData> {
-  return requestJson(`/api/projects/${projectId}/live-data`);
+  return requestJson(`${V2_API_BASE}/projects/${projectId}/live-data`);
 }
 
 export function fetchPreview(
@@ -264,7 +401,7 @@ export function fetchPreview(
   scenario?: Scenario,
   project?: Project
 ): Promise<PreviewResponse> {
-  return requestJson(`/api/projects/${projectId}/preview`, {
+  return requestJson(`${V2_API_BASE}/projects/${projectId}/preview`, {
     method: "POST",
     body: JSON.stringify({ displayProfileId, scenarioId, scenario, project })
   });
@@ -280,7 +417,7 @@ export function fetchFontSpecimens(
   familyId?: string,
   includeAllSizes = false
 ): Promise<FontSpecimenResponse> {
-  return requestJson(`/api/projects/${projectId}/font-specimens`, {
+  return requestJson(`${V2_API_BASE}/projects/${projectId}/font-specimens`, {
     method: "POST",
     body: JSON.stringify({ displayProfileId, sampleText, project, minSize, maxSize, familyId, includeAllSizes })
   });
@@ -292,9 +429,22 @@ export function fetchLayoutPreview(
   popupLayoutId: string | undefined,
   project: Project
 ): Promise<PreviewResponse> {
-  return requestJson(`/api/projects/${projectId}/layout-preview`, {
+  return requestJson(`${V2_API_BASE}/projects/${projectId}/layout-preview`, {
     method: "POST",
     body: JSON.stringify({ layoutId, popupLayoutId, project })
+  });
+}
+
+export function fetchLayoutPreviewBundle(
+  projectId: string,
+  layoutId: string,
+  popupLayoutId: string | undefined,
+  project: Project,
+  expandCompoundRefs = false
+): Promise<LayoutPreviewBundleResponse> {
+  return requestJson(`${V2_API_BASE}/projects/${projectId}/layout-preview`, {
+    method: "POST",
+    body: JSON.stringify({ layoutId, popupLayoutId, project, includeInspection: true, expandCompoundRefs })
   });
 }
 
@@ -305,7 +455,7 @@ export function fetchLayoutInspectionPreview(
   project: Project,
   expandCompoundRefs = false
 ): Promise<LayoutInspectionPreviewResponse> {
-  return requestJson(`/api/projects/${projectId}/layout-inspection-preview`, {
+  return requestJson(`${V2_API_BASE}/projects/${projectId}/layout-inspection-preview`, {
     method: "POST",
     body: JSON.stringify({ layoutId, popupLayoutId, project, expandCompoundRefs })
   });
@@ -316,7 +466,7 @@ export function fetchDevicePreview(
   displayId: string,
   project: Project
 ): Promise<PreviewResponse> {
-  return requestJson(`/api/projects/${projectId}/device-preview`, {
+  return requestJson(`${V2_API_BASE}/projects/${projectId}/device-preview`, {
     method: "POST",
     body: JSON.stringify({ displayId, project })
   });
@@ -328,14 +478,14 @@ export function fetchThemePreview(
   displayTypeId: string,
   project: Project
 ): Promise<PreviewResponse> {
-  return requestJson(`/api/projects/${projectId}/theme-preview`, {
+  return requestJson(`${V2_API_BASE}/projects/${projectId}/theme-preview`, {
     method: "POST",
     body: JSON.stringify({ themeId, displayTypeId, project })
   });
 }
 
 export function publishProject(projectId: string, displayProfileId: string, scenarioId?: string): Promise<{ published: boolean; hash: string }> {
-  return requestJson(`/api/projects/${projectId}/publish`, {
+  return requestJson(`${V2_API_BASE}/projects/${projectId}/publish`, {
     method: "POST",
     body: JSON.stringify({ displayProfileId, scenarioId })
   });
@@ -347,21 +497,37 @@ export function uploadDeviceImage(
   project: Project,
   dither = 0
 ): Promise<{ uploaded: boolean; hash: string; width: number; height: number; dataSourceMessage?: string }> {
-  return requestJson(`/api/projects/${projectId}/devices/${displayId}/upload`, {
+  return requestJson(`${V2_API_BASE}/projects/${projectId}/devices/${displayId}/upload`, {
     method: "POST",
     body: JSON.stringify({ project, dither })
   });
 }
 
-export function uploadPreviewToOpenEpaperLinkAccessPoint(
+export function uploadPreviewToDisplayProvider(
+  providerInstanceId: string,
   mac: string,
   width: number,
   height: number,
   rgba: number[] | Uint8ClampedArray,
   dither = 0
 ): Promise<{ uploaded: boolean; mac: string; width: number; height: number }> {
-  return requestJson("/api/openepaperlink-access-point/upload-preview", {
+  return requestJson(`${V2_API_BASE}/provider-instances/${providerInstanceId}/upload-preview`, {
     method: "POST",
     body: JSON.stringify({ mac, width, height, rgba: Array.from(rgba), dither })
   });
+}
+
+export async function uploadPreviewToOpenEpaperLinkAccessPoint(
+  mac: string,
+  width: number,
+  height: number,
+  rgba: number[] | Uint8ClampedArray,
+  dither = 0
+): Promise<{ uploaded: boolean; mac: string; width: number; height: number }> {
+  const instances = await fetchProviderInstances();
+  const instance = providerById(instances, "openepaperlink-ap");
+  if (!instance) {
+    throw new Error("No OpenEPaperLink provider configured");
+  }
+  return uploadPreviewToDisplayProvider(instance.id, mac, width, height, rgba, dither);
 }

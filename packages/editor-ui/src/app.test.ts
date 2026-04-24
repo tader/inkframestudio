@@ -36,19 +36,94 @@ describe("epaper editor app", () => {
 
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith("/api/icons")) {
-        return new Response(JSON.stringify([{ id: "warning", label: "Warning" }]), { status: 200 });
+      if (url.endsWith("/api/v2/display-profiles")) {
+        return new Response(JSON.stringify([{
+          id: "tri296x128-red",
+          width: 296,
+          height: 128,
+          rotation: 0,
+          contentPadding: { top: 4, right: 4, bottom: 4, left: 4 },
+          gridUnitPx: 8,
+          recommendedFontScale: 2,
+          palette: { bg: "#ffffff", fg: "#111111", accent: "#d7261b" }
+        }]), { status: 200 });
       }
-      if (url.endsWith("/api/fonts")) {
+      if (url.endsWith("/api/v2/icons")) {
+        return new Response(JSON.stringify([{ id: "fa-solid:triangle-exclamation", label: "Triangle Exclamation", pack: "solid", keywords: ["warning"] }]), { status: 200 });
+      }
+      if (url.endsWith("/api/v2/provider-kinds")) {
+        return new Response(JSON.stringify({
+          providerKinds: [
+            {
+              id: "home-assistant",
+              label: "Home Assistant",
+              domain: "source",
+              capabilities: ["test_connection", "entity_catalog"],
+              configFields: [
+                { key: "mode", label: "Mode", kind: "select", options: [{ value: "custom", label: "Custom host" }, { value: "supervisor", label: "Use local HA" }], defaultValue: "custom" },
+                { key: "host", label: "Host", kind: "text", defaultValue: "" },
+                { key: "useSupervisorProxy", label: "Use Supervisor proxy", kind: "checkbox", defaultValue: false },
+                { key: "allowInsecureTls", label: "Allow insecure TLS", kind: "checkbox", defaultValue: false },
+                { key: "token", label: "Token", kind: "password", defaultValue: "" }
+              ]
+            },
+            {
+              id: "openepaperlink-ap",
+              label: "OpenEPaperLink Access Point",
+              domain: "display",
+              capabilities: ["test_connection", "discover_displays", "upload_preview"],
+              configFields: [
+                { key: "url", label: "URL", kind: "text", defaultValue: "" },
+                { key: "defaultTestDisplayMac", label: "Default test display", kind: "text", defaultValue: "" }
+              ]
+            },
+            {
+              id: "virtual",
+              label: "Virtual Display",
+              domain: "display",
+              capabilities: ["virtual"],
+              configFields: []
+            }
+          ]
+        }), { status: 200 });
+      }
+      if (url.endsWith("/api/v2/provider-instances")) {
+        return new Response(JSON.stringify([
+          {
+            id: "home-assistant-default",
+            providerId: "home-assistant",
+            name: "Home Assistant",
+            enabled: true,
+            config: {
+              host: "",
+              token: "",
+              mode: "custom",
+              useSupervisorProxy: false,
+              allowInsecureTls: false
+            }
+          },
+          {
+            id: "openepaperlink-ap-default",
+            providerId: "openepaperlink-ap",
+            name: "OpenEPaperLink Access Point",
+            enabled: true,
+            config: {
+              url: "http://192.168.1.170",
+              defaultTestDisplayMac: "00000219BC483B18"
+            }
+          }
+        ]), { status: 200 });
+      }
+      if (url.endsWith("/api/v2/fonts")) {
         return new Response(JSON.stringify([{ id: "user-sans", label: "User Sans", source: "user", importSource: "upload", variants: ["regular", "bold"], allowedPixelSizes: [8, 10, 12] }]), { status: 200 });
       }
-      if (url.endsWith("/api/fonts/rescan")) {
+      if (url.endsWith("/api/v2/fonts/rescan")) {
         return new Response(JSON.stringify([{ id: "user-sans", label: "User Sans", source: "user", importSource: "upload", variants: ["regular", "bold"], allowedPixelSizes: [8, 10, 12] }]), { status: 200 });
       }
-      if (url.includes("/api/fonts/") && init?.method === "PATCH") {
+      if (url.includes("/api/v2/fonts/") && init?.method === "PATCH") {
         return new Response(JSON.stringify({ id: "user-sans", label: "User Sans", source: "user", importSource: "upload", variants: ["regular", "bold"], allowedPixelSizes: [8, 10, 12] }), { status: 200 });
       }
-      if (url.endsWith(`/api/projects/${SAMPLE_PROJECT.id}/font-specimens`)) {
+      if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/font-specimens`)) {
         return new Response(JSON.stringify({
           families: [{
             family: "user-sans",
@@ -68,7 +143,7 @@ describe("epaper editor app", () => {
           }]
         }), { status: 200 });
       }
-      if (url.includes("/api/dafont?page=")) {
+      if (url.includes("/api/v2/dafont?page=")) {
         return new Response(JSON.stringify({
           page: 1,
           totalPages: 3,
@@ -87,7 +162,7 @@ describe("epaper editor app", () => {
           }]
         }), { status: 200 });
       }
-      if (url.endsWith("/api/dafont/import")) {
+      if (url.endsWith("/api/v2/dafont/import")) {
         return new Response(JSON.stringify({
           id: "minecraft",
           label: "Minecraft",
@@ -101,13 +176,13 @@ describe("epaper editor app", () => {
           previewUrl: "https://www.dafont.com/img/preview/m/i/minecraft0.png"
         }), { status: 201 });
       }
-      if (url.endsWith("/api/home-assistant/entities")) {
+      if (url.endsWith("/api/v2/provider-instances/home-assistant-default/entities")) {
         return new Response(
           JSON.stringify([{ entityId: "sensor.temp", friendlyName: "Temp", domain: "sensor", unit: "C" }]),
           { status: 200 }
         );
       }
-      if (url.endsWith("/api/settings/home-assistant")) {
+      if (url.endsWith("/api/v2/settings/home-assistant")) {
         if (init?.method === "PUT") {
           return new Response(JSON.stringify({
             host: "https://ha.local",
@@ -127,14 +202,14 @@ describe("epaper editor app", () => {
           allowInsecureTls: false
         }), { status: 200 });
       }
-      if (url.endsWith("/api/settings/home-assistant/test")) {
+      if (url.endsWith("/api/v2/settings/home-assistant/test")) {
         return new Response(JSON.stringify({
           ok: true,
           mode: "custom",
           message: "Connected to Home Assistant"
         }), { status: 200 });
       }
-      if (url.endsWith("/api/settings/openepaperlink-access-point")) {
+      if (url.endsWith("/api/v2/settings/openepaperlink-access-point")) {
         if (init?.method === "PUT") {
           return new Response(JSON.stringify({
             url: "http://192.168.1.170",
@@ -146,24 +221,27 @@ describe("epaper editor app", () => {
           defaultTestDisplayMac: ""
         }), { status: 200 });
       }
-      if (url.endsWith("/api/settings/openepaperlink-access-point/test")) {
+      if (url.endsWith("/api/v2/settings/openepaperlink-access-point/test")) {
         return new Response(JSON.stringify({
           ok: true,
           message: "Connected to OpenEPaperLink access point",
           tagCount: 8
         }), { status: 200 });
       }
-      if (url.endsWith("/api/projects")) {
+      if (url.endsWith("/api/v2/projects")) {
         return new Response(JSON.stringify([{ id: SAMPLE_PROJECT.id, name: SAMPLE_PROJECT.name, version: SAMPLE_PROJECT.version }]), { status: 200 });
       }
-      if (url.endsWith(`/api/projects/${SAMPLE_PROJECT.id}`)) {
+      if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}`) && !init?.method) {
         return new Response(JSON.stringify(SAMPLE_PROJECT), { status: 200 });
       }
-      if (url.endsWith(`/api/projects/${SAMPLE_PROJECT.id}/displays/discover`)) {
+      if (url.includes(`/api/v2/projects/${SAMPLE_PROJECT.id}/displays/discover`)) {
         return new Response(JSON.stringify([
           {
             id: "ap:00000219BC483B18",
             name: "Hall Tag",
+            providerId: "openepaperlink-ap",
+            providerInstanceId: "openepaperlink-ap-default",
+            providerDeviceRef: "00000219BC483B18",
             providerKind: "openepaperlink-ap",
             providerRef: "00000219BC483B18",
             discoverySource: "access-point",
@@ -188,7 +266,7 @@ describe("epaper editor app", () => {
           }
         ]), { status: 200 });
       }
-      if (url.endsWith(`/api/projects/${SAMPLE_PROJECT.id}/assignment-schedules`)) {
+      if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/assignment-schedules`)) {
         return new Response(JSON.stringify([{
           assignmentId: "assignment-virtual-tri296x128-red",
           displayId: "virtual-tri296x128-red",
@@ -199,7 +277,7 @@ describe("epaper editor app", () => {
           lastResult: "disabled"
         }]), { status: 200 });
       }
-      if (url.endsWith(`/api/projects/${SAMPLE_PROJECT.id}/assignments/assignment-virtual-tri296x128-red/force-update`)) {
+      if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/assignments/assignment-virtual-tri296x128-red/force-update`)) {
         return new Response(JSON.stringify({
           assignmentId: "assignment-virtual-tri296x128-red",
           displayId: "virtual-tri296x128-red",
@@ -209,7 +287,7 @@ describe("epaper editor app", () => {
           message: "Forced update uploaded."
         }), { status: 200 });
       }
-      if (url.endsWith(`/api/projects/${SAMPLE_PROJECT.id}/device-preview`)) {
+      if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/device-preview`)) {
         return new Response(JSON.stringify({
           width: 296,
           height: 128,
@@ -218,7 +296,43 @@ describe("epaper editor app", () => {
           rgba: new Array(296 * 128 * 4).fill(255)
         }), { status: 200 });
       }
-      if (url.endsWith(`/api/projects/${SAMPLE_PROJECT.id}/layout-preview`)) {
+      if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/layout-preview`)) {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        if (body.includeInspection) {
+          return new Response(JSON.stringify({
+            preview: {
+              width: 296,
+              height: 128,
+              hash: "layout-preview",
+              activeScreenId: "layout-widget",
+              rgba: new Array(296 * 128 * 4).fill(255)
+            },
+            inspection: {
+              width: 296,
+              height: 128,
+              root: {
+                nodeId: "root",
+                nodeType: "stack",
+                label: "stack",
+                frame: { x: 0, y: 0, w: 296, h: 128 },
+                contentFrame: { x: 0, y: 0, w: 296, h: 128 },
+                children: [
+                  {
+                    nodeId: "child-text",
+                    nodeType: "primitive_instance",
+                    label: "text",
+                    frame: { x: 0, y: 0, w: 296, h: 64 },
+                    contentFrame: { x: 4, y: 4, w: 288, h: 56 },
+                    children: [],
+                    isContainer: false
+                  }
+                ],
+                isContainer: true,
+                stackAxis: "vertical"
+              }
+            }
+          }), { status: 200 });
+        }
         return new Response(JSON.stringify({
           width: 296,
           height: 128,
@@ -227,7 +341,7 @@ describe("epaper editor app", () => {
           rgba: new Array(296 * 128 * 4).fill(255)
         }), { status: 200 });
       }
-      if (url.endsWith(`/api/projects/${SAMPLE_PROJECT.id}/layout-inspection-preview`)) {
+      if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/layout-inspection-preview`)) {
         return new Response(JSON.stringify({
           width: 296,
           height: 128,
@@ -253,10 +367,10 @@ describe("epaper editor app", () => {
           }
         }), { status: 200 });
       }
-      if (url.endsWith(`/api/projects/${SAMPLE_PROJECT.id}`) && init?.method === "PUT") {
+      if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}`) && init?.method === "PUT") {
         return new Response(JSON.stringify({ ...SAMPLE_PROJECT, version: SAMPLE_PROJECT.version + 1 }), { status: 200 });
       }
-      if (url.includes(`/api/projects/${SAMPLE_PROJECT.id}/devices/`) && url.endsWith("/upload")) {
+      if (url.includes(`/api/v2/projects/${SAMPLE_PROJECT.id}/devices/`) && url.endsWith("/upload")) {
         return new Response(JSON.stringify({
           uploaded: true,
           hash: "uploaded-hash",
@@ -264,7 +378,7 @@ describe("epaper editor app", () => {
           height: 128
         }), { status: 200 });
       }
-      if (url.endsWith("/api/openepaperlink-access-point/upload-preview")) {
+      if (url.endsWith("/api/v2/provider-instances/openepaperlink-ap-default/upload-preview")) {
         return new Response(JSON.stringify({
           uploaded: true,
           mac: "00000219BC483B18",
@@ -272,10 +386,10 @@ describe("epaper editor app", () => {
           height: 128
         }), { status: 200 });
       }
-      if (url.endsWith("/api/fonts/import")) {
+      if (url.endsWith("/api/v2/fonts/import")) {
         return new Response(JSON.stringify({ id: "user-sans", label: "User Sans", variant: "regular" }), { status: 201 });
       }
-      if (url.includes("/api/fonts/") && init?.method === "DELETE") {
+      if (url.includes("/api/v2/fonts/") && init?.method === "DELETE") {
         return new Response(null, { status: 204 });
       }
       throw new Error(`Unhandled fetch ${url}`);
@@ -319,6 +433,25 @@ describe("epaper editor app", () => {
     await element.updateComplete;
 
     expect(window.location.hash).toBe("#/layouts");
+  });
+
+  it("uses bundled layout preview endpoint on layouts page", async () => {
+    const fetchMock = vi.mocked(globalThis.fetch);
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    fetchMock.mockClear();
+
+    const layoutsButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.trim() === "Layouts");
+    layoutsButton?.click();
+    await flush();
+    await element.updateComplete;
+
+    const urls = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(urls.some((url) => url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/layout-preview`))).toBe(true);
+    expect(urls.some((url) => url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/layout-inspection-preview`))).toBe(false);
   });
 
   it("discovers and manages openepaperlink displays", async () => {
@@ -436,6 +569,31 @@ describe("epaper editor app", () => {
     expect(element.shadowRoot.textContent).toContain("New Theme");
   });
 
+  it("adds provider draft on config page", async () => {
+    window.location.hash = "#/config";
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    const initialHeadings = Array.from(element.shadowRoot.querySelectorAll("h2")).filter((heading) =>
+      heading.textContent?.trim() === "Home Assistant"
+    );
+    expect(initialHeadings.length).toBe(1);
+
+    const addButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
+      button.textContent?.trim() === "Add Home Assistant"
+    );
+    addButton?.click();
+    await flush();
+    await element.updateComplete;
+
+    const updatedHeadings = Array.from(element.shadowRoot.querySelectorAll("h2")).filter((heading) =>
+      heading.textContent?.trim() === "Home Assistant"
+    );
+    expect(updatedHeadings.length).toBe(2);
+  });
+
   it("shows theme preview display type selector", async () => {
     window.location.hash = "#/themes";
     const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
@@ -480,7 +638,7 @@ describe("epaper editor app", () => {
     const baseFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith("/api/home-assistant/entities")) {
+      if (url.endsWith("/api/v2/home-assistant/entities")) {
         return new Response("ha down", { status: 500 });
       }
       return await baseFetch(input, init);
@@ -530,7 +688,7 @@ describe("epaper editor app", () => {
     expect(element.shadowRoot.textContent).toContain("Hall Tag");
   });
 
-  it("shows node tree for compound widgets", async () => {
+  it("shows structure editor without node tree for compound widgets", async () => {
     window.location.hash = "#/widgets";
     const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
     document.body.append(element);
@@ -542,8 +700,8 @@ describe("epaper editor app", () => {
     await flush();
     await element.updateComplete;
 
-    expect(element.shadowRoot.textContent).toContain("Node Tree");
     expect(element.shadowRoot.textContent).toContain("Structure");
+    expect(element.shadowRoot.textContent).not.toContain("Node Tree");
   });
 
   it("offers meta-node creation controls in the node editor", async () => {
