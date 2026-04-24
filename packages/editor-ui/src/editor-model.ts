@@ -1,4 +1,4 @@
-import type { DisplayProfile, Frame, Project, Screen } from "../../render-core/src/types.js";
+import type { DisplayProfile, Frame } from "../../render-core/src/types.js";
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -36,33 +36,4 @@ export function resizeFrame(frame: Frame, dw: number, dh: number, profile: Displ
     },
     profile
   );
-}
-
-export function duplicateScreenForProfile(project: Project, sourceScreenId: string, displayProfileId: string): Project {
-  const source = project.screens.find((screen) => screen.id === sourceScreenId);
-  if (!source) {
-    throw new Error(`Unknown screen ${sourceScreenId}`);
-  }
-  const suffix = displayProfileId.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
-  const clonedScreen: Screen = {
-    ...source,
-    id: `${source.id}-${suffix}`,
-    name: `${source.name} (${displayProfileId})`,
-    displayProfileId,
-    default: false,
-    rules: source.rules.map((rule) => ({ ...rule, id: `${rule.id}-${suffix}` }))
-  };
-  const widgets = project.widgets
-    .filter((widget) => widget.screenId === source.id)
-    .map((widget) => ({
-      ...widget,
-      id: `${widget.id}-${suffix}`,
-      screenId: clonedScreen.id
-    }));
-
-  return {
-    ...project,
-    screens: [...project.screens, clonedScreen],
-    widgets: [...project.widgets, ...widgets]
-  };
 }
