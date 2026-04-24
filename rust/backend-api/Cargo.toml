@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+epd-text-engine = { path = "../text-engine" }
 async-trait = "0.1"
 axum = "0.7"
 base64 = "0.22"
@@ -22,3 +23,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 urlencoding = "2"
 utoipa = "5"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[build-dependencies]
+serde_json = "1"

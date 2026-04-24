@@ -1,5 +1,6 @@
 pub mod app;
 pub mod error;
+mod font_assets;
 pub mod providers;
 pub mod routes;
 pub mod services;
@@ -15,49 +16,52 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use app::AppState;
 use axum::{
-    response::{IntoResponse, Json},
     http::StatusCode,
+    response::{IntoResponse, Json},
     routing::{delete, get, post, put},
     Router,
 };
 use base64::Engine;
+use error::{ApiError, ApiResult};
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::{ColorType, ImageEncoder};
+use providers::{
+    built_in_provider_descriptors, default_provider_instances, display_provider, source_provider,
+    ProviderDescriptor, ProviderDomain, ProviderInstance,
+};
 use reqwest::header::{ACCEPT, AUTHORIZATION};
 use reqwest::multipart::{Form, Part};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use tokio::{fs, io::AsyncWriteExt, process::Command};
-use tower_http::{services::ServeDir, trace::TraceLayer};
-use tracing::info;
-use utoipa::OpenApi;
-use app::AppState;
-use error::{ApiError, ApiResult};
-use providers::{built_in_provider_descriptors, default_provider_instances, display_provider, source_provider, ProviderDescriptor, ProviderDomain, ProviderInstance};
 use routes::fonts::{delete_font, import_font, list_fonts, rescan_fonts, update_font_metadata};
-use routes::publish::{
-    force_assignment_update, list_assignment_schedules, publish_project, upload_device_image,
+use routes::previews::{
+    device_preview, font_specimens, layout_preview, live_data, preview, theme_preview,
 };
+use routes::projects::{get_project, list_projects, save_project};
 use routes::providers::{
     create_provider_instance, delete_provider_instance, discover_displays, list_provider_instances,
     list_provider_kinds, provider_entities, test_provider_instance, update_provider_instance,
     upload_preview_to_provider,
 };
-use routes::projects::{get_project, list_projects, save_project};
-use routes::previews::{
-    device_preview, font_specimens, layout_preview, live_data, preview, theme_preview,
+use routes::publish::{
+    force_assignment_update, list_assignment_schedules, publish_project, upload_device_image,
 };
-use routes::system::{healthz, list_display_profiles, list_icons};
 use routes::system::{__path_healthz, __path_list_display_profiles, __path_list_icons};
+use routes::system::{healthz, list_display_profiles, list_icons};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use services::scheduler::spawn_assignment_scheduler;
 use storage::{
     all_provider_instances, delete_provider_instance_from_settings, ensure_seeded,
     find_provider_instance, font_index_file_path, fonts_dir, masked_provider_instance,
-    project_file_path, projects_dir, read_json_file, read_settings, save_provider_instance_into_settings,
-    write_json_file, write_settings,
+    project_file_path, projects_dir, read_json_file, read_settings,
+    save_provider_instance_into_settings, write_json_file, write_settings,
 };
+use tokio::{fs, io::AsyncWriteExt, process::Command};
+use tower_http::{services::ServeDir, trace::TraceLayer};
+use tracing::info;
+use utoipa::OpenApi;
 
 const FONT_AWESOME_ICONS_JSON: &str = include_str!("../assets/font-awesome-icons.json");
 const SEEDED_PROJECT_JSON: &str = include_str!("../../../data/projects/demo-home.json");
@@ -142,7 +146,10 @@ struct HomeAssistantConnectionStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub(crate) struct OpenEpaperLinkAccessPointSettings {
     url: String,
-    #[serde(rename = "defaultTestDisplayMac", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "defaultTestDisplayMac",
+        skip_serializing_if = "Option::is_none"
+    )]
     default_test_display_mac: Option<String>,
 }
 
@@ -354,9 +361,15 @@ pub(crate) struct DiscoveredDisplayCandidate {
     provider_kind: String,
     #[serde(rename = "providerRef")]
     provider_ref: String,
-    #[serde(rename = "suggestedDisplayTypeId", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "suggestedDisplayTypeId",
+        skip_serializing_if = "Option::is_none"
+    )]
     suggested_display_type_id: Option<String>,
-    #[serde(rename = "suggestedDisplayType", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "suggestedDisplayType",
+        skip_serializing_if = "Option::is_none"
+    )]
     suggested_display_type: Option<DisplayCandidateType>,
     #[serde(rename = "discoverySource")]
     discovery_source: String,
@@ -386,14 +399,16 @@ pub(crate) struct ProviderInstancesDocument {
     display_providers: Vec<ProviderInstance>,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StoredSettings {
     #[serde(flatten)]
     provider_instances: Option<ProviderInstancesDocument>,
     #[serde(rename = "homeAssistant", skip_serializing_if = "Option::is_none")]
     home_assistant: Option<HomeAssistantSettingsStored>,
-    #[serde(rename = "openEpaperLinkAccessPoint", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "openEpaperLinkAccessPoint",
+        skip_serializing_if = "Option::is_none"
+    )]
     openepaperlink_access_point: Option<OpenEpaperLinkAccessPointSettings>,
 }
 
@@ -525,7 +540,8 @@ pub(crate) async fn run_bridge_value(_state: &AppState, payload: Value) -> Resul
         .stderr(Stdio::piped());
     let mut child = child.spawn().map_err(internal_error)?;
     if let Some(mut stdin) = child.stdin.take() {
-        let bytes = serde_json::to_vec(&payload).map_err(|error| ApiError::internal(error.to_string()))?;
+        let bytes =
+            serde_json::to_vec(&payload).map_err(|error| ApiError::internal(error.to_string()))?;
         stdin.write_all(&bytes).await.map_err(internal_error)?;
     }
     let output = child.wait_with_output().await.map_err(internal_error)?;
@@ -539,7 +555,9 @@ pub(crate) async fn run_bridge_value(_state: &AppState, payload: Value) -> Resul
         } else {
             format!("bridge exited with {}", output.status)
         };
-        return Err(ApiError::internal(format!("Render bridge failed: {detail}")));
+        return Err(ApiError::internal(format!(
+            "Render bridge failed: {detail}"
+        )));
     }
     serde_json::from_slice(&output.stdout).map_err(|error| ApiError::internal(error.to_string()))
 }
@@ -557,7 +575,11 @@ fn project_override_from_body(project_id: &str, body: &Value) -> Option<Value> {
     }
 }
 
-pub(crate) async fn load_project_for_request(state: &AppState, project_id: &str, body: Option<&Value>) -> Result<Value, ApiError> {
+pub(crate) async fn load_project_for_request(
+    state: &AppState,
+    project_id: &str,
+    body: Option<&Value>,
+) -> Result<Value, ApiError> {
     if let Some(body) = body {
         if let Some(project) = project_override_from_body(project_id, body) {
             return Ok(project);
@@ -623,27 +645,18 @@ fn app(state: AppState) -> Router {
         .route("/api/v2/fonts", get(list_fonts))
         .route("/api/v2/fonts/import", post(import_font))
         .route("/api/v2/fonts/rescan", post(rescan_fonts))
-        .route("/api/v2/fonts/:id", delete(delete_font).patch(update_font_metadata))
+        .route(
+            "/api/v2/fonts/:id",
+            delete(delete_font).patch(update_font_metadata),
+        )
         .route("/api/v2/projects", get(list_projects))
         .route("/api/v2/projects/:id", get(get_project).put(save_project))
         .route("/api/v2/projects/:id/live-data", get(live_data))
         .route("/api/v2/projects/:id/preview", post(preview))
-        .route(
-            "/api/v2/projects/:id/layout-preview",
-            post(layout_preview),
-        )
-        .route(
-            "/api/v2/projects/:id/device-preview",
-            post(device_preview),
-        )
-        .route(
-            "/api/v2/projects/:id/font-specimens",
-            post(font_specimens),
-        )
-        .route(
-            "/api/v2/projects/:id/theme-preview",
-            post(theme_preview),
-        )
+        .route("/api/v2/projects/:id/layout-preview", post(layout_preview))
+        .route("/api/v2/projects/:id/device-preview", post(device_preview))
+        .route("/api/v2/projects/:id/font-specimens", post(font_specimens))
+        .route("/api/v2/projects/:id/theme-preview", post(theme_preview))
         .route("/api/v2/projects/:id/publish", post(publish_project))
         .route(
             "/api/v2/projects/:id/displays/discover",
@@ -667,7 +680,8 @@ fn app(state: AppState) -> Router {
 }
 
 fn load_icons() -> Vec<IconDefinition> {
-    serde_json::from_str(FONT_AWESOME_ICONS_JSON).expect("font awesome icon catalog must be valid json")
+    serde_json::from_str(FONT_AWESOME_ICONS_JSON)
+        .expect("font awesome icon catalog must be valid json")
 }
 
 fn load_display_profiles() -> Vec<DisplayProfile> {
@@ -753,14 +767,22 @@ fn load_display_profiles() -> Vec<DisplayProfile> {
 
 pub(crate) async fn read_font_index(state: &AppState) -> Result<StoredFontsIndex, ApiError> {
     match fs::read_to_string(font_index_file_path(&state.data_dir)).await {
-        Ok(content) => serde_json::from_str(&content).map_err(|error| ApiError::internal(error.to_string())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(StoredFontsIndex { fonts: Vec::new() }),
+        Ok(content) => {
+            serde_json::from_str(&content).map_err(|error| ApiError::internal(error.to_string()))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(StoredFontsIndex { fonts: Vec::new() })
+        }
         Err(error) => Err(internal_error(error)),
     }
 }
 
-pub(crate) async fn write_font_index(state: &AppState, index: &StoredFontsIndex) -> Result<(), ApiError> {
-    let value = serde_json::to_value(index).map_err(|error| ApiError::internal(error.to_string()))?;
+pub(crate) async fn write_font_index(
+    state: &AppState,
+    index: &StoredFontsIndex,
+) -> Result<(), ApiError> {
+    let value =
+        serde_json::to_value(index).map_err(|error| ApiError::internal(error.to_string()))?;
     write_json_file(&font_index_file_path(&state.data_dir), &value).await
 }
 
@@ -782,14 +804,18 @@ pub(crate) async fn load_user_font_data(state: &AppState) -> Result<Value, ApiEr
         if let Some(allowed) = font.allowed_pixel_sizes.clone() {
             entry.insert(
                 "allowedPixelSizes".into(),
-                serde_json::to_value(allowed).map_err(|error| ApiError::internal(error.to_string()))?,
+                serde_json::to_value(allowed)
+                    .map_err(|error| ApiError::internal(error.to_string()))?,
             );
         }
         for (variant, filename) in font_files(&font) {
             let bytes = fs::read(fonts_dir(&state.data_dir).join(filename))
                 .await
                 .map_err(internal_error)?;
-            entry.insert(variant.into(), Value::from(base64::engine::general_purpose::STANDARD.encode(bytes)));
+            entry.insert(
+                variant.into(),
+                Value::from(base64::engine::general_purpose::STANDARD.encode(bytes)),
+            );
         }
         families.insert(font.id, Value::Object(entry));
     }
@@ -797,13 +823,85 @@ pub(crate) async fn load_user_font_data(state: &AppState) -> Result<Value, ApiEr
 }
 
 pub(crate) fn built_in_font_options() -> Vec<FontOption> {
+    debug_assert!(font_assets::has_built_in_font("px-sans"));
+    debug_assert!(font_assets::has_built_in_font("px-mono-special"));
+    debug_assert!(font_assets::has_built_in_font("ui-sans"));
+    debug_assert!(font_assets::has_built_in_font("fa-solid"));
+    debug_assert!(font_assets::has_built_in_font("fa-regular"));
+    debug_assert!(font_assets::has_built_in_font("fa-brands"));
     vec![
-        FontOption { id: "px-sans".into(), label: "PX Sans".into(), source: "built-in".into(), variants: vec!["regular".into(), "bold".into()], allowed_pixel_sizes: None, import_source: None, source_url: None, preview_url: None, declared_pixel_size: None, license_category: None },
-        FontOption { id: "px-mono-special".into(), label: "PX Mono Special".into(), source: "built-in".into(), variants: vec!["regular".into()], allowed_pixel_sizes: None, import_source: None, source_url: None, preview_url: None, declared_pixel_size: None, license_category: None },
-        FontOption { id: "ui-sans".into(), label: "Legacy UI Sans".into(), source: "built-in".into(), variants: vec!["regular".into(), "bold".into()], allowed_pixel_sizes: None, import_source: None, source_url: None, preview_url: None, declared_pixel_size: None, license_category: None },
-        FontOption { id: "fa-solid".into(), label: "Font Awesome Solid".into(), source: "built-in".into(), variants: vec!["regular".into()], allowed_pixel_sizes: None, import_source: None, source_url: None, preview_url: None, declared_pixel_size: None, license_category: None },
-        FontOption { id: "fa-regular".into(), label: "Font Awesome Regular".into(), source: "built-in".into(), variants: vec!["regular".into()], allowed_pixel_sizes: None, import_source: None, source_url: None, preview_url: None, declared_pixel_size: None, license_category: None },
-        FontOption { id: "fa-brands".into(), label: "Font Awesome Brands".into(), source: "built-in".into(), variants: vec!["regular".into()], allowed_pixel_sizes: None, import_source: None, source_url: None, preview_url: None, declared_pixel_size: None, license_category: None },
+        FontOption {
+            id: "px-sans".into(),
+            label: "PX Sans".into(),
+            source: "built-in".into(),
+            variants: vec!["regular".into(), "bold".into()],
+            allowed_pixel_sizes: None,
+            import_source: None,
+            source_url: None,
+            preview_url: None,
+            declared_pixel_size: None,
+            license_category: None,
+        },
+        FontOption {
+            id: "px-mono-special".into(),
+            label: "PX Mono Special".into(),
+            source: "built-in".into(),
+            variants: vec!["regular".into()],
+            allowed_pixel_sizes: None,
+            import_source: None,
+            source_url: None,
+            preview_url: None,
+            declared_pixel_size: None,
+            license_category: None,
+        },
+        FontOption {
+            id: "ui-sans".into(),
+            label: "Legacy UI Sans".into(),
+            source: "built-in".into(),
+            variants: vec!["regular".into(), "bold".into()],
+            allowed_pixel_sizes: None,
+            import_source: None,
+            source_url: None,
+            preview_url: None,
+            declared_pixel_size: None,
+            license_category: None,
+        },
+        FontOption {
+            id: "fa-solid".into(),
+            label: "Font Awesome Solid".into(),
+            source: "built-in".into(),
+            variants: vec!["regular".into()],
+            allowed_pixel_sizes: None,
+            import_source: None,
+            source_url: None,
+            preview_url: None,
+            declared_pixel_size: None,
+            license_category: None,
+        },
+        FontOption {
+            id: "fa-regular".into(),
+            label: "Font Awesome Regular".into(),
+            source: "built-in".into(),
+            variants: vec!["regular".into()],
+            allowed_pixel_sizes: None,
+            import_source: None,
+            source_url: None,
+            preview_url: None,
+            declared_pixel_size: None,
+            license_category: None,
+        },
+        FontOption {
+            id: "fa-brands".into(),
+            label: "Font Awesome Brands".into(),
+            source: "built-in".into(),
+            variants: vec!["regular".into()],
+            allowed_pixel_sizes: None,
+            import_source: None,
+            source_url: None,
+            preview_url: None,
+            declared_pixel_size: None,
+            license_category: None,
+        },
     ]
 }
 
@@ -858,13 +956,19 @@ pub(crate) fn font_files(font: &StoredFontFamily) -> Vec<(String, String)> {
         .map(|entries| {
             entries
                 .iter()
-                .filter_map(|(variant, filename)| filename.as_str().map(|name| (variant.clone(), name.to_string())))
+                .filter_map(|(variant, filename)| {
+                    filename
+                        .as_str()
+                        .map(|name| (variant.clone(), name.to_string()))
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()
 }
 
-pub(crate) fn home_assistant_settings_from_instance(instance: &ProviderInstance) -> HomeAssistantSettingsStored {
+pub(crate) fn home_assistant_settings_from_instance(
+    instance: &ProviderInstance,
+) -> HomeAssistantSettingsStored {
     HomeAssistantSettingsStored {
         host: instance
             .config
@@ -897,7 +1001,9 @@ pub(crate) fn home_assistant_settings_from_instance(instance: &ProviderInstance)
     }
 }
 
-pub(crate) fn openepaperlink_settings_from_instance(instance: &ProviderInstance) -> OpenEpaperLinkAccessPointSettings {
+pub(crate) fn openepaperlink_settings_from_instance(
+    instance: &ProviderInstance,
+) -> OpenEpaperLinkAccessPointSettings {
     OpenEpaperLinkAccessPointSettings {
         url: instance
             .config
@@ -1011,12 +1117,7 @@ pub(crate) async fn fetch_access_point_page(
     settings: &OpenEpaperLinkAccessPointSettings,
     position: u64,
 ) -> Result<AccessPointTagPage, HttpLikeError> {
-    access_point_request(
-        client,
-        settings,
-        &format!("/get_db?pos={position}"),
-    )
-    .await
+    access_point_request(client, settings, &format!("/get_db?pos={position}")).await
 }
 
 pub(crate) async fn fetch_all_access_point_tags(
@@ -1045,9 +1146,13 @@ pub(crate) async fn fetch_access_point_tag_type(
     settings: &OpenEpaperLinkAccessPointSettings,
     hw_type: u64,
 ) -> Result<Option<AccessPointTagType>, HttpLikeError> {
-    access_point_request(client, settings, &format!("/tagtypes/{:02X}.json", hw_type & 0xff))
-        .await
-        .map(Some)
+    access_point_request(
+        client,
+        settings,
+        &format!("/tagtypes/{:02X}.json", hw_type & 0xff),
+    )
+    .await
+    .map(Some)
 }
 
 async fn access_point_request<T: for<'de> Deserialize<'de>>(
@@ -1056,10 +1161,14 @@ async fn access_point_request<T: for<'de> Deserialize<'de>>(
     path: &str,
 ) -> Result<T, HttpLikeError> {
     let url = format!("{}{}", settings.url.trim_end_matches('/'), path);
-    let response = client.get(&url).send().await.map_err(|error| HttpLikeError {
-        status: None,
-        message: error.to_string(),
-    })?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|error| HttpLikeError {
+            status: None,
+            message: error.to_string(),
+        })?;
     let status = response.status();
     if !status.is_success() {
         let details = response.text().await.unwrap_or_default();
@@ -1088,7 +1197,8 @@ pub(crate) fn rgba_to_jpeg(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u
     for chunk in rgba.chunks_exact(4) {
         let alpha = f32::from(chunk[3]) / 255.0;
         let blend = |channel: u8| -> u8 {
-            (((f32::from(channel) * alpha) + (255.0 * (1.0 - alpha))).round() as i32).clamp(0, 255) as u8
+            (((f32::from(channel) * alpha) + (255.0 * (1.0 - alpha))).round() as i32).clamp(0, 255)
+                as u8
         };
         rgb.push(blend(chunk[0]));
         rgb.push(blend(chunk[1]));
@@ -1116,15 +1226,21 @@ pub(crate) fn png_to_jpeg(png: &[u8]) -> Result<Vec<u8>, ApiError> {
     rgba_to_jpeg(&rgba, image.width(), image.height())
 }
 
-pub(crate) fn bridge_render_to_png_bytes(rendered: &BridgeRenderResponse) -> Result<Vec<u8>, ApiError> {
+pub(crate) fn bridge_render_to_png_bytes(
+    rendered: &BridgeRenderResponse,
+) -> Result<Vec<u8>, ApiError> {
     let expected = rendered.width as usize * rendered.height as usize * 4;
     if rendered.rgba.len() != expected {
-        return Err(ApiError::internal("Bridge render returned invalid RGBA payload"));
+        return Err(ApiError::internal(
+            "Bridge render returned invalid RGBA payload",
+        ));
     }
     rgba_to_png(&rendered.rgba, rendered.width, rendered.height)
 }
 
-pub(crate) fn bridge_render_preview_value(rendered: &BridgeRenderResponse) -> Result<Value, ApiError> {
+pub(crate) fn bridge_render_preview_value(
+    rendered: &BridgeRenderResponse,
+) -> Result<Value, ApiError> {
     Ok(serde_json::json!({
         "width": rendered.width,
         "height": rendered.height,
@@ -1186,8 +1302,14 @@ pub(crate) fn build_discovered_display_type(
     let width = tag_type.width? as i32;
     let height = tag_type.height? as i32;
     let color_table = tag_type.colortable.as_ref()?;
-    let white = color_table.get("white").and_then(as_hex_rgb).unwrap_or_else(|| "#ffffff".into());
-    let black = color_table.get("black").and_then(as_hex_rgb).unwrap_or_else(|| "#000000".into());
+    let white = color_table
+        .get("white")
+        .and_then(as_hex_rgb)
+        .unwrap_or_else(|| "#ffffff".into());
+    let black = color_table
+        .get("black")
+        .and_then(as_hex_rgb)
+        .unwrap_or_else(|| "#000000".into());
     let accent = color_table
         .as_object()
         .and_then(|entries| {
@@ -1235,7 +1357,8 @@ fn as_hex_rgb(value: &Value) -> Option<String> {
 }
 
 pub(crate) fn string_field(value: &Value, key: &str) -> String {
-    value.get(key)
+    value
+        .get(key)
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string()
@@ -1258,8 +1381,9 @@ pub(crate) struct HttpLikeError {
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
-        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("install SIGTERM handler");
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install SIGTERM handler");
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {}
             _ = terminate.recv() => {}
@@ -1320,7 +1444,9 @@ mod tests {
     fn loads_font_awesome_icon_catalog() {
         let icons = load_icons();
         assert!(!icons.is_empty());
-        assert!(icons.iter().any(|icon| icon.id == "fa-solid:triangle-exclamation"));
+        assert!(icons
+            .iter()
+            .any(|icon| icon.id == "fa-solid:triangle-exclamation"));
         assert!(icons.iter().any(|icon| icon.id == "fa-regular:clock"));
         assert!(icons.iter().any(|icon| icon.id == "fa-brands:github"));
     }
@@ -1329,7 +1455,10 @@ mod tests {
     async fn seeds_and_saves_project_files() {
         let temp_dir = std::env::temp_dir().join(format!(
             "epd-backend-api-test-{}",
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
         let state = AppState {
             icons: Arc::new(load_icons()),
@@ -1340,16 +1469,19 @@ mod tests {
             assignment_states: Arc::new(Mutex::new(HashMap::new())),
         };
         ensure_seeded(&state).await.unwrap();
-        let projects = list_projects(axum::extract::State(state.clone())).await.unwrap().0;
+        let projects = list_projects(axum::extract::State(state.clone()))
+            .await
+            .unwrap()
+            .0;
         assert!(!projects.is_empty());
 
         let mut project = get_project(
             axum::extract::State(state.clone()),
             axum::extract::Path(projects[0].id.clone()),
         )
-            .await
-            .unwrap()
-            .0;
+        .await
+        .unwrap()
+        .0;
         let current_version = integer_field(&project, "version");
         project["name"] = Value::from("Renamed Project");
         let saved = save_project(
