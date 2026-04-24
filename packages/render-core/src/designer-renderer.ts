@@ -1,9 +1,9 @@
 import { createStableHash } from "./hash.js";
+import { evaluateCondition } from "./condition-eval.js";
 import { defaultIconId } from "./icons.js";
 import { applyScopeTemplate, evaluateArrayExpression, evaluateScopeExpression, evaluateScopeValueExpression, resolveScopePath, stringifyScopeValue, type ScopeContext } from "./layout-meta.js";
 import { COLOR_ACCENT, COLOR_BG, COLOR_FG, PixelBuffer, type PixelClipRect, type PixelPaint } from "./pixel-buffer.js";
 import { formatQuantizedNumber } from "./quantize.js";
-import { evaluateCondition } from "./resolve.js";
 import { createActiveRenderScripting, type ActiveRenderScripting } from "./scripting.js";
 import { DEFAULT_WIDGET_THEME_ID, DEFAULT_WIDGET_THEMES } from "./themes.js";
 import type {
@@ -33,7 +33,7 @@ import type {
   UniqueLayoutNode,
   WidgetTheme
 } from "./types.js";
-import { renderProject as renderLegacyProject } from "./renderer.js";
+import { renderLegacyProject } from "./legacy-runtime.js";
 
 interface PixelFrame {
   x: number;

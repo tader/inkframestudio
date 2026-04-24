@@ -5,8 +5,8 @@ import {
   renderAssignedDisplay,
   renderFontSpecimenSheets,
   inspectLayoutDefinition,
+  renderLegacyProject,
   renderLayoutDefinition,
-  renderProject
 } from "../../render-core/src/index.js";
 import { renderThemePreviewImage } from "../../render-core/src/theme-preview.js";
 import { normalizeProject } from "../../render-core/src/themes.js";
@@ -184,7 +184,7 @@ async function main(): Promise<void> {
         ? { ...project, scenarios: [...project.scenarios.filter((entry) => entry.id !== adHocScenario.id), adHocScenario] }
         : project;
       const previewData = requiredRenderData(body);
-      const rendered = renderProject(
+      const rendered = renderLegacyProject(
         augmentedProject,
         displayProfileId,
         previewData.data,
@@ -330,7 +330,7 @@ async function main(): Promise<void> {
       );
       const scenarioId = typeof body?.scenarioId === "string" ? String(body.scenarioId) : undefined;
       const previewData = requiredRenderData(body);
-      process.stdout.write(`${JSON.stringify(renderedResponse(renderProject(project, displayProfileId, previewData.data, scenarioId), previewData.message))}\n`);
+      process.stdout.write(`${JSON.stringify(renderedResponse(renderLegacyProject(project, displayProfileId, previewData.data, scenarioId), previewData.message))}\n`);
       return;
     }
     case "render-assigned-live": {

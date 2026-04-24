@@ -3,10 +3,10 @@ import {
   DISPLAY_PROFILES,
   SAMPLE_DATA,
   SAMPLE_PROJECT,
+  renderLegacyProject,
   renderThemePreviewImage,
   renderFontSpecimenSheets,
-  renderProject,
-  resolveProjectState
+  resolveLegacyProjectState
 } from "./index.js";
 import { normalizeProject } from "./themes.js";
 import type { Project, RenderData } from "./types.js";
@@ -234,22 +234,22 @@ const LEGACY_DATA: RenderData = {
 
 describe("render-core", () => {
   it("renders a stable golden hash for 296 default screen", () => {
-    const rendered = renderProject(LEGACY_PROJECT, "tri296x128-red", LEGACY_DATA);
+    const rendered = renderLegacyProject(LEGACY_PROJECT, "tri296x128-red", LEGACY_DATA);
     expect(rendered.width).toBe(296);
     expect(rendered.height).toBe(128);
     expect(rendered.hash).toBe("fc1b91f6c2697288cfee46d66e6be2510a521d61f7d9540ec31d15d245e32e3b");
   });
 
   it("renders a stable golden hash for 400 default screen", () => {
-    const rendered = renderProject(LEGACY_PROJECT, "tri400x300-red", LEGACY_DATA);
+    const rendered = renderLegacyProject(LEGACY_PROJECT, "tri400x300-red", LEGACY_DATA);
     expect(rendered.width).toBe(400);
     expect(rendered.height).toBe(300);
     expect(rendered.hash).toBe("e553967166face29c4507072935c81784b65e7da22cabcfb8aef1556242e73ee");
   });
 
   it("keeps palette-indexed pixels identical across accent profiles", () => {
-    const red = renderProject(LEGACY_PROJECT, "tri296x128-red", LEGACY_DATA);
-    const yellow = renderProject(
+    const red = renderLegacyProject(LEGACY_PROJECT, "tri296x128-red", LEGACY_DATA);
+    const yellow = renderLegacyProject(
       {
         ...LEGACY_PROJECT,
         screens: LEGACY_PROJECT.screens.map((screen) => ({
@@ -265,12 +265,12 @@ describe("render-core", () => {
   });
 
   it("chooses the empty calendar fallback screen", () => {
-    const resolved = resolveProjectState(LEGACY_PROJECT, "tri296x128-red", LEGACY_DATA, "empty-calendar-demo");
+    const resolved = resolveLegacyProjectState(LEGACY_PROJECT, "tri296x128-red", LEGACY_DATA, "empty-calendar-demo");
     expect(resolved.activeScreen.id).toBe("calendar-empty-296");
   });
 
   it("activates the garage overlay after 15 minutes", () => {
-    const resolved = resolveProjectState(LEGACY_PROJECT, "tri296x128-red", LEGACY_DATA, "garage-warning-demo");
+    const resolved = resolveLegacyProjectState(LEGACY_PROJECT, "tri296x128-red", LEGACY_DATA, "garage-warning-demo");
     expect(resolved.activeOverlay?.id).toBe("garage-warning-overlay");
   });
 
@@ -299,7 +299,7 @@ describe("render-core", () => {
           : screen
       )
     };
-    const resolved = resolveProjectState(project, "tri296x128-red", LEGACY_DATA, "empty-calendar-demo");
+    const resolved = resolveLegacyProjectState(project, "tri296x128-red", LEGACY_DATA, "empty-calendar-demo");
     expect(resolved.activeScreen.id).toBe("calendar-empty-296");
   });
 
@@ -343,7 +343,7 @@ describe("render-core", () => {
       ],
       scenarios: []
     });
-    const rendered = renderProject(project, "tri296x128-red", LEGACY_DATA);
+    const rendered = renderLegacyProject(project, "tri296x128-red", LEGACY_DATA);
     const dividerX = 5 * DISPLAY_PROFILES[0].gridUnitPx - 1;
     const adjacentX = dividerX + 1;
     let dividerInterior = 0;
@@ -392,7 +392,7 @@ describe("render-core", () => {
       ],
       scenarios: []
     });
-    const rendered = renderProject(project, "tri296x128-red", LEGACY_DATA);
+    const rendered = renderLegacyProject(project, "tri296x128-red", LEGACY_DATA);
     const grid = DISPLAY_PROFILES[0].gridUnitPx;
     const inheritedBorderPixel = rendered.pixels[0 * rendered.width + 0];
     const overrideInteriorPixel = rendered.pixels[(2 * grid) * rendered.width + (6 * grid + 2)];
@@ -423,7 +423,7 @@ describe("render-core", () => {
         header: 14
       }
     });
-    const rendered = renderProject(compact, "tri296x128-red", LEGACY_DATA);
+    const rendered = renderLegacyProject(compact, "tri296x128-red", LEGACY_DATA);
     expect(rendered.hash).not.toBe("fff63df1e7cce9c0ed78dc556a1f81bba76eb2401eef85dcc94cb892e905bb63");
   });
 
@@ -572,7 +572,7 @@ describe("render-core", () => {
       ],
       scenarios: []
     });
-    const hot = renderProject(project, "tri296x128-red", LEGACY_DATA);
+    const hot = renderLegacyProject(project, "tri296x128-red", LEGACY_DATA);
     const grid = DISPLAY_PROFILES[0].gridUnitPx;
     const hotInterior = [];
     for (let y = 1 * grid; y < 5 * grid; y += 1) {
@@ -582,7 +582,7 @@ describe("render-core", () => {
     }
     expect(hotInterior.some((pixel) => pixel === 2)).toBe(true);
 
-    const unavailable = renderProject(
+    const unavailable = renderLegacyProject(
       project,
       "tri296x128-red",
       {
@@ -633,7 +633,7 @@ describe("render-core", () => {
       ],
       scenarios: []
     });
-    const rendered = renderProject(project, "tri296x128-red", LEGACY_DATA);
+    const rendered = renderLegacyProject(project, "tri296x128-red", LEGACY_DATA);
     const frameX = 2 * DISPLAY_PROFILES[0].gridUnitPx;
     const frameY = 2 * DISPLAY_PROFILES[0].gridUnitPx;
     const frameW = 4 * DISPLAY_PROFILES[0].gridUnitPx;
@@ -700,7 +700,7 @@ describe("render-core", () => {
       ],
       scenarios: []
     });
-    const rendered = renderProject(project, "tri296x128-red", LEGACY_DATA);
+    const rendered = renderLegacyProject(project, "tri296x128-red", LEGACY_DATA);
     const width = rendered.width;
     const grid = DISPLAY_PROFILES[0].gridUnitPx;
     expect(rendered.pixels[0 * width + 9 * grid]).toBe(1);
