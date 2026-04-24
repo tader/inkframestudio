@@ -10,8 +10,7 @@ import type {
   ProviderInstance,
   Project,
   RenderData,
-  Scenario,
-  LayoutInspectionResult
+  Scenario
 } from "../../render-core/src/types.js";
 
 export interface PreviewResponse {
@@ -23,13 +22,6 @@ export interface PreviewResponse {
   dataSourceMessage?: string;
   scriptWarnings?: string[];
   pngBase64: string;
-}
-
-export type LayoutInspectionPreviewResponse = LayoutInspectionResult;
-
-export interface LayoutPreviewBundleResponse {
-  preview: PreviewResponse;
-  inspection?: LayoutInspectionPreviewResponse;
 }
 
 export interface FontSpecimenResponse {
@@ -260,19 +252,6 @@ export function fetchLayoutPreview(
   return requestJson(`${V2_API_BASE}/projects/${projectId}/layout-preview`, {
     method: "POST",
     body: JSON.stringify({ layoutId, popupLayoutId, project })
-  });
-}
-
-export function fetchLayoutPreviewBundle(
-  projectId: string,
-  layoutId: string,
-  popupLayoutId: string | undefined,
-  project: Project,
-  expandCompoundRefs = false
-): Promise<LayoutPreviewBundleResponse> {
-  return requestJson(`${V2_API_BASE}/projects/${projectId}/layout-preview`, {
-    method: "POST",
-    body: JSON.stringify({ layoutId, popupLayoutId, project, includeInspection: true, expandCompoundRefs })
   });
 }
 

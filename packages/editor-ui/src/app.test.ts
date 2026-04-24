@@ -199,42 +199,6 @@ describe("epaper editor app", () => {
         }), { status: 200 });
       }
       if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/layout-preview`)) {
-        const body = init?.body ? JSON.parse(String(init.body)) : {};
-        if (body.includeInspection) {
-          return new Response(JSON.stringify({
-            preview: {
-              width: 296,
-              height: 128,
-              hash: "layout-preview",
-              activeScreenId: "layout-widget",
-              pngBase64: TINY_PNG
-            },
-            inspection: {
-              width: 296,
-              height: 128,
-              root: {
-                nodeId: "root",
-                nodeType: "stack",
-                label: "stack",
-                frame: { x: 0, y: 0, w: 296, h: 128 },
-                contentFrame: { x: 0, y: 0, w: 296, h: 128 },
-                children: [
-                  {
-                    nodeId: "child-text",
-                    nodeType: "primitive_instance",
-                    label: "text",
-                    frame: { x: 0, y: 0, w: 296, h: 64 },
-                    contentFrame: { x: 4, y: 4, w: 288, h: 56 },
-                    children: [],
-                    isContainer: false
-                  }
-                ],
-                isContainer: true,
-                stackAxis: "vertical"
-              }
-            }
-          }), { status: 200 });
-        }
         return new Response(JSON.stringify({
           width: 296,
           height: 128,

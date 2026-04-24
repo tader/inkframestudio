@@ -1,5 +1,5 @@
 import { LitElement, css, html, nothing, type TemplateResult } from "lit";
-import { BUILT_IN_WIDGET_DEFINITIONS, DISPLAY_PROFILES, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FillRole, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutInspectionResult, type LayoutNode, type ManagedDisplay, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type ProviderConnectionStatus, type ProviderDescriptor, type ProviderInstance, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
+import { BUILT_IN_WIDGET_DEFINITIONS, DISPLAY_PROFILES, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FillRole, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutNode, type ManagedDisplay, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type ProviderConnectionStatus, type ProviderDescriptor, type ProviderInstance, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
 import { SAMPLE_PROJECT } from "../../render-core/src/sample-project.js";
 import {
   deleteProviderInstance,
@@ -13,7 +13,6 @@ import {
   fetchFonts,
   fetchIcons,
   fetchLayoutPreview,
-  fetchLayoutPreviewBundle,
   fetchProject,
   fetchProjects,
   fetchProviderEntities,
@@ -29,8 +28,6 @@ import {
   type AssignmentForceUpdateResponse,
   type AssignmentScheduleStatusResponse,
   type FontSpecimenResponse,
-  type LayoutInspectionPreviewResponse,
-  type LayoutPreviewBundleResponse,
   type PreviewResponse
 } from "./api.js";
 import "./code-editor-field.js";
@@ -852,7 +849,6 @@ export class EpPaperEditorApp extends LitElement {
     uploadStatusMessage: { state: true },
     assignmentScheduleStatuses: { state: true },
     selectedPreviewTagMac: { state: true },
-    layoutInspection: { state: true },
     structureHoveredNodeId: { state: true },
     structureDraggedNodeId: { state: true },
     structureDropIntent: { state: true }
@@ -1175,7 +1171,6 @@ export class EpPaperEditorApp extends LitElement {
   declare private uploadStatusMessage: string;
   declare private assignmentScheduleStatuses: Record<string, AssignmentScheduleStatusResponse>;
   declare private selectedPreviewTagMac: string;
-  declare private layoutInspection: LayoutInspectionPreviewResponse | null;
   declare private structureHoveredNodeId: string;
   declare private structureDraggedNodeId: string;
   declare private structureDropIntent: StructureDropIntent | null;
@@ -1220,7 +1215,6 @@ export class EpPaperEditorApp extends LitElement {
     this.uploadStatusMessage = "";
     this.assignmentScheduleStatuses = {};
     this.selectedPreviewTagMac = "";
-    this.layoutInspection = null;
     this.structureHoveredNodeId = "";
     this.structureDraggedNodeId = "";
     this.structureDropIntent = null;
@@ -1393,7 +1387,6 @@ export class EpPaperEditorApp extends LitElement {
       this.previewMessage = "";
       this.previewWidth = 0;
       this.previewHeight = 0;
-      this.layoutInspection = null;
       this.structureHoveredNodeId = "";
       this.structureDraggedNodeId = "";
       this.structureDropIntent = null;
@@ -1403,31 +1396,28 @@ export class EpPaperEditorApp extends LitElement {
     this.previewHash = preview.hash;
     this.previewMessage = [
       preview.dataSourceMessage,
-      ...(preview.scriptWarnings ?? []),
-      ...(inspection?.scriptWarnings ?? [])
+      ...(preview.scriptWarnings ?? [])
     ].filter(Boolean).join("\n");
     this.previewWidth = preview.width;
     this.previewHeight = preview.height;
-    this.layoutInspection = inspection ?? null;
-    if (this.selectedNodeId && !this.currentInspectionNodeById(this.selectedNodeId)) {
+    if (this.selectedNodeId && !getNodeById(this.editorRootNode, this.selectedNodeId)) {
       this.structureHoveredNodeId = "";
       this.structureDropIntent = null;
     }
   }
 
-  private async fetchPagePreviewAndInspection(): Promise<readonly [PreviewResponse | undefined, LayoutInspectionPreviewResponse | undefined]> {
+  private async fetchPagePreviewAndInspection(): Promise<readonly [PreviewResponse | undefined, undefined]> {
     if (this.activePage === "layouts") {
       if (!this.selectedLayoutId) {
         return [undefined, undefined] as const;
       }
-      const response = await fetchLayoutPreviewBundle(
+      const preview = await fetchLayoutPreview(
         this.project.id,
         this.selectedLayoutId,
         undefined,
-        this.projectWithPreviewThemeForLayout(this.selectedLayoutId),
-        false
+        this.projectWithPreviewThemeForLayout(this.selectedLayoutId)
       );
-      return [response.preview, response.inspection] as const;
+      return [preview, undefined] as const;
     }
     if (this.activePage === "widgets") {
       const definition = this.selectedWidgetDefinition;
@@ -1440,14 +1430,7 @@ export class EpPaperEditorApp extends LitElement {
       }
       const tempLayoutId = "__widget-preview-layout";
       const tempProject = this.widgetPreviewProject(definition, displayTypeId);
-      const response = await fetchLayoutPreviewBundle(this.project.id, tempLayoutId, undefined, tempProject, true);
-      const inspection = response.inspection?.root?.nodeId === "__widget-preview-ref" && response.inspection.root.children[0]
-        ? {
-            ...response.inspection,
-            root: response.inspection.root.children[0]
-          }
-        : response.inspection;
-      return [response.preview, inspection] as const;
+      return [await fetchLayoutPreview(this.project.id, tempLayoutId, undefined, tempProject), undefined] as const;
     }
     return [await this.fetchPagePreview(), undefined] as const;
   }
@@ -2430,25 +2413,6 @@ export class EpPaperEditorApp extends LitElement {
 
   private get selectedEditorNode(): LayoutNode | undefined {
     return getNodeById(this.editorRootNode, this.selectedNodeId);
-  }
-
-  private currentInspectionNodeById(nodeId: string): LayoutInspectionNode | undefined {
-    const visit = (node: LayoutInspectionNode | undefined): LayoutInspectionNode | undefined => {
-      if (!node) {
-        return undefined;
-      }
-      if (node.nodeId === nodeId) {
-        return node;
-      }
-      for (const child of node.children) {
-        const found = visit(child);
-        if (found) {
-          return found;
-        }
-      }
-      return undefined;
-    };
-    return visit(this.layoutInspection?.root) ?? visit(this.layoutInspection?.popup);
   }
 
   private renderNavigation() {
