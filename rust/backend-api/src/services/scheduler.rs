@@ -163,7 +163,7 @@ pub(crate) async fn render_assigned_live(
         run_bridge_value(
             state,
             json!({
-                "op": "render-assigned-live",
+                "op": "layout-preview",
                 "projectId": project_id,
                 "body": {
                     "project": project,

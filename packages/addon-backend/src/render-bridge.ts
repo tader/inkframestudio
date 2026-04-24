@@ -11,8 +11,7 @@ import { installRustTextLayoutAdapter } from "./rust-text-engine.js";
 import { installProjectScriptingRuntime } from "./script-runtime.js";
 
 type BridgeRequest =
-  | { op: "layout-preview"; projectId: string; body?: unknown }
-  | { op: "render-assigned-live"; projectId: string; body?: unknown };
+  | { op: "layout-preview"; projectId: string; body?: unknown };
 
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
@@ -135,8 +134,15 @@ async function main(): Promise<void> {
       const project = projectFromRequest(request.projectId, request.body);
       const body = request.body as Record<string, unknown> | undefined;
       const layoutId = String(body?.layoutId ?? "");
+      const displayId = typeof body?.displayId === "string" ? String(body.displayId) : undefined;
       const popupLayoutId = typeof body?.popupLayoutId === "string" ? String(body.popupLayoutId) : undefined;
       const previewData = requiredRenderData(body);
+      if (displayId) {
+        process.stdout.write(
+          `${JSON.stringify(renderedResponse(renderAssignedDisplay(project, displayId, previewData.data), previewData.message))}\n`
+        );
+        return;
+      }
       const layout = project.layoutDefinitions?.find((entry) => entry.id === layoutId);
       const popup = popupLayoutId ? project.layoutDefinitions?.find((entry) => entry.id === popupLayoutId) : undefined;
       if (!layout) {
@@ -156,14 +162,6 @@ async function main(): Promise<void> {
         return;
       }
       process.stdout.write(`${JSON.stringify(renderedResponse(preview, previewData.message))}\n`);
-      return;
-    }
-    case "render-assigned-live": {
-      const project = projectFromRequest(request.projectId, request.body);
-      const body = request.body as Record<string, unknown> | undefined;
-      const displayId = String(body?.displayId ?? "");
-      const previewData = requiredRenderData(body);
-      process.stdout.write(`${JSON.stringify(renderedResponse(renderAssignedDisplay(project, displayId, previewData.data), previewData.message))}\n`);
       return;
     }
   }
