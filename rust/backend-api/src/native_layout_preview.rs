@@ -205,6 +205,16 @@ enum Node {
         width: Option<SizeSpec>,
         height: Option<SizeSpec>,
     },
+    Zstack {
+        #[allow(dead_code)]
+        id: String,
+        #[serde(default)]
+        children: Vec<Node>,
+        #[serde(default)]
+        style: LayoutStyle,
+        width: Option<SizeSpec>,
+        height: Option<SizeSpec>,
+    },
     PrimitiveInstance {
         #[allow(dead_code)]
         id: String,
@@ -332,6 +342,24 @@ fn theme_for_node<'a>(project: &'a ProjectView, style: &LayoutStyle) -> &'a Widg
 fn node_supported(node: &Node) -> bool {
     match node {
         Node::Stack {
+            children,
+            style,
+            width,
+            height,
+            ..
+        } => {
+            if style.border_token.is_some() {
+                return false;
+            }
+            if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
+                return false;
+            }
+            if !matches!(height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
+                return false;
+            }
+            children.iter().all(node_supported)
+        }
+        Node::Zstack {
             children,
             style,
             width,
@@ -622,6 +650,7 @@ fn child_rects(axis: &str, children: &[Node], frame: Rect) -> Vec<Rect> {
     for child in children {
         let (width, height, style, props_padding) = match child {
             Node::Stack { width, height, style, .. } => (width, height, style, None),
+            Node::Zstack { width, height, style, .. } => (width, height, style, None),
             Node::PrimitiveInstance { width, height, style, props, .. } => (width, height, style, props.padding_px),
             Node::Spacer { width, height, style, .. } => (width, height, style, None),
             Node::Unsupported => {
@@ -719,6 +748,19 @@ fn render_node(
             }
             for (child, child_frame) in children.iter().zip(rects.iter()) {
                 render_node(canvas, project, data, child, *child_frame, user_fonts)?;
+            }
+            Ok(())
+        }
+        Node::Zstack { children, style, .. } => {
+            let padding = style.padding_px.unwrap_or(0).max(0);
+            let inner = Rect {
+                x: frame.x + padding,
+                y: frame.y + padding,
+                w: (frame.w - padding * 2).max(1),
+                h: (frame.h - padding * 2).max(1),
+            };
+            for child in children {
+                render_node(canvas, project, data, child, inner, user_fonts)?;
             }
             Ok(())
         }
