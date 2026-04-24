@@ -3,16 +3,14 @@ import {
   registerUserFonts,
   renderAssignedDisplay,
   inspectLayoutDefinition,
-  renderLegacyProject,
   renderLayoutDefinition,
 } from "../../render-core/src/index.js";
 import { normalizeProject } from "../../render-core/src/themes.js";
-import type { Project, RenderData, Scenario } from "../../render-core/src/types.js";
+import type { Project, RenderData } from "../../render-core/src/types.js";
 import { installRustTextLayoutAdapter } from "./rust-text-engine.js";
 import { installProjectScriptingRuntime } from "./script-runtime.js";
 
 type BridgeRequest =
-  | { op: "preview"; projectId: string; body?: unknown }
   | { op: "layout-preview"; projectId: string; body?: unknown }
   | { op: "render-assigned-live"; projectId: string; body?: unknown };
 
@@ -22,25 +20,6 @@ async function readStdin(): Promise<string> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks).toString("utf8");
-}
-
-function buildScenario(project: Project, body: unknown): Scenario | undefined {
-  if (!body || typeof body !== "object") {
-    return undefined;
-  }
-  const candidate = body as Partial<Scenario>;
-  if (!candidate.id) {
-    return undefined;
-  }
-  return {
-    id: candidate.id,
-    name: candidate.name ?? "Ad hoc scenario",
-    frozenNow: candidate.frozenNow,
-    entityOverrides: candidate.entityOverrides,
-    queryOverrides: candidate.queryOverrides,
-    forcedScreenId: candidate.forcedScreenId,
-    forcedOverlayId: candidate.forcedOverlayId
-  };
 }
 
 function buildProjectOverride(projectId: string, body: unknown): Project | undefined {
@@ -152,36 +131,6 @@ async function main(): Promise<void> {
   registerUserFonts(providedUserFonts("body" in request ? request.body : undefined));
 
   switch (request.op) {
-    case "preview": {
-      const project = projectFromRequest(request.projectId, request.body);
-      const body = request.body as Record<string, unknown> | undefined;
-      const scenarioId = typeof body?.scenarioId === "string" ? String(body.scenarioId) : undefined;
-      const displayProfileId = String(
-        body?.displayProfileId ?? project.screens.find((screen) => screen.default)?.displayProfileId ?? "tri296x128-red"
-      );
-      const adHocScenario = buildScenario(project, body?.scenario);
-      const augmentedProject = adHocScenario
-        ? { ...project, scenarios: [...project.scenarios.filter((entry) => entry.id !== adHocScenario.id), adHocScenario] }
-        : project;
-      const previewData = requiredRenderData(body);
-      const previewLayout =
-        augmentedProject.layoutDefinitions?.find((entry) => entry.kind === "fullscreen" && entry.displayTypeId === displayProfileId) ??
-        augmentedProject.layoutDefinitions?.find((entry) => entry.kind === "fullscreen");
-      if (previewLayout?.rootNode) {
-        const themeId = augmentedProject.deviceAssignments?.find((entry) => entry.defaultFullscreenLayoutId === previewLayout.id)?.defaultThemeId;
-        const rendered = renderLayoutDefinition(augmentedProject, previewLayout, previewData.data, undefined, themeId);
-        process.stdout.write(`${JSON.stringify(renderedResponse(rendered, previewData.message))}\n`);
-        return;
-      }
-      const rendered = renderLegacyProject(
-        augmentedProject,
-        displayProfileId,
-        previewData.data,
-        scenarioId ?? adHocScenario?.id
-      );
-      process.stdout.write(`${JSON.stringify(renderedResponse(rendered, previewData.message))}\n`);
-      return;
-    }
     case "layout-preview": {
       const project = projectFromRequest(request.projectId, request.body);
       const body = request.body as Record<string, unknown> | undefined;

@@ -37,7 +37,7 @@ use reqwest::header::{ACCEPT, AUTHORIZATION};
 use reqwest::multipart::{Form, Part};
 use routes::fonts::{delete_font, import_font, list_fonts, rescan_fonts, update_font_metadata};
 use routes::previews::{
-    device_preview, font_specimens, layout_preview, live_data, preview, theme_preview,
+    device_preview, font_specimens, layout_preview, live_data, theme_preview,
 };
 use routes::projects::{get_project, list_projects, save_project};
 use routes::providers::{
@@ -649,7 +649,6 @@ fn app(state: AppState) -> Router {
         .route("/api/v2/projects", get(list_projects))
         .route("/api/v2/projects/:id", get(get_project).put(save_project))
         .route("/api/v2/projects/:id/live-data", get(live_data))
-        .route("/api/v2/projects/:id/preview", post(preview))
         .route("/api/v2/projects/:id/layout-preview", post(layout_preview))
         .route("/api/v2/projects/:id/device-preview", post(device_preview))
         .route("/api/v2/projects/:id/font-specimens", post(font_specimens))

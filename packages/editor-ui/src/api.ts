@@ -235,19 +235,6 @@ export function fetchLiveData(projectId: string): Promise<RenderData> {
   return requestJson(`${V2_API_BASE}/projects/${projectId}/live-data`);
 }
 
-export function fetchPreview(
-  projectId: string,
-  displayProfileId: string,
-  scenarioId?: string,
-  scenario?: Scenario,
-  project?: Project
-): Promise<PreviewResponse> {
-  return requestJson(`${V2_API_BASE}/projects/${projectId}/preview`, {
-    method: "POST",
-    body: JSON.stringify({ displayProfileId, scenarioId, scenario, project })
-  });
-}
-
 export function fetchFontSpecimens(
   projectId: string,
   displayProfileId: string,

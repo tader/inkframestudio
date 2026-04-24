@@ -45,26 +45,6 @@ fn inject_live_render_context(
     body
 }
 
-pub(crate) async fn preview(
-    State(state): State<AppState>,
-    AxumPath(project_id): AxumPath<String>,
-    Json(body): Json<Value>,
-) -> ApiResult<Value> {
-    let project = load_project_for_request(&state, &project_id, Some(&body)).await?;
-    let (data, message) = resolve_project_render_data_value(&state, &project, None).await?;
-    let user_fonts = load_user_font_data(&state).await?;
-    let body = inject_live_render_context(body, project, data, user_fonts, message);
-    let rendered: BridgeRenderResponse = serde_json::from_value(
-        run_bridge_value(
-            &state,
-            json!({ "op": "preview", "projectId": project_id, "body": body }),
-        )
-        .await?,
-    )
-    .map_err(|error| ApiError::internal(error.to_string()))?;
-    Ok(Json(bridge_render_preview_value(&rendered)?))
-}
-
 pub(crate) async fn layout_preview(
     State(state): State<AppState>,
     AxumPath(project_id): AxumPath<String>,
