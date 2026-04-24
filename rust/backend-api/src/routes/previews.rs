@@ -8,6 +8,7 @@ use crate::{
     app::AppState, bridge_render_preview_value, list_font_options, load_project_for_request,
     load_user_font_data,
     native_font_specimens::render_font_specimens_value,
+    native_layout_preview::try_render_layout_preview_value,
     native_theme_preview::render_theme_preview_value, run_bridge_value,
     services::{render_data::resolve_project_render_data_value, scheduler::render_assigned_live},
     ApiError, ApiResult,
@@ -54,6 +55,9 @@ pub(crate) async fn layout_preview(
     let layout_id = body.get("layoutId").and_then(Value::as_str);
     let (data, message) = resolve_project_render_data_value(&state, &project, layout_id).await?;
     let user_fonts = load_user_font_data(&state).await?;
+    if let Some(native) = try_render_layout_preview_value(&project, &user_fonts, &body, &data)? {
+        return Ok(Json(native));
+    }
     let body = inject_live_render_context(body, project, data, user_fonts, message);
     let response = run_bridge_value(
         &state,
