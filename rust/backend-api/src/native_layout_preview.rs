@@ -150,6 +150,30 @@ struct SizeSpec {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct GridTrack {
+    size: SizeSpec,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GridPlacement {
+    row: i32,
+    column: i32,
+    #[serde(rename = "rowSpan")]
+    row_span: Option<i32>,
+    #[serde(rename = "columnSpan")]
+    column_span: Option<i32>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GridChild {
+    placement: GridPlacement,
+    node: Node,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct LayoutStyle {
     #[serde(rename = "paddingPx")]
     padding_px: Option<i32>,
@@ -210,6 +234,20 @@ enum Node {
         id: String,
         #[serde(default)]
         children: Vec<Node>,
+        #[serde(default)]
+        style: LayoutStyle,
+        width: Option<SizeSpec>,
+        height: Option<SizeSpec>,
+    },
+    Grid {
+        #[allow(dead_code)]
+        id: String,
+        #[serde(default)]
+        rows: Vec<GridTrack>,
+        #[serde(default)]
+        columns: Vec<GridTrack>,
+        #[serde(default)]
+        children: Vec<GridChild>,
         #[serde(default)]
         style: LayoutStyle,
         width: Option<SizeSpec>,
@@ -376,6 +414,28 @@ fn node_supported(node: &Node) -> bool {
                 return false;
             }
             children.iter().all(node_supported)
+        }
+        Node::Grid {
+            rows,
+            columns,
+            children,
+            style,
+            width,
+            height,
+            ..
+        } => {
+            if style.border_token.is_some() || rows.is_empty() || columns.is_empty() {
+                return false;
+            }
+            if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
+                return false;
+            }
+            if !matches!(height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
+                return false;
+            }
+            rows.iter().all(|track| matches!(track.size.mode.as_deref(), None | Some("fill") | Some("fixed_px") | Some("fraction")))
+                && columns.iter().all(|track| matches!(track.size.mode.as_deref(), None | Some("fill") | Some("fixed_px") | Some("fraction")))
+                && children.iter().all(|child| node_supported(&child.node))
         }
         Node::PrimitiveInstance {
             primitive_type,
@@ -651,6 +711,7 @@ fn child_rects(axis: &str, children: &[Node], frame: Rect) -> Vec<Rect> {
         let (width, height, style, props_padding) = match child {
             Node::Stack { width, height, style, .. } => (width, height, style, None),
             Node::Zstack { width, height, style, .. } => (width, height, style, None),
+            Node::Grid { width, height, style, .. } => (width, height, style, None),
             Node::PrimitiveInstance { width, height, style, props, .. } => (width, height, style, props.padding_px),
             Node::Spacer { width, height, style, .. } => (width, height, style, None),
             Node::Unsupported => {
@@ -700,6 +761,44 @@ fn child_rects(axis: &str, children: &[Node], frame: Rect) -> Vec<Rect> {
             rect
         })
         .collect()
+}
+
+fn track_sizes(tracks: &[GridTrack], total: i32, gap: i32) -> Vec<i32> {
+    let gap_total = gap * (tracks.len().saturating_sub(1) as i32);
+    let available = (total - gap_total).max(0);
+    let mut fixed = 0;
+    let mut flex_count = 0;
+    let mut sizes = Vec::with_capacity(tracks.len());
+    for track in tracks {
+        let measured = get_size_value(&Some(track.size.clone()), available).map(|value| value.max(1));
+        if let Some(value) = measured {
+            fixed += value;
+            sizes.push(Some(value));
+        } else {
+            flex_count += 1;
+            sizes.push(None);
+        }
+    }
+    let remaining = (available - fixed).max(0);
+    let flex_size = if flex_count > 0 { remaining / flex_count } else { 0 };
+    sizes
+        .into_iter()
+        .map(|size| size.unwrap_or(flex_size.max(1)))
+        .collect()
+}
+
+fn grid_line_offsets(sizes: &[i32], start: i32, gap: i32) -> Vec<i32> {
+    let mut offsets = Vec::with_capacity(sizes.len() + 1);
+    let mut cursor = start;
+    offsets.push(cursor);
+    for (index, size) in sizes.iter().enumerate() {
+        cursor += *size;
+        offsets.push(cursor);
+        if index < sizes.len().saturating_sub(1) {
+            cursor += gap;
+        }
+    }
+    offsets
 }
 
 fn render_node(
@@ -761,6 +860,45 @@ fn render_node(
             };
             for child in children {
                 render_node(canvas, project, data, child, inner, user_fonts)?;
+            }
+            Ok(())
+        }
+        Node::Grid {
+            rows,
+            columns,
+            children,
+            style,
+            ..
+        } => {
+            let padding = style.padding_px.unwrap_or(0).max(0);
+            let gap = style.gap_px.unwrap_or(0).max(0);
+            let inner = Rect {
+                x: frame.x + padding,
+                y: frame.y + padding,
+                w: (frame.w - padding * 2).max(1),
+                h: (frame.h - padding * 2).max(1),
+            };
+            let row_sizes = track_sizes(rows, inner.h, gap);
+            let col_sizes = track_sizes(columns, inner.w, gap);
+            let row_offsets = grid_line_offsets(&row_sizes, inner.y, gap);
+            let col_offsets = grid_line_offsets(&col_sizes, inner.x, gap);
+            for child in children {
+                let row = child.placement.row.max(1) as usize;
+                let column = child.placement.column.max(1) as usize;
+                if row > row_sizes.len() || column > col_sizes.len() {
+                    continue;
+                }
+                let row_span = child.placement.row_span.unwrap_or(1).max(1) as usize;
+                let column_span = child.placement.column_span.unwrap_or(1).max(1) as usize;
+                let end_row = (row + row_span - 1).min(row_sizes.len());
+                let end_col = (column + column_span - 1).min(col_sizes.len());
+                let child_frame = Rect {
+                    x: col_offsets[column - 1],
+                    y: row_offsets[row - 1],
+                    w: col_offsets[end_col] - col_offsets[column - 1],
+                    h: row_offsets[end_row] - row_offsets[row - 1],
+                };
+                render_node(canvas, project, data, &child.node, child_frame, user_fonts)?;
             }
             Ok(())
         }
