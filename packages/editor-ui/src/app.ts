@@ -11,13 +11,10 @@ import {
   fetchDiscoveredDisplays,
   fetchFontSpecimens,
   fetchFonts,
-  fetchHomeAssistantEntities,
-  fetchHomeAssistantSettings,
   fetchIcons,
   fetchLayoutInspectionPreview,
   fetchLayoutPreview,
   fetchLayoutPreviewBundle,
-  fetchOpenEpaperLinkAccessPointSettings,
   fetchProject,
   fetchProjects,
   fetchProviderEntities,
@@ -25,22 +22,16 @@ import {
   importFont,
   rescanFonts,
   saveProviderInstance,
-  saveHomeAssistantSettings,
-  saveOpenEpaperLinkAccessPointSettings,
   saveProject,
   testProviderInstance,
-  testHomeAssistantConnection,
-  testOpenEpaperLinkAccessPointConnection,
   uploadPreviewToOpenEpaperLinkAccessPoint,
   updateFontMetadata,
   forceAssignmentUpdate,
   type AssignmentForceUpdateResponse,
   type AssignmentScheduleStatusResponse,
-  type HomeAssistantSettingsResponse,
   type FontSpecimenResponse,
   type LayoutInspectionPreviewResponse,
   type LayoutPreviewBundleResponse,
-  type OpenEpaperLinkAccessPointSettingsResponse,
   type PreviewResponse
 } from "./api.js";
 import "./code-editor-field.js";
@@ -90,13 +81,6 @@ type NodeCreateKind =
   | "foreach"
   | "script"
   | "if_else";
-
-function maskToken(hasToken: boolean, token: string): string {
-  if (token) {
-    return token;
-  }
-  return hasToken ? "********" : "";
-}
 
 function routeToPage(hash: string): PageId {
   const value = hash.replace(/^#\/?/, "");
@@ -866,12 +850,6 @@ export class EpPaperEditorApp extends LitElement {
     providerKinds: { state: true },
     providerInstances: { state: true },
     providerStatuses: { state: true },
-    homeAssistantSettings: { state: true },
-    homeAssistantTokenDraft: { state: true },
-    replaceHomeAssistantToken: { state: true },
-    homeAssistantStatus: { state: true },
-    openEpaperLinkAccessPointSettings: { state: true },
-    openEpaperLinkAccessPointStatus: { state: true },
     uploadStatusMessage: { state: true },
     assignmentScheduleStatuses: { state: true },
     selectedPreviewTagMac: { state: true },
@@ -1195,12 +1173,6 @@ export class EpPaperEditorApp extends LitElement {
   declare private providerKinds: ProviderDescriptor[];
   declare private providerInstances: ProviderInstance[];
   declare private providerStatuses: Record<string, ProviderConnectionStatus | null>;
-  declare private homeAssistantSettings: HomeAssistantSettingsResponse;
-  declare private homeAssistantTokenDraft: string;
-  declare private replaceHomeAssistantToken: boolean;
-  declare private homeAssistantStatus: ProviderConnectionStatus | null;
-  declare private openEpaperLinkAccessPointSettings: OpenEpaperLinkAccessPointSettingsResponse;
-  declare private openEpaperLinkAccessPointStatus: ProviderConnectionStatus | null;
   declare private uploadStatusMessage: string;
   declare private assignmentScheduleStatuses: Record<string, AssignmentScheduleStatusResponse>;
   declare private selectedPreviewTagMac: string;
@@ -1246,19 +1218,6 @@ export class EpPaperEditorApp extends LitElement {
     this.providerKinds = [];
     this.providerInstances = [];
     this.providerStatuses = {};
-    this.homeAssistantSettings = {
-      host: "",
-      token: "",
-      hasToken: false,
-      mode: "custom",
-      useSupervisorProxy: false,
-      allowInsecureTls: false
-    };
-    this.homeAssistantTokenDraft = "";
-    this.replaceHomeAssistantToken = false;
-    this.homeAssistantStatus = null;
-    this.openEpaperLinkAccessPointSettings = { url: "" };
-    this.openEpaperLinkAccessPointStatus = null;
     this.uploadStatusMessage = "";
     this.assignmentScheduleStatuses = {};
     this.selectedPreviewTagMac = "";
@@ -1298,14 +1257,12 @@ export class EpPaperEditorApp extends LitElement {
 
   private async initialize(): Promise<void> {
     try {
-      const [projectsResult, iconsResult, fontsResult, providerKindsResult, providerInstancesResult, settingsResult, accessPointSettingsResult] = await Promise.allSettled([
+      const [projectsResult, iconsResult, fontsResult, providerKindsResult, providerInstancesResult] = await Promise.allSettled([
         fetchProjects(),
         fetchIcons(),
         fetchFonts(),
         fetchProviderKinds(),
-        fetchProviderInstances(),
-        fetchHomeAssistantSettings(),
-        fetchOpenEpaperLinkAccessPointSettings()
+        fetchProviderInstances()
       ]);
       const projects = projectsResult.status === "fulfilled" ? projectsResult.value : [];
       this.projectSummaries = projects;
@@ -1313,20 +1270,6 @@ export class EpPaperEditorApp extends LitElement {
       this.fonts = fontsResult.status === "fulfilled" ? fontsResult.value : [];
       this.providerKinds = providerKindsResult.status === "fulfilled" ? providerKindsResult.value : [];
       this.providerInstances = providerInstancesResult.status === "fulfilled" ? providerInstancesResult.value : [];
-      this.homeAssistantSettings = settingsResult.status === "fulfilled"
-        ? settingsResult.value
-        : {
-            host: "",
-            token: "",
-            hasToken: false,
-            mode: "custom",
-            useSupervisorProxy: false,
-            allowInsecureTls: false
-          };
-      this.openEpaperLinkAccessPointSettings = accessPointSettingsResult.status === "fulfilled"
-        ? accessPointSettingsResult.value
-        : { url: "" };
-      this.homeAssistantTokenDraft = maskToken(this.homeAssistantSettings.hasToken, "");
       const sourceProvider = this.activeSourceProviderInstance;
       this.entityCatalog = sourceProvider ? await fetchProviderEntities(sourceProvider.id).catch(() => []) : [];
       if (projects[0]) {
@@ -2275,28 +2218,9 @@ export class EpPaperEditorApp extends LitElement {
     ];
   }
 
-  private syncLegacyProviderSettings(): void {
-    const homeAssistant = this.providerInstances.find((instance) => instance.providerId === "home-assistant");
-    const accessPoint = this.providerInstances.find((instance) => instance.providerId === "openepaperlink-ap");
-    this.homeAssistantSettings = {
-      host: String(homeAssistant?.config.host ?? ""),
-      token: String(homeAssistant?.config.token ?? ""),
-      hasToken: String(homeAssistant?.config.token ?? "") === "********",
-      mode: homeAssistant?.config.mode === "supervisor" ? "supervisor" : "custom",
-      useSupervisorProxy: Boolean(homeAssistant?.config.useSupervisorProxy),
-      allowInsecureTls: Boolean(homeAssistant?.config.allowInsecureTls)
-    };
-    this.openEpaperLinkAccessPointSettings = {
-      url: String(accessPoint?.config.url ?? ""),
-      defaultTestDisplayMac: String(accessPoint?.config.defaultTestDisplayMac ?? "")
-    };
-    this.homeAssistantTokenDraft = maskToken(this.homeAssistantSettings.hasToken, "");
-  }
-
   private async refreshProviderState(): Promise<void> {
     this.providerKinds = await fetchProviderKinds().catch(() => this.providerKinds);
     this.providerInstances = await fetchProviderInstances().catch(() => this.providerInstances);
-    this.syncLegacyProviderSettings();
   }
 
   private updateProviderInstanceDraft(instanceId: string, key: string, value: unknown): void {
@@ -2354,42 +2278,6 @@ export class EpPaperEditorApp extends LitElement {
     const sourceProvider = this.activeSourceProviderInstance;
     this.entityCatalog = sourceProvider ? await fetchProviderEntities(sourceProvider.id).catch(() => this.entityCatalog) : [];
     await this.refreshPreview();
-  }
-
-  private async saveConnection(): Promise<void> {
-    this.homeAssistantSettings = await saveHomeAssistantSettings({
-      ...this.homeAssistantSettings,
-      token: this.homeAssistantTokenDraft === "********" ? "" : this.homeAssistantTokenDraft,
-      replaceToken: this.replaceHomeAssistantToken || (this.homeAssistantTokenDraft !== "" && this.homeAssistantTokenDraft !== "********")
-    });
-    this.replaceHomeAssistantToken = false;
-    this.homeAssistantTokenDraft = maskToken(this.homeAssistantSettings.hasToken, "");
-    await this.refreshProviderState();
-    this.entityCatalog = await fetchHomeAssistantEntities().catch(() => []);
-    await this.refreshPreview();
-  }
-
-  private async testConnection(): Promise<void> {
-    this.homeAssistantStatus = await testHomeAssistantConnection({
-      ...this.homeAssistantSettings,
-      token: this.homeAssistantTokenDraft === "********" ? "" : this.homeAssistantTokenDraft,
-      replaceToken: this.replaceHomeAssistantToken || (this.homeAssistantTokenDraft !== "" && this.homeAssistantTokenDraft !== "********")
-    });
-  }
-
-  private async saveAccessPointSettings(): Promise<void> {
-    this.openEpaperLinkAccessPointSettings = await saveOpenEpaperLinkAccessPointSettings({
-      url: this.openEpaperLinkAccessPointSettings.url,
-      defaultTestDisplayMac: this.openEpaperLinkAccessPointSettings.defaultTestDisplayMac
-    });
-    await this.refreshProviderState();
-    this.discoveredDisplays = await fetchDiscoveredDisplays(this.project.id).catch(() => this.discoveredDisplays);
-  }
-
-  private async testAccessPointConnection(): Promise<void> {
-    this.openEpaperLinkAccessPointStatus = await testOpenEpaperLinkAccessPointConnection({
-      url: this.openEpaperLinkAccessPointSettings.url
-    });
   }
 
   private async forceSelectedAssignmentUpdate(): Promise<void> {
@@ -2513,7 +2401,7 @@ export class EpPaperEditorApp extends LitElement {
   private get effectivePreviewTagMac(): string {
     const options = this.previewUploadCandidates;
     const selected = this.selectedPreviewTagMac;
-    const defaultMac = this.openEpaperLinkAccessPointSettings.defaultTestDisplayMac ?? "";
+    const defaultMac = String(this.activeDisplayProviderInstance?.config.defaultTestDisplayMac ?? "");
     if (selected && options.some((candidate) => candidateMac(candidate) === selected)) {
       return selected;
     }

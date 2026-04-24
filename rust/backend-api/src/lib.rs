@@ -49,10 +49,6 @@ use routes::previews::{
     device_preview, font_specimens, layout_inspection_preview, layout_preview, live_data, preview,
     theme_preview,
 };
-use routes::settings::{
-    get_home_assistant_settings, get_openepaperlink_settings, save_home_assistant_settings,
-    save_openepaperlink_settings, test_home_assistant_settings, test_openepaperlink_settings,
-};
 use routes::system::{healthz, list_display_profiles, list_icons};
 use routes::system::{__path_healthz, __path_list_display_profiles, __path_list_icons};
 use services::scheduler::spawn_assignment_scheduler;
@@ -130,19 +126,6 @@ struct HomeAssistantSettingsResponse {
     allow_insecure_tls: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
-struct HomeAssistantSettingsInput {
-    host: Option<String>,
-    token: Option<String>,
-    #[serde(rename = "replaceToken")]
-    replace_token: Option<bool>,
-    mode: Option<String>,
-    #[serde(rename = "useSupervisorProxy")]
-    use_supervisor_proxy: Option<bool>,
-    #[serde(rename = "allowInsecureTls")]
-    allow_insecure_tls: Option<bool>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 struct HomeAssistantConnectionStatus {
     ok: bool,
@@ -160,13 +143,6 @@ struct HomeAssistantConnectionStatus {
 pub(crate) struct OpenEpaperLinkAccessPointSettings {
     url: String,
     #[serde(rename = "defaultTestDisplayMac", skip_serializing_if = "Option::is_none")]
-    default_test_display_mac: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
-struct OpenEpaperLinkAccessPointSettingsInput {
-    url: Option<String>,
-    #[serde(rename = "defaultTestDisplayMac")]
     default_test_display_mac: Option<String>,
 }
 
@@ -645,22 +621,6 @@ fn app(state: AppState) -> Router {
         .route("/api/v2/fonts/import", post(import_font))
         .route("/api/v2/fonts/rescan", post(rescan_fonts))
         .route("/api/v2/fonts/:id", delete(delete_font).patch(update_font_metadata))
-        .route(
-            "/api/v2/settings/home-assistant",
-            get(get_home_assistant_settings).put(save_home_assistant_settings),
-        )
-        .route(
-            "/api/v2/settings/home-assistant/test",
-            post(test_home_assistant_settings),
-        )
-        .route(
-            "/api/v2/settings/openepaperlink-access-point",
-            get(get_openepaperlink_settings).put(save_openepaperlink_settings),
-        )
-        .route(
-            "/api/v2/settings/openepaperlink-access-point/test",
-            post(test_openepaperlink_settings),
-        )
         .route("/api/v2/projects", get(list_projects))
         .route("/api/v2/projects/:id", get(get_project).put(save_project))
         .route("/api/v2/projects/:id/live-data", get(live_data))
@@ -905,23 +865,6 @@ pub(crate) fn font_files(font: &StoredFontFamily) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-fn default_home_assistant_settings() -> HomeAssistantSettingsStored {
-    HomeAssistantSettingsStored {
-        host: String::new(),
-        token: String::new(),
-        mode: "custom".into(),
-        use_supervisor_proxy: false,
-        allow_insecure_tls: false,
-    }
-}
-
-fn default_openepaperlink_settings() -> OpenEpaperLinkAccessPointSettings {
-    OpenEpaperLinkAccessPointSettings {
-        url: String::new(),
-        default_test_display_mac: Some(String::new()),
-    }
-}
-
 pub(crate) fn home_assistant_settings_from_instance(instance: &ProviderInstance) -> HomeAssistantSettingsStored {
     HomeAssistantSettingsStored {
         host: instance
@@ -971,24 +914,6 @@ pub(crate) fn openepaperlink_settings_from_instance(instance: &ProviderInstance)
                 .unwrap_or_default()
                 .to_string(),
         ),
-    }
-}
-
-fn masked_home_assistant_settings(
-    settings: Option<&HomeAssistantSettingsStored>,
-) -> HomeAssistantSettingsResponse {
-    let settings = settings.cloned().unwrap_or_else(default_home_assistant_settings);
-    HomeAssistantSettingsResponse {
-        host: settings.host,
-        token: if settings.token.is_empty() {
-            String::new()
-        } else {
-            "********".into()
-        },
-        has_token: !settings.token.is_empty(),
-        mode: settings.mode,
-        use_supervisor_proxy: settings.use_supervisor_proxy,
-        allow_insecure_tls: settings.allow_insecure_tls,
     }
 }
 

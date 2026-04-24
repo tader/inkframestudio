@@ -340,10 +340,18 @@ pub(crate) async fn upload_device_image_for_display(
             "Display is not managed by an OpenEPaperLink access point",
         ));
     }
-    let settings = read_settings(state)
-        .await?
-        .openepaperlink_access_point
-        .unwrap_or_else(crate::default_openepaperlink_settings);
+    let provider_instance_id = display
+        .get("displayProviderInstanceId")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            (display.get("providerKind").and_then(Value::as_str) == Some("openepaperlink-ap"))
+                .then_some("openepaperlink-ap-default")
+        })
+        .unwrap_or("openepaperlink-ap-default");
+    let settings_store = read_settings(state).await?;
+    let provider_instance = find_provider_instance(&settings_store, provider_instance_id)
+        .ok_or_else(|| ApiError::bad_request("OpenEPaperLink provider instance is not configured"))?;
+    let settings = openepaperlink_settings_from_instance(&provider_instance);
     if settings.url.trim().is_empty() {
         return Err(ApiError::bad_request(
             "OpenEPaperLink access point URL is not configured",

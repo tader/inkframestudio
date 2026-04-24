@@ -149,52 +149,6 @@ describe("epaper editor app", () => {
           { status: 200 }
         );
       }
-      if (url.endsWith("/api/v2/settings/home-assistant")) {
-        if (init?.method === "PUT") {
-          return new Response(JSON.stringify({
-            host: "https://ha.local",
-            token: "********",
-            hasToken: true,
-            mode: "custom",
-            useSupervisorProxy: false,
-            allowInsecureTls: false
-          }), { status: 200 });
-        }
-        return new Response(JSON.stringify({
-          host: "",
-          token: "",
-          hasToken: false,
-          mode: "custom",
-          useSupervisorProxy: false,
-          allowInsecureTls: false
-        }), { status: 200 });
-      }
-      if (url.endsWith("/api/v2/settings/home-assistant/test")) {
-        return new Response(JSON.stringify({
-          ok: true,
-          mode: "custom",
-          message: "Connected to Home Assistant"
-        }), { status: 200 });
-      }
-      if (url.endsWith("/api/v2/settings/openepaperlink-access-point")) {
-        if (init?.method === "PUT") {
-          return new Response(JSON.stringify({
-            url: "http://192.168.1.170",
-            defaultTestDisplayMac: "00000219BC483B18"
-          }), { status: 200 });
-        }
-        return new Response(JSON.stringify({
-          url: "",
-          defaultTestDisplayMac: ""
-        }), { status: 200 });
-      }
-      if (url.endsWith("/api/v2/settings/openepaperlink-access-point/test")) {
-        return new Response(JSON.stringify({
-          ok: true,
-          message: "Connected to OpenEPaperLink access point",
-          tagCount: 8
-        }), { status: 200 });
-      }
       if (url.endsWith("/api/v2/projects")) {
         return new Response(JSON.stringify([{ id: SAMPLE_PROJECT.id, name: SAMPLE_PROJECT.name, version: SAMPLE_PROJECT.version }]), { status: 200 });
       }
