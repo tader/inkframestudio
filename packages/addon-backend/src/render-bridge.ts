@@ -3,15 +3,12 @@ import {
   DISPLAY_PROFILES,
   registerUserFonts,
   renderAssignedDisplay,
-  renderFontSpecimenSheets,
   inspectLayoutDefinition,
   renderLegacyProject,
   renderLayoutDefinition,
 } from "../../render-core/src/index.js";
-import { renderThemePreviewImage } from "../../render-core/src/theme-preview.js";
 import { normalizeProject } from "../../render-core/src/themes.js";
 import type { FontOption, Project, RenderData, Scenario } from "../../render-core/src/types.js";
-import { rgbaToPngBuffer } from "./png.js";
 import { installRustTextLayoutAdapter } from "./rust-text-engine.js";
 import { installProjectScriptingRuntime } from "./script-runtime.js";
 
@@ -19,8 +16,6 @@ type BridgeRequest =
   | { op: "preview"; projectId: string; body?: unknown }
   | { op: "layout-preview"; projectId: string; body?: unknown }
   | { op: "device-preview"; projectId: string; body?: unknown }
-  | { op: "font-specimens"; projectId: string; body?: unknown }
-  | { op: "theme-preview"; projectId: string; body?: unknown }
   | { op: "render-project-live"; projectId: string; body?: unknown }
   | { op: "render-assigned-live"; projectId: string; body?: unknown };
 
@@ -225,75 +220,6 @@ async function main(): Promise<void> {
       const displayId = String(body?.displayId ?? "");
       const previewData = requiredRenderData(body);
       process.stdout.write(`${JSON.stringify(renderedResponse(renderAssignedDisplay(project, displayId, previewData.data), previewData.message))}\n`);
-      return;
-    }
-    case "font-specimens": {
-      const project = projectFromRequest(request.projectId, request.body);
-      const body = request.body as Record<string, unknown> | undefined;
-      const displayProfileId = String(
-        body?.displayProfileId ?? project.screens.find((screen) => screen.default)?.displayProfileId ?? "tri296x128-red"
-      );
-      const profile = DISPLAY_PROFILES.find((candidate) => candidate.id === displayProfileId) ?? DISPLAY_PROFILES[0];
-      const sampleText = String(body?.sampleText ?? "Ag 09:45 bdpq RH 21.5C");
-      const minSize = Math.max(4, Number(body?.minSize ?? 4));
-      const maxSize = Math.min(36, Number(body?.maxSize ?? 36));
-      const familyId = typeof body?.familyId === "string" ? String(body.familyId) : "";
-      const fonts = (providedFontOptions(body) ?? BUILT_IN_FONT_OPTIONS)
-        .filter((entry) => !familyId || entry.id === familyId);
-      const families = renderFontSpecimenSheets(
-        profile,
-        project,
-        sampleText,
-        minSize,
-        maxSize,
-        fonts,
-        Boolean(body?.includeAllSizes)
-      ).map((family) => ({
-        family: family.family,
-        label: family.label,
-        source: family.source,
-        allowedPixelSizes: family.allowedPixelSizes,
-        importSource: fonts.find((entry) => entry.id === family.family)?.importSource,
-        sourceUrl: fonts.find((entry) => entry.id === family.family)?.sourceUrl,
-        previewUrl: fonts.find((entry) => entry.id === family.family)?.previewUrl,
-        declaredPixelSize: fonts.find((entry) => entry.id === family.family)?.declaredPixelSize,
-        licenseCategory: fonts.find((entry) => entry.id === family.family)?.licenseCategory,
-        variants: family.variants.map((variant) => ({
-          weight: variant.weight,
-          slope: variant.slope,
-          variantKey: variant.variantKey,
-          tiles: variant.tiles.map((tile) => ({
-            size: tile.size,
-            width: tile.width,
-            height: tile.height,
-            pngBase64: rgbaToPngBuffer(tile.width, tile.height, tile.rgba).toString("base64")
-          }))
-        }))
-      }));
-      process.stdout.write(`${JSON.stringify({ families })}\n`);
-      return;
-    }
-    case "theme-preview": {
-      const project = projectFromRequest(request.projectId, request.body);
-      const body = request.body as Record<string, unknown> | undefined;
-      const themeId = String(body?.themeId ?? "");
-      const displayTypeId = String(body?.displayTypeId ?? project.displayTypes?.[0]?.id ?? "");
-      const theme = project.themes.find((entry) => entry.id === themeId);
-      const displayType = project.displayTypes?.find((entry) => entry.id === displayTypeId);
-      if (!theme || !displayType) {
-        throw new Error("Unknown theme preview target");
-      }
-      const rendered = renderThemePreviewImage(theme, displayType, project.fontPresets);
-      process.stdout.write(
-        `${JSON.stringify({
-          width: rendered.width,
-          height: rendered.height,
-          hash: `theme:${theme.id}:${displayType.id}`,
-          activeScreenId: `theme-preview:${theme.id}`,
-          dataSourceMessage: "Theme preview",
-          rgba: Array.from(rendered.rgba)
-        })}\n`
-      );
       return;
     }
     case "render-project-live": {

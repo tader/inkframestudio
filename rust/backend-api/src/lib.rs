@@ -1,6 +1,7 @@
 pub mod app;
 pub mod error;
 mod font_assets;
+mod native_font_specimens;
 mod native_theme_preview;
 pub mod providers;
 pub mod routes;
@@ -561,10 +562,6 @@ pub(crate) async fn run_bridge_value(_state: &AppState, payload: Value) -> Resul
         )));
     }
     serde_json::from_slice(&output.stdout).map_err(|error| ApiError::internal(error.to_string()))
-}
-
-pub(crate) async fn bridge_json_response(state: &AppState, payload: Value) -> ApiResult<Value> {
-    Ok(Json(run_bridge_value(state, payload).await?))
 }
 
 fn project_override_from_body(project_id: &str, body: &Value) -> Option<Value> {

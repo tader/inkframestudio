@@ -5,8 +5,9 @@ use axum::{
 use serde_json::{json, Value};
 
 use crate::{
-    app::AppState, bridge_json_response, bridge_render_preview_value, built_in_font_options,
+    app::AppState, bridge_render_preview_value, built_in_font_options,
     list_font_options, load_project_for_request, load_user_font_data,
+    native_font_specimens::render_font_specimens_value,
     native_theme_preview::render_theme_preview_value, run_bridge_value,
     services::render_data::resolve_project_render_data_value, ApiError, ApiResult,
     BridgeRenderResponse,
@@ -125,20 +126,38 @@ pub(crate) async fn font_specimens(
     } else {
         available_fonts
     };
-    let mut body = body;
-    if let Some(object) = body.as_object_mut() {
-        object.insert("project".into(), project);
-        object.insert("userFonts".into(), user_fonts);
-        object.insert(
-            "fonts".into(),
-            serde_json::to_value(fonts).map_err(|error| ApiError::internal(error.to_string()))?,
-        );
-    }
-    bridge_json_response(
-        &state,
-        json!({ "op": "font-specimens", "projectId": project_id, "body": body }),
-    )
-    .await
+    let display_profile_id = body
+        .get("displayProfileId")
+        .and_then(Value::as_str)
+        .unwrap_or("tri296x128-red");
+    let profile = state
+        .display_profiles
+        .iter()
+        .find(|entry| entry.id == display_profile_id)
+        .or_else(|| state.display_profiles.first())
+        .ok_or_else(|| ApiError::internal("No display profiles loaded"))?;
+    let sample_text = body
+        .get("sampleText")
+        .and_then(Value::as_str)
+        .unwrap_or("Ag 09:45 bdpq RH 21.5C");
+    let min_size = body.get("minSize").and_then(Value::as_i64).unwrap_or(4) as i32;
+    let max_size = body.get("maxSize").and_then(Value::as_i64).unwrap_or(36) as i32;
+    let family_id = body.get("familyId").and_then(Value::as_str);
+    let include_all_sizes = body
+        .get("includeAllSizes")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok(Json(render_font_specimens_value(
+        &project,
+        &user_fonts,
+        profile,
+        sample_text,
+        min_size.max(1),
+        max_size.max(min_size.max(1)),
+        &fonts,
+        family_id,
+        include_all_sizes,
+    )?))
 }
 
 pub(crate) async fn theme_preview(
