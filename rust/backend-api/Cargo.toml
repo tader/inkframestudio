@@ -8,6 +8,7 @@ epd-text-engine = { path = "../text-engine" }
 async-trait = "0.1"
 axum = "0.7"
 base64 = "0.22"
+boa_engine = "0.19"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 futures = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

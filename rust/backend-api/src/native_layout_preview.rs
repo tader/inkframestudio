@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use base64::Engine;
+use boa_engine::{Context as BoaContext, Source};
 use epd_text_engine::{
     render as render_text_layout, FontFamilyData as EngineFontFamilyData,
     FontPresets as EngineFontPresets, LayoutRequest, TextLayoutRun,
@@ -18,6 +19,12 @@ const COLOR_ACCENT: u8 = 2;
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProjectView {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    locale: String,
     themes: Vec<WidgetTheme>,
     #[serde(rename = "displayTypes")]
     display_types: Vec<DisplayType>,
@@ -215,6 +222,35 @@ struct WidgetProps {
     auto_fit: Option<bool>,
 }
 
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScriptNode {
+    #[allow(dead_code)]
+    id: String,
+    source: String,
+    child: Option<Box<Node>>,
+    #[serde(default)]
+    bindings: HashMap<String, String>,
+    #[serde(default)]
+    style: LayoutStyle,
+    width: Option<SizeSpec>,
+    height: Option<SizeSpec>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IfElseNode {
+    #[allow(dead_code)]
+    id: String,
+    condition: String,
+    then_child: Option<Box<Node>>,
+    else_child: Option<Box<Node>>,
+    #[serde(default)]
+    style: LayoutStyle,
+    width: Option<SizeSpec>,
+    height: Option<SizeSpec>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Node {
@@ -253,6 +289,8 @@ enum Node {
         width: Option<SizeSpec>,
         height: Option<SizeSpec>,
     },
+    Script(ScriptNode),
+    IfElse(IfElseNode),
     PrimitiveInstance {
         #[allow(dead_code)]
         id: String,
@@ -363,6 +401,13 @@ fn node_padding(style: &LayoutStyle, props_padding: Option<i32>) -> i32 {
     props_padding.unwrap_or(style.padding_px.unwrap_or(0)).max(0)
 }
 
+fn unsupported_border(style: &LayoutStyle) -> bool {
+    style
+        .border_token
+        .as_deref()
+        .is_some_and(|value| value != "none")
+}
+
 fn theme_for_node<'a>(project: &'a ProjectView, style: &LayoutStyle) -> &'a WidgetTheme {
     if let Some(theme_id) = style.theme_id.as_deref() {
         if let Some(theme) = project.themes.iter().find(|theme| theme.id == theme_id) {
@@ -386,7 +431,7 @@ fn node_supported(node: &Node) -> bool {
             height,
             ..
         } => {
-            if style.border_token.is_some() {
+            if unsupported_border(style) {
                 return false;
             }
             if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
@@ -404,7 +449,7 @@ fn node_supported(node: &Node) -> bool {
             height,
             ..
         } => {
-            if style.border_token.is_some() {
+            if unsupported_border(style) {
                 return false;
             }
             if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
@@ -424,7 +469,7 @@ fn node_supported(node: &Node) -> bool {
             height,
             ..
         } => {
-            if style.border_token.is_some() || rows.is_empty() || columns.is_empty() {
+            if unsupported_border(style) || rows.is_empty() || columns.is_empty() {
                 return false;
             }
             if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
@@ -436,6 +481,32 @@ fn node_supported(node: &Node) -> bool {
             rows.iter().all(|track| matches!(track.size.mode.as_deref(), None | Some("fill") | Some("fixed_px") | Some("fraction")))
                 && columns.iter().all(|track| matches!(track.size.mode.as_deref(), None | Some("fill") | Some("fixed_px") | Some("fraction")))
                 && children.iter().all(|child| node_supported(&child.node))
+        }
+        Node::Script(node) => {
+            if unsupported_border(&node.style) {
+                return false;
+            }
+            if !matches!(node.width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")) {
+                return false;
+            }
+            if !matches!(node.height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")) {
+                return false;
+            }
+            node.bindings.values().all(|value| binding_supported(value))
+                && node.child.as_deref().is_some_and(node_supported)
+        }
+        Node::IfElse(node) => {
+            if unsupported_border(&node.style) {
+                return false;
+            }
+            if !matches!(node.width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")) {
+                return false;
+            }
+            if !matches!(node.height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")) {
+                return false;
+            }
+            node.then_child.as_deref().is_none_or(node_supported)
+                && node.else_child.as_deref().is_none_or(node_supported)
         }
         Node::PrimitiveInstance {
             primitive_type,
@@ -449,7 +520,7 @@ fn node_supported(node: &Node) -> bool {
             if !matches!(primitive_type.as_str(), "text" | "number") {
                 return false;
             }
-            if style.border_token.is_some() {
+            if unsupported_border(style) {
                 return false;
             }
             if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction")) {
@@ -459,15 +530,17 @@ fn node_supported(node: &Node) -> bool {
                 return false;
             }
             if props.text.as_deref().is_some_and(|value| value.contains("{{") || value.contains('\n')) {
+                if !props.text.as_deref().is_some_and(template_supported) {
+                    return false;
+                }
+            }
+            if props.prefix.as_deref().is_some_and(|value| !template_supported(value)) {
                 return false;
             }
-            if props.prefix.as_deref().is_some_and(|value| value.contains("{{")) {
+            if props.suffix.as_deref().is_some_and(|value| !template_supported(value)) {
                 return false;
             }
-            if props.suffix.as_deref().is_some_and(|value| value.contains("{{")) {
-                return false;
-            }
-            if props.unit.as_deref().is_some_and(|value| value.contains("{{")) {
+            if props.unit.as_deref().is_some_and(|value| !template_supported(value)) {
                 return false;
             }
             bindings.keys().all(|key| key == "entity")
@@ -478,6 +551,152 @@ fn node_supported(node: &Node) -> bool {
         }
         Node::Unsupported => false,
     }
+}
+
+fn simple_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) if first == '_' || first.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn template_supported(value: &str) -> bool {
+    let mut rest = value;
+    while let Some(start) = rest.find("{{") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else {
+            return false;
+        };
+        let expr = after[..end].trim();
+        if expr.is_empty() || expr.contains('|') || expr.contains('(') || expr.contains(')') || expr.contains('$') {
+            return false;
+        }
+        if !expr.split('.').all(simple_identifier) {
+            return false;
+        }
+        rest = &after[end + 2..];
+    }
+    true
+}
+
+fn binding_supported(value: &str) -> bool {
+    template_supported(value)
+}
+
+fn scope_value(scope: &Value, path: &str) -> Option<Value> {
+    let mut current = scope;
+    for segment in path.split('.') {
+        current = current.get(segment)?;
+    }
+    Some(current.clone())
+}
+
+fn render_template(value: &str, scope: &Value) -> Option<String> {
+    if !value.contains("{{") {
+        return Some(value.to_string());
+    }
+    if !template_supported(value) {
+        return None;
+    }
+    let mut out = String::new();
+    let mut rest = value;
+    while let Some(start) = rest.find("{{") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let end = after.find("}}")?;
+        let expr = after[..end].trim();
+        let resolved = scope_value(scope, expr)?;
+        match resolved {
+            Value::Null => {}
+            Value::String(text) => out.push_str(&text),
+            other => out.push_str(&other.to_string()),
+        }
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    Some(out)
+}
+
+fn merge_scope(scope: &Value, derived: &Value) -> Value {
+    let mut merged = scope.clone();
+    if let (Some(scope_object), Some(derived_object)) = (merged.as_object_mut(), derived.as_object()) {
+        for (key, value) in derived_object {
+            scope_object.insert(key.clone(), value.clone());
+        }
+    }
+    merged
+}
+
+fn globals_value(project: &ProjectView, data: &Value, frame: Rect) -> Value {
+    let now = data
+        .get("now")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| chrono::Local::now().to_rfc3339());
+    let today = now.get(..10).unwrap_or("").to_string();
+    json!({
+        "now": now,
+        "today": today,
+        "locale": if project.locale.is_empty() { "en-US" } else { &project.locale },
+        "display": {
+            "id": "",
+            "width": frame.w,
+            "height": frame.h,
+            "rotation": 0,
+        },
+        "project": {
+            "id": project.id,
+            "name": project.name,
+        }
+    })
+}
+
+fn scope_declarations(scope: &Value) -> String {
+    let mut declarations = String::new();
+    if let Some(object) = scope.as_object() {
+        for key in object.keys().filter(|key| simple_identifier(key)) {
+            declarations.push_str("const ");
+            declarations.push_str(key);
+            declarations.push_str(" = scope[");
+            declarations.push_str(&serde_json::to_string(key).unwrap_or_else(|_| "\"\"".into()));
+            declarations.push_str("];\n");
+        }
+    }
+    declarations
+}
+
+fn run_js_json(script: &str, scope: &Value, bindings: &Value, globals: &Value) -> Result<Value, ApiError> {
+    let mut context = BoaContext::default();
+    let scope_json = serde_json::to_string(scope).map_err(|error| ApiError::internal(error.to_string()))?;
+    let bindings_json = serde_json::to_string(bindings).map_err(|error| ApiError::internal(error.to_string()))?;
+    let globals_json = serde_json::to_string(globals).map_err(|error| ApiError::internal(error.to_string()))?;
+    let source = format!(
+        "(function(){{ const scope = {scope_json}; const bindings = {bindings_json}; const globals = {globals_json}; const locale = globals.locale; const shared = {{}}; const helpers = {{}}; function warn(_msg){{}}; {decls} return JSON.stringify((function(){{ {script} }})()); }})()",
+        decls = scope_declarations(scope)
+    );
+    let value = context
+        .eval(Source::from_bytes(source.as_bytes()))
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    let text = value
+        .to_string(&mut context)
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .to_std_string_escaped();
+    serde_json::from_str(&text).map_err(|error| ApiError::internal(error.to_string()))
+}
+
+fn evaluate_js_bool(expression: &str, scope: &Value) -> Result<bool, ApiError> {
+    let mut context = BoaContext::default();
+    let scope_json = serde_json::to_string(scope).map_err(|error| ApiError::internal(error.to_string()))?;
+    let source = format!(
+        "(function(){{ const scope = {scope_json}; {decls} return Boolean({expression}); }})()",
+        decls = scope_declarations(scope)
+    );
+    let value = context
+        .eval(Source::from_bytes(source.as_bytes()))
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    Ok(value.to_boolean())
 }
 
 fn text_run(
@@ -588,7 +807,7 @@ fn draw_text_run(canvas: &mut IndexedCanvas, run: &TextLayoutRun, x: i32, y: i32
 fn render_primitive(
     canvas: &mut IndexedCanvas,
     project: &ProjectView,
-    data: &Value,
+    scope: &Value,
     node: &Node,
     frame: Rect,
     user_fonts: &HashMap<String, RuntimeFontFamilyData>,
@@ -614,10 +833,14 @@ fn render_primitive(
         let text = if props.render_entity_state.unwrap_or(false) {
             bindings
                 .get("entity")
-                .map(|entity_id| entity_state_text(data, entity_id))
+                .map(|entity_id| entity_state_text(scope, entity_id))
                 .unwrap_or_default()
         } else {
-            props.text.clone().unwrap_or_default()
+            props
+                .text
+                .as_deref()
+                .and_then(|value| render_template(value, scope))
+                .unwrap_or_default()
         };
         (
             text,
@@ -642,16 +865,24 @@ fn render_primitive(
     } else {
         let mut value = bindings
             .get("entity")
-            .map(|entity_id| entity_state_text(data, entity_id))
+            .map(|entity_id| entity_state_text(scope, entity_id))
             .unwrap_or_default();
         if let Some(unit) = &props.unit {
-            value.push_str(unit);
+            value.push_str(&render_template(unit, scope).unwrap_or_else(|| unit.clone()));
         }
         let text = format!(
             "{}{}{}",
-            props.prefix.clone().unwrap_or_default(),
+            props
+                .prefix
+                .as_deref()
+                .and_then(|value| render_template(value, scope))
+                .unwrap_or_default(),
             value,
-            props.suffix.clone().unwrap_or_default()
+            props
+                .suffix
+                .as_deref()
+                .and_then(|value| render_template(value, scope))
+                .unwrap_or_default()
         );
         (
             text,
@@ -712,6 +943,8 @@ fn child_rects(axis: &str, children: &[Node], frame: Rect) -> Vec<Rect> {
             Node::Stack { width, height, style, .. } => (width, height, style, None),
             Node::Zstack { width, height, style, .. } => (width, height, style, None),
             Node::Grid { width, height, style, .. } => (width, height, style, None),
+            Node::Script(node) => (&node.width, &node.height, &node.style, None),
+            Node::IfElse(node) => (&node.width, &node.height, &node.style, None),
             Node::PrimitiveInstance { width, height, style, props, .. } => (width, height, style, props.padding_px),
             Node::Spacer { width, height, style, .. } => (width, height, style, None),
             Node::Unsupported => {
@@ -804,7 +1037,7 @@ fn grid_line_offsets(sizes: &[i32], start: i32, gap: i32) -> Vec<i32> {
 fn render_node(
     canvas: &mut IndexedCanvas,
     project: &ProjectView,
-    data: &Value,
+    scope: &Value,
     node: &Node,
     frame: Rect,
     user_fonts: &HashMap<String, RuntimeFontFamilyData>,
@@ -846,7 +1079,7 @@ fn render_node(
                 }
             }
             for (child, child_frame) in children.iter().zip(rects.iter()) {
-                render_node(canvas, project, data, child, *child_frame, user_fonts)?;
+                render_node(canvas, project, scope, child, *child_frame, user_fonts)?;
             }
             Ok(())
         }
@@ -859,7 +1092,7 @@ fn render_node(
                 h: (frame.h - padding * 2).max(1),
             };
             for child in children {
-                render_node(canvas, project, data, child, inner, user_fonts)?;
+                render_node(canvas, project, scope, child, inner, user_fonts)?;
             }
             Ok(())
         }
@@ -898,11 +1131,51 @@ fn render_node(
                     w: col_offsets[end_col] - col_offsets[column - 1],
                     h: row_offsets[end_row] - row_offsets[row - 1],
                 };
-                render_node(canvas, project, data, &child.node, child_frame, user_fonts)?;
+                render_node(canvas, project, scope, &child.node, child_frame, user_fonts)?;
             }
             Ok(())
         }
-        Node::PrimitiveInstance { .. } => render_primitive(canvas, project, data, node, frame, user_fonts),
+        Node::Script(script) => {
+            let globals = globals_value(project, scope, frame);
+            let bindings = Value::Object(
+                script
+                    .bindings
+                    .iter()
+                    .map(|(key, value)| {
+                        let resolved = if value.contains("{{") {
+                            render_template(value, scope)
+                                .map(Value::String)
+                                .unwrap_or(Value::Null)
+                        } else {
+                            scope_value(scope, value).unwrap_or_else(|| Value::String(value.clone()))
+                        };
+                        (key.clone(), resolved)
+                    })
+                    .collect(),
+            );
+            let derived = run_js_json(&script.source, scope, &bindings, &globals)?;
+            let merged_scope = if derived.is_object() {
+                merge_scope(scope, &derived)
+            } else {
+                scope.clone()
+            };
+            if let Some(child) = script.child.as_deref() {
+                render_node(canvas, project, &merged_scope, child, frame, user_fonts)?;
+            }
+            Ok(())
+        }
+        Node::IfElse(node) => {
+            let child = if evaluate_js_bool(&node.condition, scope)? {
+                node.then_child.as_deref()
+            } else {
+                node.else_child.as_deref()
+            };
+            if let Some(child) = child {
+                render_node(canvas, project, scope, child, frame, user_fonts)?;
+            }
+            Ok(())
+        }
+        Node::PrimitiveInstance { .. } => render_primitive(canvas, project, scope, node, frame, user_fonts),
         Node::Spacer { .. } => Ok(()),
         Node::Unsupported => Ok(()),
     }
@@ -937,7 +1210,7 @@ fn render_layout_preview(
         None => return Ok(None),
     };
     let mut canvas = IndexedCanvas::new(display_type.width, display_type.height, COLOR_BG);
-    render_node(
+    if render_node(
         &mut canvas,
         &project,
         data_value,
@@ -949,7 +1222,11 @@ fn render_layout_preview(
             h: display_type.height as i32,
         },
         &user_fonts,
-    )?;
+    )
+    .is_err()
+    {
+        return Ok(None);
+    }
     let [bg_r, bg_g, bg_b] = parse_hex_color(&display_type.palette.bg)?;
     let [fg_r, fg_g, fg_b] = parse_hex_color(&display_type.palette.fg)?;
     let [accent_r, accent_g, accent_b] = parse_hex_color(&display_type.palette.accent)?;
