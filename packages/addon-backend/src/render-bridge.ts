@@ -14,7 +14,6 @@ import { installProjectScriptingRuntime } from "./script-runtime.js";
 type BridgeRequest =
   | { op: "preview"; projectId: string; body?: unknown }
   | { op: "layout-preview"; projectId: string; body?: unknown }
-  | { op: "device-preview"; projectId: string; body?: unknown }
   | { op: "render-project-live"; projectId: string; body?: unknown }
   | { op: "render-assigned-live"; projectId: string; body?: unknown };
 
@@ -200,14 +199,6 @@ async function main(): Promise<void> {
         return;
       }
       process.stdout.write(`${JSON.stringify(renderedResponse(preview, previewData.message))}\n`);
-      return;
-    }
-    case "device-preview": {
-      const project = projectFromRequest(request.projectId, request.body);
-      const body = request.body as Record<string, unknown> | undefined;
-      const displayId = String(body?.displayId ?? "");
-      const previewData = requiredRenderData(body);
-      process.stdout.write(`${JSON.stringify(renderedResponse(renderAssignedDisplay(project, displayId, previewData.data), previewData.message))}\n`);
       return;
     }
     case "render-project-live": {

@@ -9,7 +9,8 @@ use crate::{
     load_user_font_data,
     native_font_specimens::render_font_specimens_value,
     native_theme_preview::render_theme_preview_value, run_bridge_value,
-    services::render_data::resolve_project_render_data_value, ApiError, ApiResult,
+    services::{render_data::resolve_project_render_data_value, scheduler::render_assigned_live},
+    ApiError, ApiResult,
     BridgeRenderResponse,
 };
 
@@ -99,17 +100,11 @@ pub(crate) async fn device_preview(
     Json(body): Json<Value>,
 ) -> ApiResult<Value> {
     let project = load_project_for_request(&state, &project_id, Some(&body)).await?;
-    let (data, message) = resolve_project_render_data_value(&state, &project, None).await?;
-    let user_fonts = load_user_font_data(&state).await?;
-    let body = inject_live_render_context(body, project, data, user_fonts, message);
-    let rendered: BridgeRenderResponse = serde_json::from_value(
-        run_bridge_value(
-            &state,
-            json!({ "op": "device-preview", "projectId": project_id, "body": body }),
-        )
-        .await?,
-    )
-    .map_err(|error| ApiError::internal(error.to_string()))?;
+    let display_id = body
+        .get("displayId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::bad_request("displayId missing"))?;
+    let rendered = render_assigned_live(&state, &project_id, &project, display_id).await?;
     Ok(Json(bridge_render_preview_value(&rendered)?))
 }
 
