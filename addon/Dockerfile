@@ -29,6 +29,7 @@ COPY package.json package-lock.json tsconfig.json vitest.config.ts ./
 COPY scripts ./scripts
 COPY packages ./packages
 COPY rust ./rust
+COPY data ./data
 COPY docs ./docs
 RUN npm ci
 RUN npm run build
