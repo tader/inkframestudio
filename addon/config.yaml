@@ -1,6 +1,6 @@
 name: "InkFrame Studio"
 description: "Ingress-served editor and renderer for tri-color e-paper displays"
-version: "0.2.2"
+version: "0.2.3"
 slug: "inkframe_studio"
 image: "ghcr.io/tader/inkframestudio"
 init: false
@@ -13,11 +13,11 @@ arch:
 startup: application
 boot: auto
 build_from:
-  aarch64: "ghcr.io/home-assistant/aarch64-base:3.21"
-  amd64: "ghcr.io/home-assistant/amd64-base:3.21"
-  armhf: "ghcr.io/home-assistant/armhf-base:3.21"
-  armv7: "ghcr.io/home-assistant/armv7-base:3.21"
-  i386: "ghcr.io/home-assistant/i386-base:3.21"
+  aarch64: "ghcr.io/home-assistant/aarch64-base:3.22"
+  amd64: "ghcr.io/home-assistant/amd64-base:3.22"
+  armhf: "ghcr.io/home-assistant/armhf-base:3.22"
+  armv7: "ghcr.io/home-assistant/armv7-base:3.22"
+  i386: "ghcr.io/home-assistant/i386-base:3.22"
 ingress: true
 ingress_port: 8099
 panel_icon: mdi:tablet-dashboard
