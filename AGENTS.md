@@ -24,7 +24,7 @@ Home Assistant add-on:
 - Repository metadata is root `repository.yaml`.
 - Add-on metadata is `addon/config.yaml`.
 - Add-on image is `ghcr.io/tader/inkframestudio`.
-- Docker builds must use Home Assistant base `3.22` or newer because older `3.21` has Cargo `1.83`, which cannot parse dependencies using Rust edition 2024.
+- Docker builds use Home Assistant base `3.21` images plus official rustup stable. Do not rely on Alpine `cargo`/`rust` packages; HA base Rust versions lag crates that require newer MSRV. HA base `3.22` is not available for all add-on arch images yet.
 - Release image workflow is `.github/workflows/addon-images.yml`.
 - GHCR package must be public for Home Assistant installs.
 

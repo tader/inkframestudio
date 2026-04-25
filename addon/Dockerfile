@@ -1,4 +1,4 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.22
+ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.21
 FROM $BUILD_FROM
 ARG BUILD_ARCH=amd64
 ARG BUILD_VERSION=dev
@@ -14,15 +14,23 @@ LABEL \
   org.opencontainers.image.source="https://github.com/tader/inkframestudio" \
   org.opencontainers.image.version="${BUILD_VERSION}"
 
-RUN apk add --no-cache nodejs npm cargo rust freetype-dev harfbuzz-dev pkgconf build-base
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+ENV PATH=/usr/local/cargo/bin:$PATH
+
+RUN apk add --no-cache nodejs npm curl freetype-dev harfbuzz-dev pkgconf build-base \
+  && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --profile minimal --default-toolchain stable \
+  && rustc --version \
+  && cargo --version
 
 WORKDIR /app
-COPY package.json tsconfig.json vitest.config.ts ./
+COPY package.json package-lock.json tsconfig.json vitest.config.ts ./
 COPY scripts ./scripts
 COPY packages ./packages
 COPY rust ./rust
 COPY docs ./docs
-RUN npm install
+RUN npm ci
 RUN npm run build
 
 ENV PORT=8099

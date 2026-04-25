@@ -1,0 +1,10 @@
+.git
+.github
+node_modules
+dist
+target
+rust/target
+rust/text-engine/target
+coverage
+*.log
+*.DS_Store
