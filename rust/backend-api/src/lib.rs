@@ -13,7 +13,6 @@ use std::{
     env,
     net::SocketAddr,
     path::PathBuf,
-    process::Stdio,
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -60,7 +59,7 @@ use storage::{
     project_file_path, projects_dir, read_json_file, read_settings,
     save_provider_instance_into_settings, write_json_file, write_settings,
 };
-use tokio::{fs, io::AsyncWriteExt, process::Command};
+use tokio::fs;
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing::info;
 use utoipa::OpenApi;
@@ -322,23 +321,6 @@ struct AssignmentConfig {
     mac: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct BridgeRenderResponse {
-    width: u32,
-    height: u32,
-    hash: String,
-    #[serde(rename = "activeScreenId")]
-    active_screen_id: String,
-    #[serde(rename = "activeOverlayId")]
-    active_overlay_id: Option<String>,
-    #[serde(default)]
-    rgba: Vec<u8>,
-    #[serde(rename = "dataSourceMessage")]
-    data_source_message: Option<String>,
-    #[serde(rename = "scriptWarnings")]
-    script_warnings: Option<Vec<String>>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub(crate) struct EntityCatalogEntry {
     #[serde(rename = "entityId")]
@@ -523,45 +505,6 @@ struct ProviderInstanceInput {
 struct DiscoverDisplaysQuery {
     #[serde(rename = "providerInstanceId")]
     provider_instance_id: Option<String>,
-}
-
-pub(crate) fn bridge_script_path() -> PathBuf {
-    env::var("RENDER_BRIDGE_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("dist/addon-backend/render-bridge.cjs"))
-}
-
-pub(crate) async fn run_bridge_value(_state: &AppState, payload: Value) -> Result<Value, ApiError> {
-    let script = bridge_script_path();
-    let mut child = Command::new("node");
-    child
-        .arg(script)
-        .current_dir(env::current_dir().map_err(internal_error)?)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = child.spawn().map_err(internal_error)?;
-    if let Some(mut stdin) = child.stdin.take() {
-        let bytes =
-            serde_json::to_vec(&payload).map_err(|error| ApiError::internal(error.to_string()))?;
-        stdin.write_all(&bytes).await.map_err(internal_error)?;
-    }
-    let output = child.wait_with_output().await.map_err(internal_error)?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let detail = if !stderr.is_empty() {
-            stderr
-        } else if !stdout.is_empty() {
-            stdout
-        } else {
-            format!("bridge exited with {}", output.status)
-        };
-        return Err(ApiError::internal(format!(
-            "Render bridge failed: {detail}"
-        )));
-    }
-    serde_json::from_slice(&output.stdout).map_err(|error| ApiError::internal(error.to_string()))
 }
 
 fn project_override_from_body(project_id: &str, body: &Value) -> Option<Value> {
@@ -1138,33 +1081,6 @@ pub(crate) fn png_to_jpeg(png: &[u8]) -> Result<Vec<u8>, ApiError> {
         .map_err(|error| ApiError::internal(error.to_string()))?;
     let rgba = image.to_rgba8();
     rgba_to_jpeg(&rgba, image.width(), image.height())
-}
-
-pub(crate) fn bridge_render_to_png_bytes(
-    rendered: &BridgeRenderResponse,
-) -> Result<Vec<u8>, ApiError> {
-    let expected = rendered.width as usize * rendered.height as usize * 4;
-    if rendered.rgba.len() != expected {
-        return Err(ApiError::internal(
-            "Bridge render returned invalid RGBA payload",
-        ));
-    }
-    rgba_to_png(&rendered.rgba, rendered.width, rendered.height)
-}
-
-pub(crate) fn bridge_render_preview_value(
-    rendered: &BridgeRenderResponse,
-) -> Result<Value, ApiError> {
-    Ok(serde_json::json!({
-        "width": rendered.width,
-        "height": rendered.height,
-        "hash": rendered.hash,
-        "activeScreenId": rendered.active_screen_id,
-        "activeOverlayId": rendered.active_overlay_id,
-        "dataSourceMessage": rendered.data_source_message,
-        "scriptWarnings": rendered.script_warnings,
-        "pngBase64": base64::engine::general_purpose::STANDARD.encode(bridge_render_to_png_bytes(rendered)?)
-    }))
 }
 
 pub(crate) async fn upload_image_to_access_point(

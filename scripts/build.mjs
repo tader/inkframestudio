@@ -44,38 +44,17 @@ async function buildEditor() {
 
 async function buildBackend() {
   generateFontAwesomeAssets();
-  const outdir = path.join(distDir, "addon-backend");
-  const binDir = path.join(outdir, "bin");
   const rustOutDir = path.join(distDir, "rust-backend");
-  await mkdir(outdir, { recursive: true });
-  await mkdir(binDir, { recursive: true });
   await mkdir(rustOutDir, { recursive: true });
-  execFileSync("cargo", ["build", "--manifest-path", path.join(rootDir, "rust", "text-engine", "Cargo.toml"), "--release"], {
-    stdio: "inherit",
-    cwd: rootDir
-  });
   execFileSync("cargo", ["build", "--manifest-path", path.join(rootDir, "rust", "backend-api", "Cargo.toml"), "--release"], {
     stdio: "inherit",
     cwd: rootDir
   });
   const suffix = process.platform === "win32" ? ".exe" : "";
   await copyFile(
-    path.join(rootDir, "rust", "target", "release", `epd-text-engine${suffix}`),
-    path.join(binDir, `epd-text-engine${suffix}`)
-  );
-  await copyFile(
     path.join(rootDir, "rust", "target", "release", `epd-backend-api${suffix}`),
     path.join(rustOutDir, `epd-backend-api${suffix}`)
   );
-  await esbuild.build({
-    entryPoints: [path.join(rootDir, "packages/addon-backend/src/render-bridge.ts")],
-    bundle: true,
-    platform: "node",
-    format: "cjs",
-    sourcemap: true,
-    outfile: path.join(outdir, "render-bridge.cjs"),
-    target: "node22"
-  });
 }
 
 if (target === "editor") {

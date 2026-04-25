@@ -2,6 +2,7 @@ use std::{collections::HashMap, fs, path::PathBuf};
 
 use base64::Engine;
 use boa_engine::{Context as BoaContext, Source};
+use chrono::{Datelike, Timelike};
 use epd_text_engine::{
     render as render_text_layout, FontFamilyData as EngineFontFamilyData,
     FontPresets as EngineFontPresets, LayoutRequest, TextLayoutRun,
@@ -502,6 +503,209 @@ fn parse_hex_color(value: &str) -> Result<[u8; 3], ApiError> {
         ((numeric >> 8) & 0xff) as u8,
         (numeric & 0xff) as u8,
     ])
+}
+
+fn entity_value<'a>(data: &'a Value, entity_id: &str) -> Option<&'a Value> {
+    data.get("entities")?.get(entity_id)
+}
+
+fn entity_attribute_value<'a>(data: &'a Value, entity_id: &str, attribute: &str) -> Option<&'a Value> {
+    entity_value(data, entity_id)?.get("attributes")?.get(attribute)
+}
+
+fn value_ref_value(value_ref: &Value, data: &Value) -> Option<Value> {
+    match value_ref.get("type").and_then(Value::as_str) {
+        Some("entity_state") => value_ref
+            .get("entityId")
+            .and_then(Value::as_str)
+            .and_then(|entity_id| entity_value(data, entity_id))
+            .and_then(|entity| entity.get("state"))
+            .cloned(),
+        Some("entity_attribute") => {
+            let entity_id = value_ref.get("entityId").and_then(Value::as_str)?;
+            let attribute = value_ref.get("attribute").and_then(Value::as_str)?;
+            entity_attribute_value(data, entity_id, attribute).cloned()
+        }
+        Some("literal") => value_ref.get("value").cloned(),
+        _ => None,
+    }
+}
+
+fn value_as_f64(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_i64().map(|entry| entry as f64))
+        .or_else(|| value.as_u64().map(|entry| entry as f64))
+        .or_else(|| value.as_str().and_then(|entry| entry.parse::<f64>().ok()))
+}
+
+fn value_as_bool(value: &Value) -> Option<bool> {
+    value
+        .as_bool()
+        .or_else(|| match value.as_str() {
+            Some("true") => Some(true),
+            Some("false") => Some(false),
+            _ => None,
+        })
+}
+
+fn parse_hhmm(value: &str) -> Option<(u32, u32)> {
+    let (hour, minute) = value.split_once(':')?;
+    let hour = hour.parse::<u32>().ok()?;
+    let minute = minute.parse::<u32>().ok()?;
+    (hour < 24 && minute < 60).then_some((hour, minute))
+}
+
+fn minutes_of_day(hour: u32, minute: u32) -> u32 {
+    hour * 60 + minute
+}
+
+fn evaluate_condition(condition: &Value, data: &Value) -> bool {
+    match condition.get("kind").and_then(Value::as_str) {
+        Some("all") => condition
+            .get("conditions")
+            .and_then(Value::as_array)
+            .is_some_and(|conditions| conditions.iter().all(|entry| evaluate_condition(entry, data))),
+        Some("any") => condition
+            .get("conditions")
+            .and_then(Value::as_array)
+            .is_some_and(|conditions| conditions.iter().any(|entry| evaluate_condition(entry, data))),
+        Some("not") => condition
+            .get("condition")
+            .is_some_and(|entry| !evaluate_condition(entry, data)),
+        Some("entity_state") => {
+            let entity_id = condition.get("entityId").and_then(Value::as_str);
+            let expected = condition.get("equals").and_then(Value::as_str);
+            match (entity_id, expected) {
+                (Some(entity_id), Some(expected)) => entity_value(data, entity_id)
+                    .and_then(|entity| entity.get("state"))
+                    .and_then(Value::as_str)
+                    == Some(expected),
+                _ => false,
+            }
+        }
+        Some("entity_matches") => {
+            let entity_id = condition.get("entityId").and_then(Value::as_str);
+            let pattern = condition.get("pattern").and_then(Value::as_str);
+            let flags = condition.get("flags").and_then(Value::as_str).unwrap_or("");
+            match (entity_id, pattern) {
+                (Some(entity_id), Some(pattern)) => {
+                    let state = entity_value(data, entity_id)
+                        .and_then(|entity| entity.get("state"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let prefixed = if flags.contains('i') {
+                        format!("(?i){pattern}")
+                    } else {
+                        pattern.to_string()
+                    };
+                    regex::Regex::new(&prefixed)
+                        .ok()
+                        .is_some_and(|regex| regex.is_match(state))
+                }
+                _ => false,
+            }
+        }
+        Some("entity_duration_ge") => {
+            let entity_id = condition.get("entityId").and_then(Value::as_str);
+            let state = condition.get("state").and_then(Value::as_str);
+            let minutes = condition.get("minutes").and_then(Value::as_f64).unwrap_or(0.0);
+            match (entity_id, state) {
+                (Some(entity_id), Some(state)) => {
+                    let Some(entity) = entity_value(data, entity_id) else {
+                        return false;
+                    };
+                    if entity.get("state").and_then(Value::as_str) != Some(state) {
+                        return false;
+                    }
+                    let now = data
+                        .get("now")
+                        .and_then(Value::as_str)
+                        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok());
+                    let last_changed = entity
+                        .get("lastChanged")
+                        .or_else(|| entity.get("last_changed"))
+                        .and_then(Value::as_str)
+                        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok());
+                    match (now, last_changed) {
+                        (Some(now), Some(last_changed)) => {
+                            (now - last_changed).num_seconds() as f64 >= minutes * 60.0
+                        }
+                        _ => false,
+                    }
+                }
+                _ => false,
+            }
+        }
+        Some("numeric_compare") => {
+            let left = condition.get("left").and_then(|value| value_ref_value(value, data));
+            let right = condition.get("right").and_then(Value::as_f64);
+            let op = condition.get("op").and_then(Value::as_str);
+            match (left.as_ref().and_then(value_as_f64), right, op) {
+                (Some(left), Some(right), Some("gt")) => left > right,
+                (Some(left), Some(right), Some("gte")) => left >= right,
+                (Some(left), Some(right), Some("lt")) => left < right,
+                (Some(left), Some(right), Some("lte")) => left <= right,
+                (Some(left), Some(right), Some("eq")) => (left - right).abs() < f64::EPSILON,
+                (Some(left), Some(right), Some("neq")) => (left - right).abs() >= f64::EPSILON,
+                _ => false,
+            }
+        }
+        Some("boolean_compare") => {
+            let left = condition.get("left").and_then(|value| value_ref_value(value, data));
+            let expected = condition.get("equals").and_then(Value::as_bool);
+            match (left.as_ref().and_then(value_as_bool), expected) {
+                (Some(left), Some(expected)) => left == expected,
+                _ => false,
+            }
+        }
+        Some("is_defined") => {
+            let expected = condition.get("expected").and_then(Value::as_bool).unwrap_or(true);
+            let defined = condition
+                .get("ref")
+                .and_then(|value| value_ref_value(value, data))
+                .is_some_and(|value| !value.is_null());
+            defined == expected
+        }
+        Some("time_between") => {
+            let now = data
+                .get("now")
+                .and_then(Value::as_str)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok());
+            let start = condition.get("start").and_then(Value::as_str).and_then(parse_hhmm);
+            let end = condition.get("end").and_then(Value::as_str).and_then(parse_hhmm);
+            match (now, start, end) {
+                (Some(now), Some(start), Some(end)) => {
+                    if let Some(weekdays) = condition.get("weekdays").and_then(Value::as_array) {
+                        let weekday = now.weekday().num_days_from_monday() as i64;
+                        if !weekdays.iter().filter_map(Value::as_i64).any(|entry| entry == weekday) {
+                            return false;
+                        }
+                    }
+                    let current = minutes_of_day(now.hour(), now.minute());
+                    let start = minutes_of_day(start.0, start.1);
+                    let end = minutes_of_day(end.0, end.1);
+                    if start <= end {
+                        current >= start && current <= end
+                    } else {
+                        current >= start || current <= end
+                    }
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+fn select_rule_layout_id<'a>(rules: &'a [Value], action_type: &str, data: &Value) -> Option<&'a str> {
+    rules.iter()
+        .filter(|rule| rule.get("action").and_then(|value| value.get("type")).and_then(Value::as_str) == Some(action_type))
+        .filter(|rule| rule.get("condition").is_some_and(|condition| evaluate_condition(condition, data)))
+        .max_by_key(|rule| rule.get("priority").and_then(Value::as_i64).unwrap_or(0))
+        .and_then(|rule| rule.get("action"))
+        .and_then(|action| action.get("layoutId"))
+        .and_then(Value::as_str)
 }
 
 fn role_color(role: PaletteRole) -> u8 {
@@ -2198,6 +2402,7 @@ fn render_layout_preview(
     user_fonts_value: &Value,
     data_value: &Value,
     layout_id: &str,
+    popup_layout_id: Option<&str>,
     data_source_message: Option<String>,
 ) -> Result<Option<NativeRenderedPreview>, ApiError> {
     let project: ProjectView = serde_json::from_value(project_value.clone())
@@ -2212,6 +2417,20 @@ fn render_layout_preview(
     let root = match &layout.root_node {
         Some(root) if node_supported_with_project(&project, root) => root,
         _ => return Ok(None),
+    };
+    let popup = match popup_layout_id {
+        Some(popup_layout_id) => match project
+            .layout_definitions
+            .iter()
+            .find(|layout| layout.id == popup_layout_id)
+        {
+            Some(layout) => match &layout.root_node {
+                Some(root) if node_supported_with_project(&project, root) => Some((layout, root)),
+                _ => return Ok(None),
+            },
+            None => return Ok(None),
+        },
+        None => None,
     };
     let display_type = match project
         .display_types
@@ -2238,6 +2457,26 @@ fn render_layout_preview(
     .is_err()
     {
         return Ok(None);
+    }
+    if let Some((popup_layout, popup_root)) = popup {
+        if render_node(
+            &mut canvas,
+            &project,
+            data_value,
+            popup_root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: display_type.width as i32,
+                h: display_type.height as i32,
+            },
+            &user_fonts,
+        )
+        .is_err()
+        {
+            return Ok(None);
+        }
+        let _ = popup_layout;
     }
     let [bg_r, bg_g, bg_b] = parse_hex_color(&display_type.palette.bg)?;
     let [fg_r, fg_g, fg_b] = parse_hex_color(&display_type.palette.fg)?;
@@ -2266,7 +2505,7 @@ fn render_layout_preview(
             base64::engine::general_purpose::STANDARD.encode(&png_bytes[..png_bytes.len().min(24)])
         ),
         active_screen_id: layout.id.clone(),
-        active_overlay_id: None,
+        active_overlay_id: popup_layout_id.map(str::to_string),
         data_source_message,
         script_warnings: None,
         png_bytes,
@@ -2295,9 +2534,6 @@ pub(crate) fn try_render_layout_preview_value(
     if body.get("includeInspection").and_then(Value::as_bool).unwrap_or(false) {
         return Ok(None);
     }
-    if body.get("popupLayoutId").and_then(Value::as_str).is_some() {
-        return Ok(None);
-    }
     if body.get("displayId").and_then(Value::as_str).is_some() {
         return Ok(None);
     }
@@ -2305,7 +2541,14 @@ pub(crate) fn try_render_layout_preview_value(
         Some(value) => value,
         None => return Ok(None),
     };
-    Ok(render_layout_preview(project_value, user_fonts_value, data_value, layout_id, None)?
+    Ok(render_layout_preview(
+        project_value,
+        user_fonts_value,
+        data_value,
+        layout_id,
+        body.get("popupLayoutId").and_then(Value::as_str),
+        None,
+    )?
         .map(|rendered| preview_value(&rendered)))
 }
 
@@ -2329,10 +2572,12 @@ pub(crate) fn try_render_assigned_preview(
     let Some(assignment) = assignment else {
         return Ok(None);
     };
-    if !assignment.fullscreen_rules.is_empty() || !assignment.popup_rules.is_empty() {
-        return Ok(None);
-    }
-    let layout_id = assignment
+    let layout_id = select_rule_layout_id(
+        &assignment.fullscreen_rules,
+        "activate_fullscreen_layout",
+        data_value,
+    )
+        .or(assignment
         .default_fullscreen_layout_id
         .as_deref()
         .or_else(|| {
@@ -2341,12 +2586,17 @@ pub(crate) fn try_render_assigned_preview(
                 .iter()
                 .find(|layout| layout.display_type_id == display.display_type_id)
                 .map(|layout| layout.id.as_str())
-        });
+        }));
     let Some(layout_id) = layout_id else {
         return Ok(None);
     };
+    let popup_layout_id = select_rule_layout_id(
+        &assignment.popup_rules,
+        "activate_popup_layout",
+        data_value,
+    );
     let rendered =
-        render_layout_preview(project_value, user_fonts_value, data_value, layout_id, data_source_message)?;
+        render_layout_preview(project_value, user_fonts_value, data_value, layout_id, popup_layout_id, data_source_message)?;
     let Some(mut rendered) = rendered else {
         return Ok(None);
     };

@@ -6,10 +6,10 @@ use crate::{
     app::AppState, display_provider, find_provider_instance, load_user_font_data,
     native_layout_preview::try_render_assigned_preview, now_ms,
     openepaperlink_settings_from_instance, project_file_path, read_json_file, read_settings,
-    png_to_jpeg, routes::projects::list_projects, run_bridge_value,
+    png_to_jpeg, routes::projects::list_projects,
     services::render_data::resolve_project_render_data_value, upload_image_to_access_point, ApiError,
     AssignmentConfig, AssignmentForceUpdateResponse,
-    AssignmentScheduleStatusResponse, BridgeRenderResponse, ProjectSummary, SchedulerState, StoredSettings,
+    AssignmentScheduleStatusResponse, ProjectSummary, SchedulerState, StoredSettings,
 };
 
 pub(crate) struct RenderedPreviewOutput {
@@ -165,58 +165,26 @@ fn build_assignment_status(
 
 pub(crate) async fn render_assigned_live(
     state: &AppState,
-    project_id: &str,
+    _project_id: &str,
     project: &Value,
     display_id: &str,
 ) -> Result<RenderedPreviewOutput, ApiError> {
     let (data, message) = resolve_project_render_data_value(state, project, None).await?;
     let user_fonts = load_user_font_data(state).await?;
-    if let Some(rendered) =
+    let Some(rendered) =
         try_render_assigned_preview(project, &user_fonts, &data, display_id, message.clone())?
-    {
-        return Ok(RenderedPreviewOutput {
-            width: rendered.width,
-            height: rendered.height,
-            hash: rendered.hash,
-            active_screen_id: rendered.active_screen_id,
-            active_overlay_id: rendered.active_overlay_id,
-            data_source_message: rendered.data_source_message,
-            script_warnings: rendered.script_warnings,
-            png_bytes: rendered.png_bytes,
-        });
-    }
-    let bridged: BridgeRenderResponse = serde_json::from_value(
-        run_bridge_value(
-            state,
-            json!({
-                "op": "layout-preview",
-                "projectId": project_id,
-                "body": {
-                    "project": project,
-                    "displayId": display_id,
-                    "data": data,
-                    "userFonts": user_fonts,
-                    "dataSourceMessage": message
-                }
-            }),
-        )
-        .await?,
-    )
-    .map_err(|error| ApiError::internal(error.to_string()))?;
-    let hash = bridged.hash.clone();
-    let active_screen_id = bridged.active_screen_id.clone();
-    let active_overlay_id = bridged.active_overlay_id.clone();
-    let data_source_message = bridged.data_source_message.clone();
-    let script_warnings = bridged.script_warnings.clone();
+    else {
+        return Err(ApiError::bad_request("Native renderer does not support requested assignment render"));
+    };
     Ok(RenderedPreviewOutput {
-        width: bridged.width,
-        height: bridged.height,
-        hash,
-        active_screen_id,
-        active_overlay_id,
-        data_source_message,
-        script_warnings,
-        png_bytes: crate::bridge_render_to_png_bytes(&bridged)?,
+        width: rendered.width,
+        height: rendered.height,
+        hash: rendered.hash,
+        active_screen_id: rendered.active_screen_id,
+        active_overlay_id: rendered.active_overlay_id,
+        data_source_message: rendered.data_source_message,
+        script_warnings: rendered.script_warnings,
+        png_bytes: rendered.png_bytes,
     })
 }
 
