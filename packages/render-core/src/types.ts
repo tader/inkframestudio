@@ -3,9 +3,9 @@ export type HalftoneRole = "gray" | "light-accent" | "dark-accent";
 export type FillRole = PaletteRole | HalftoneRole;
 export type TextColorRole = PaletteRole | "transparent";
 export type FontFamily = "px-sans" | "px-mono-special" | "ui-sans" | (string & {});
-export type FontWeight = "regular" | "bold";
+export type FontWeight = "regular" | "bold" | (string & {});
 export type FontSlope = "roman" | "italic";
-export type FontVariantKey = "regular" | "italic" | "bold" | "boldItalic";
+export type FontVariantKey = "regular" | "italic" | "bold" | "boldItalic" | (string & {});
 export type FontSize = "tiny" | "normal" | "header";
 export type FontRole = "tiny" | "normal" | "normalEmphasis" | "header";
 export type WidgetThemeId = string;
@@ -435,7 +435,7 @@ export interface DiscoveredDisplayCandidate {
   providerDeviceRef: string;
   suggestedDisplayTypeId?: string;
   suggestedDisplayType?: DisplayType;
-  discoverySource?: "home-assistant" | "access-point";
+  discoverySource?: "home-assistant" | "access-point" | "virtual";
   metadata?: Record<string, unknown>;
 }
 
@@ -452,7 +452,7 @@ export interface LayoutDefinition {
   id: string;
   name: string;
   kind: "fullscreen" | "popup";
-  displayTypeId: string;
+  displayTypeId?: string;
   rootNode?: LayoutNode;
   popupDefaults?: {
     widthPx?: number;

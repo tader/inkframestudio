@@ -1,12 +1,14 @@
 import { LitElement, css, html, nothing, type TemplateResult } from "lit";
-import { BUILT_IN_WIDGET_DEFINITIONS, DISPLAY_PROFILES, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FillRole, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutNode, type ManagedDisplay, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type ProviderConnectionStatus, type ProviderDescriptor, type ProviderInstance, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
-import { SAMPLE_PROJECT } from "../../render-core/src/sample-project.js";
+import { keyed } from "lit/directives/keyed.js";
+import { BUILT_IN_WIDGET_DEFINITIONS, DEFAULT_FONT_PRESETS, DISPLAY_PROFILES, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FillRole, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutNode, type ManagedDisplay, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type ProviderConnectionStatus, type ProviderDescriptor, type ProviderInstance, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
 import {
   deleteProviderInstance,
   deleteFont,
   fetchProviderKinds,
   fetchProviderInstances,
   fetchAssignmentSchedules,
+  fetchBackupArchive,
+  fetchDisplayUpdateLog,
   fetchDevicePreview,
   fetchDiscoveredDisplays,
   fetchFontSpecimens,
@@ -16,19 +18,25 @@ import {
   fetchProject,
   fetchProjects,
   fetchProviderEntities,
+  fetchScheduleUpdateLogSettings,
   fetchThemePreview,
   importFont,
   rescanFonts,
   saveProviderInstance,
   saveProject,
+  saveScheduleUpdateLogSettings,
+  restoreBackupArchive,
   testProviderInstance,
   uploadPreviewToOpenEpaperLinkAccessPoint,
   updateFontMetadata,
   forceAssignmentUpdate,
   type AssignmentForceUpdateResponse,
   type AssignmentScheduleStatusResponse,
+  type AssignmentUpdateLogEntry,
+  type BackupArchive,
   type FontSpecimenResponse,
-  type PreviewResponse
+  type PreviewResponse,
+  type ScheduleUpdateLogSettings
 } from "./api.js";
 import "./code-editor-field.js";
 import {
@@ -43,17 +51,29 @@ import {
 } from "./structure-preview-model.js";
 import { buildNodeTree, getNodeById, isContainerNode, isDescendant, moveNode, moveNodeAfter, moveNodeBefore, moveNodeToGridCell, removeNode } from "./tree-model.js";
 
-type PageId = "displays" | "display-types" | "widgets" | "layouts" | "themes" | "config";
+type PageId = "displays" | "widgets" | "layouts" | "themes" | "config";
+type ConfigSectionId = "project" | "sources" | "display-systems" | "scripting" | "fonts";
+type VirtualDisplayDefinition = {
+  id: string;
+  name: string;
+  displayTypeId: string;
+};
 
-const PAGE_ORDER: PageId[] = ["displays", "display-types", "widgets", "layouts", "themes", "config"];
+const PAGE_ORDER: PageId[] = ["displays", "widgets", "layouts", "themes", "config"];
 const PAGE_LABELS: Record<PageId, string> = {
   displays: "Displays",
-  "display-types": "Display Types",
   widgets: "Widgets",
   layouts: "Layouts",
   themes: "Themes",
   config: "Config"
 };
+const CONFIG_SECTIONS: Array<{ id: ConfigSectionId; label: string }> = [
+  { id: "project", label: "Project" },
+  { id: "sources", label: "Sources" },
+  { id: "display-systems", label: "Display Systems" },
+  { id: "scripting", label: "Scripting" },
+  { id: "fonts", label: "Fonts" }
+];
 
 type FontSpecimenFamilyView = FontSpecimenResponse["families"][number] & {
   variants: Array<
@@ -80,6 +100,9 @@ type NodeCreateKind =
 
 function routeToPage(hash: string): PageId {
   const value = hash.replace(/^#\/?/, "");
+  if (value === "display-types") {
+    return "config";
+  }
   if (value === "assignments") {
     return "displays";
   }
@@ -96,6 +119,26 @@ function nextId(prefix: string): string {
 
 function cloneProject(project: Project): Project {
   return normalizeProject(structuredClone(project));
+}
+
+function emptyProject(): Project {
+  return normalizeProject({
+    id: "",
+    name: "",
+    version: 0,
+    locale: "en-US",
+    fontPresets: DEFAULT_FONT_PRESETS,
+    themes: [defaultTheme()],
+    displayTypes: [],
+    devices: [],
+    widgetDefinitions: [],
+    layoutDefinitions: [],
+    deviceAssignments: [],
+    screens: [],
+    overlays: [],
+    widgets: [],
+    scenarios: []
+  });
 }
 
 function defaultSizeSpec(mode: SizeSpec["mode"] = "fill", value?: number): SizeSpec {
@@ -376,6 +419,16 @@ function variantLabel(weight: string, slope: string): string {
   return `${weight}${slope === "italic" ? " italic" : ""}`;
 }
 
+function variantKeyLabel(variant: string): string {
+  if (variant === "boldItalic") {
+    return "Bold italic";
+  }
+  return variant
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 function variantKeyToStyle(variant: FontVariantKey): [string, string] {
   if (variant === "boldItalic") {
     return ["bold", "italic"];
@@ -386,7 +439,18 @@ function variantKeyToStyle(variant: FontVariantKey): [string, string] {
   if (variant === "italic") {
     return ["regular", "italic"];
   }
-  return ["regular", "roman"];
+  if (variant.endsWith("Italic")) {
+    return [variant.slice(0, -"Italic".length), "italic"];
+  }
+  return [variant, "roman"];
+}
+
+function defaultVirtualDisplayDefinition(displayTypeId: string, index = 1): VirtualDisplayDefinition {
+  return {
+    id: nextId("virtual-device"),
+    name: `Virtual Display ${index}`,
+    displayTypeId
+  };
 }
 
 function updateNode(node: LayoutNode, nodeId: string, updater: (current: LayoutNode) => LayoutNode): LayoutNode {
@@ -758,28 +822,12 @@ function defaultCompoundWidget(): WidgetDefinition {
   };
 }
 
-function defaultLayout(displayTypeId: string): LayoutDefinition {
+function defaultLayout(): LayoutDefinition {
   return {
     id: nextId("layout"),
     name: "New Layout",
     kind: "fullscreen",
-    displayTypeId,
     rootNode: defaultRootNode("zstack")
-  };
-}
-
-function defaultVirtualDisplay(displayTypeId: string): ManagedDisplay {
-  return {
-    id: nextId("display"),
-    name: "Virtual Display",
-    providerKind: "virtual",
-    providerRef: nextId("virtual"),
-    displayProviderInstanceId: "virtual-default",
-    providerDeviceRef: nextId("virtual-device"),
-    displayTypeId,
-    managed: true,
-    virtual: true,
-    metadata: {}
   };
 }
 
@@ -825,6 +873,7 @@ export class EpPaperEditorApp extends LitElement {
     selectedThemeId: { state: true },
     selectedPreviewThemeId: { state: true },
     selectedAssignmentId: { state: true },
+    activeConfigSection: { state: true },
     discoveredDisplays: { state: true },
     icons: { state: true },
     fonts: { state: true },
@@ -835,6 +884,8 @@ export class EpPaperEditorApp extends LitElement {
     previewHeight: { state: true },
     previewMessage: { state: true },
     scale: { state: true },
+    updateLogImageModal: { state: true },
+    updateLogImageScale: { state: true },
     fontSpecimens: { state: true },
     fontSpecimenSampleText: { state: true },
     fontSpecimenError: { state: true },
@@ -847,7 +898,11 @@ export class EpPaperEditorApp extends LitElement {
     providerInstances: { state: true },
     providerStatuses: { state: true },
     uploadStatusMessage: { state: true },
+    backupStatusMessage: { state: true },
     assignmentScheduleStatuses: { state: true },
+    displayUpdateLog: { state: true },
+    displayUpdateLogSinceMinutes: { state: true },
+    scheduleUpdateLogSettings: { state: true },
     selectedPreviewTagMac: { state: true },
     structureHoveredNodeId: { state: true },
     structureDraggedNodeId: { state: true },
@@ -1086,6 +1141,51 @@ export class EpPaperEditorApp extends LitElement {
       color: #555;
       font-size: 12px;
     }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    th,
+    td {
+      border: 1px solid #111;
+      padding: 4px;
+      text-align: left;
+      vertical-align: top;
+    }
+    .update-log-image {
+      width: 96px;
+      max-height: 72px;
+      object-fit: contain;
+      image-rendering: pixelated;
+      border: 1px solid #111;
+      background: #fff;
+      cursor: zoom-in;
+    }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      background: rgba(0, 0, 0, 0.45);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .modal {
+      max-width: min(92vw, 900px);
+      max-height: 92vh;
+      overflow: auto;
+      border: 2px solid #111;
+      background: #f7f1e3;
+      padding: 12px;
+    }
+    .modal-image {
+      image-rendering: pixelated;
+      border: 2px solid #111;
+      background: #fff;
+      object-fit: contain;
+    }
     .node-children {
       margin-left: 16px;
       border-left: 2px solid #ddd;
@@ -1143,6 +1243,7 @@ export class EpPaperEditorApp extends LitElement {
   declare private selectedThemeId: string;
   declare private selectedPreviewThemeId: string;
   declare private selectedAssignmentId: string;
+  declare private activeConfigSection: ConfigSectionId;
   declare private discoveredDisplays: DiscoveredDisplayCandidate[];
   declare private icons: IconDefinition[];
   declare private fonts: FontOption[];
@@ -1153,6 +1254,8 @@ export class EpPaperEditorApp extends LitElement {
   declare private previewHeight: number;
   declare private previewMessage: string;
   declare private scale: number;
+  declare private updateLogImageModal: AssignmentUpdateLogEntry | null;
+  declare private updateLogImageScale: number;
   declare private fontSpecimens: FontSpecimenFamilyView[];
   declare private fontSpecimenSampleText: string;
   declare private fontSpecimenError: string;
@@ -1169,7 +1272,11 @@ export class EpPaperEditorApp extends LitElement {
   declare private providerInstances: ProviderInstance[];
   declare private providerStatuses: Record<string, ProviderConnectionStatus | null>;
   declare private uploadStatusMessage: string;
+  declare private backupStatusMessage: string;
   declare private assignmentScheduleStatuses: Record<string, AssignmentScheduleStatusResponse>;
+  declare private displayUpdateLog: AssignmentUpdateLogEntry[];
+  declare private displayUpdateLogSinceMinutes: number;
+  declare private scheduleUpdateLogSettings: ScheduleUpdateLogSettings;
   declare private selectedPreviewTagMac: string;
   declare private structureHoveredNodeId: string;
   declare private structureDraggedNodeId: string;
@@ -1178,7 +1285,7 @@ export class EpPaperEditorApp extends LitElement {
   constructor() {
     super();
     this.projectSummaries = [];
-    this.project = cloneProject(SAMPLE_PROJECT);
+    this.project = emptyProject();
     this.activePage = routeToPage(window.location.hash);
     this.selectedDisplayId = "";
     this.selectedDisplayTypeId = "";
@@ -1189,6 +1296,7 @@ export class EpPaperEditorApp extends LitElement {
     this.selectedThemeId = "";
     this.selectedPreviewThemeId = "";
     this.selectedAssignmentId = "";
+    this.activeConfigSection = window.location.hash.replace(/^#\/?/, "") === "display-types" ? "display-systems" : "project";
     this.discoveredDisplays = [];
     this.icons = [];
     this.fonts = [];
@@ -1199,6 +1307,8 @@ export class EpPaperEditorApp extends LitElement {
     this.previewHeight = 0;
     this.previewMessage = "";
     this.scale = typeof window !== "undefined" && window.devicePixelRatio >= 1.75 ? 2 : 1;
+    this.updateLogImageModal = null;
+    this.updateLogImageScale = 2;
     this.fontSpecimens = [];
     this.fontSpecimenSampleText = "Ag 09:45 21.5C";
     this.fontSpecimenError = "";
@@ -1213,7 +1323,11 @@ export class EpPaperEditorApp extends LitElement {
     this.providerInstances = [];
     this.providerStatuses = {};
     this.uploadStatusMessage = "";
+    this.backupStatusMessage = "";
     this.assignmentScheduleStatuses = {};
+    this.displayUpdateLog = [];
+    this.displayUpdateLogSinceMinutes = 60;
+    this.scheduleUpdateLogSettings = { retentionDays: 7 };
     this.selectedPreviewTagMac = "";
     this.structureHoveredNodeId = "";
     this.structureDraggedNodeId = "";
@@ -1226,12 +1340,14 @@ export class EpPaperEditorApp extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener("hashchange", this.onHashChange);
+    window.addEventListener("keydown", this.onWindowKeyDown);
     void this.initialize();
   }
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener("hashchange", this.onHashChange);
+    window.removeEventListener("keydown", this.onWindowKeyDown);
     this.previewResizeObserver?.disconnect();
     this.previewResizeObserver = null;
   }
@@ -1248,14 +1364,63 @@ export class EpPaperEditorApp extends LitElement {
     void this.refreshPreview();
   };
 
+  private onWindowKeyDown = (event: KeyboardEvent): void => {
+    if (!this.updateLogImageModal) {
+      return;
+    }
+    if (event.key === "Escape") {
+      this.updateLogImageModal = null;
+      event.preventDefault();
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      this.showAdjacentUpdateLogImage(-1);
+      event.preventDefault();
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      this.showAdjacentUpdateLogImage(1);
+      event.preventDefault();
+    }
+  };
+
+  private updateLogImageEntries(): AssignmentUpdateLogEntry[] {
+    return this.displayUpdateLog.filter((entry) => entry.imagePngBase64);
+  }
+
+  private selectedUpdateLogImageIndex(): number {
+    const current = this.updateLogImageModal;
+    if (!current) {
+      return -1;
+    }
+    return this.updateLogImageEntries().findIndex((entry) =>
+      entry.timestampMs === current.timestampMs &&
+      entry.hash === current.hash &&
+      entry.displayId === current.displayId
+    );
+  }
+
+  private showAdjacentUpdateLogImage(direction: -1 | 1): void {
+    const entries = this.updateLogImageEntries();
+    if (entries.length <= 1) {
+      return;
+    }
+    const index = this.selectedUpdateLogImageIndex();
+    const nextIndex = index < 0
+      ? 0
+      : (index + direction + entries.length) % entries.length;
+    this.updateLogImageModal = entries[nextIndex] ?? null;
+  }
+
   private async initialize(): Promise<void> {
     try {
-      const [projectsResult, iconsResult, fontsResult, providerKindsResult, providerInstancesResult] = await Promise.allSettled([
+      const [projectsResult, iconsResult, fontsResult, providerKindsResult, providerInstancesResult, updateLogSettingsResult] = await Promise.allSettled([
         fetchProjects(),
         fetchIcons(),
         fetchFonts(),
         fetchProviderKinds(),
-        fetchProviderInstances()
+        fetchProviderInstances(),
+        fetchScheduleUpdateLogSettings()
       ]);
       const projects = projectsResult.status === "fulfilled" ? projectsResult.value : [];
       this.projectSummaries = projects;
@@ -1263,18 +1428,22 @@ export class EpPaperEditorApp extends LitElement {
       this.fonts = fontsResult.status === "fulfilled" ? fontsResult.value : [];
       this.providerKinds = providerKindsResult.status === "fulfilled" ? providerKindsResult.value : [];
       this.providerInstances = providerInstancesResult.status === "fulfilled" ? providerInstancesResult.value : [];
+      this.scheduleUpdateLogSettings = updateLogSettingsResult.status === "fulfilled" ? updateLogSettingsResult.value : { retentionDays: 7 };
       const sourceProvider = this.activeSourceProviderInstance;
       this.entityCatalog = sourceProvider ? await fetchProviderEntities(sourceProvider.id).catch(() => []) : [];
       if (projects[0]) {
         this.project = cloneProject(await fetchProject(projects[0].id));
       }
     } catch {
-      this.project = cloneProject(SAMPLE_PROJECT);
+      this.project = emptyProject();
     }
     this.syncSelections();
     await this.discoverDisplays().catch(() => undefined);
     await this.refreshAssignmentSchedules().catch(() => {
       this.assignmentScheduleStatuses = {};
+    });
+    await this.refreshDisplayUpdateLog().catch(() => {
+      this.displayUpdateLog = [];
     });
     await this.refreshPreview();
     if (this.activePage === "config") {
@@ -1365,12 +1534,81 @@ export class EpPaperEditorApp extends LitElement {
     );
   }
 
+  private displayUpdateLogSinceMs(): number {
+    return Math.max(0, Date.now() - Math.max(1, this.displayUpdateLogSinceMinutes) * 60_000);
+  }
+
+  private async refreshDisplayUpdateLog(): Promise<void> {
+    if (!this.project.id || !this.selectedDisplayId) {
+      this.displayUpdateLog = [];
+      return;
+    }
+    this.displayUpdateLog = await fetchDisplayUpdateLog(
+      this.project.id,
+      this.selectedDisplayId,
+      this.displayUpdateLogSinceMs()
+    );
+  }
+
+  private async persistScheduleUpdateLogSettings(): Promise<void> {
+    this.scheduleUpdateLogSettings = await saveScheduleUpdateLogSettings(this.scheduleUpdateLogSettings);
+  }
+
+  private backupFilename(archive: BackupArchive): string {
+    const date = archive.exportedAt.replace(/[:.]/g, "-").replace(/T/, "_").replace(/Z$/, "Z");
+    return `inkframe-studio-backup-${date}.json`;
+  }
+
+  private async downloadBackup(): Promise<void> {
+    this.backupStatusMessage = "Creating backup...";
+    try {
+      const archive = await fetchBackupArchive();
+      const blob = new Blob([JSON.stringify(archive, null, 2), "\n"], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = this.backupFilename(archive);
+      anchor.click();
+      URL.revokeObjectURL(url);
+      this.backupStatusMessage = `Backup ready: ${archive.projects.length} project(s), ${archive.fonts.length} font file(s).`;
+    } catch (error) {
+      this.backupStatusMessage = error instanceof Error ? error.message : "Backup failed";
+    }
+  }
+
+  private async restoreBackup(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) {
+      return;
+    }
+    this.backupStatusMessage = "Restoring backup...";
+    try {
+      const archive = JSON.parse(await file.text()) as BackupArchive;
+      const restored = await restoreBackupArchive(archive);
+      this.projectSummaries = await fetchProjects();
+      const projectId = restored.projects[0]?.id ?? this.projectSummaries[0]?.id;
+      if (projectId) {
+        this.replaceProject(await fetchProject(projectId));
+      }
+      this.fonts = await fetchFonts();
+      this.providerInstances = await fetchProviderInstances();
+      this.backupStatusMessage = `Restored ${restored.projects.length} project(s), ${restored.fonts.length} font file(s).`;
+    } catch (error) {
+      this.backupStatusMessage = error instanceof Error ? error.message : "Restore failed";
+    }
+  }
+
   private async persistProject(): Promise<void> {
     this.project = cloneProject(await saveProject(this.project));
     this.projectSummaries = await fetchProjects();
     this.syncSelections();
     await this.refreshAssignmentSchedules().catch(() => {
       this.assignmentScheduleStatuses = {};
+    });
+    await this.refreshDisplayUpdateLog().catch(() => {
+      this.displayUpdateLog = [];
     });
     await this.refreshPreview();
   }
@@ -1415,7 +1653,8 @@ export class EpPaperEditorApp extends LitElement {
         this.project.id,
         this.selectedLayoutId,
         undefined,
-        this.projectWithPreviewThemeForLayout(this.selectedLayoutId)
+        this.projectWithPreviewThemeForLayout(this.selectedLayoutId),
+        this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id
       );
       return [preview, undefined] as const;
     }
@@ -1430,7 +1669,7 @@ export class EpPaperEditorApp extends LitElement {
       }
       const tempLayoutId = "__widget-preview-layout";
       const tempProject = this.widgetPreviewProject(definition, displayTypeId);
-      return [await fetchLayoutPreview(this.project.id, tempLayoutId, undefined, tempProject), undefined] as const;
+      return [await fetchLayoutPreview(this.project.id, tempLayoutId, undefined, tempProject, displayTypeId), undefined] as const;
     }
     return [await this.fetchPagePreview(), undefined] as const;
   }
@@ -1518,7 +1757,6 @@ export class EpPaperEditorApp extends LitElement {
           id: tempLayoutId,
           name: "Widget Preview",
           kind: "fullscreen",
-          displayTypeId,
           rootNode: {
             id: "__widget-preview-ref",
             type: "compound_ref",
@@ -1554,7 +1792,8 @@ export class EpPaperEditorApp extends LitElement {
         this.project.id,
         this.selectedLayoutId,
         undefined,
-        this.projectWithPreviewThemeForLayout(this.selectedLayoutId)
+        this.projectWithPreviewThemeForLayout(this.selectedLayoutId),
+        this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id
       );
     }
     if (this.activePage === "widgets") {
@@ -1568,7 +1807,7 @@ export class EpPaperEditorApp extends LitElement {
       }
       const tempLayoutId = "__widget-preview-layout";
       const tempProject = this.widgetPreviewProject(definition, displayTypeId);
-      return await fetchLayoutPreview(this.project.id, tempLayoutId, undefined, tempProject);
+      return await fetchLayoutPreview(this.project.id, tempLayoutId, undefined, tempProject, displayTypeId);
     }
     if (this.activePage === "themes") {
       const theme = this.selectedTheme;
@@ -1602,7 +1841,6 @@ export class EpPaperEditorApp extends LitElement {
       ...this.project,
       displayTypes: (this.project.displayTypes ?? []).filter((entry) => entry.id !== displayTypeId),
       devices: (this.project.devices ?? []).filter((entry) => entry.displayTypeId !== displayTypeId),
-      layoutDefinitions: (this.project.layoutDefinitions ?? []).filter((entry) => entry.displayTypeId !== displayTypeId),
       deviceAssignments: (this.project.deviceAssignments ?? []).filter((entry) => !removedDeviceIds.has(entry.displayId))
     });
     if (this.selectedDisplayTypeId === displayTypeId) {
@@ -1667,10 +1905,7 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private async discoverDisplays(): Promise<void> {
-    const providerInstance = this.activeDisplayProviderInstance;
-    this.discoveredDisplays = providerInstance
-      ? await fetchDiscoveredDisplays(this.project.id, providerInstance.id)
-      : [];
+    this.discoveredDisplays = await fetchDiscoveredDisplays(this.project.id);
   }
 
   private addDiscoveredDisplay(candidate: DiscoveredDisplayCandidate): void {
@@ -1698,7 +1933,7 @@ export class EpPaperEditorApp extends LitElement {
       providerDeviceRef: candidate.providerDeviceRef,
       displayTypeId,
       managed: true,
-      virtual: false,
+      virtual: candidate.providerId === "virtual" || candidate.providerKind === "virtual",
       metadata: candidate.metadata
     };
     this.replaceProject({
@@ -1709,22 +1944,8 @@ export class EpPaperEditorApp extends LitElement {
       devices: [...(this.project.devices ?? []), device],
       deviceAssignments: [
         ...(this.project.deviceAssignments ?? []),
-        defaultAssignment(device.id, this.project.layoutDefinitions?.find((entry) => entry.displayTypeId === displayTypeId && entry.kind === "fullscreen")?.id)
+        defaultAssignment(device.id, this.project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen")?.id)
       ]
-    });
-    this.selectedDisplayId = device.id;
-  }
-
-  private addVirtualDisplay(): void {
-    const displayTypeId = this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id;
-    if (!displayTypeId) {
-      return;
-    }
-    const device = defaultVirtualDisplay(displayTypeId);
-    this.replaceProject({
-      ...this.project,
-      devices: [...(this.project.devices ?? []), device],
-      deviceAssignments: [...(this.project.deviceAssignments ?? []), defaultAssignment(device.id, this.project.layoutDefinitions?.find((entry) => entry.displayTypeId === displayTypeId && entry.kind === "fullscreen")?.id)]
     });
     this.selectedDisplayId = device.id;
   }
@@ -1733,6 +1954,13 @@ export class EpPaperEditorApp extends LitElement {
     this.replaceProject({
       ...this.project,
       devices: (this.project.devices ?? []).map((entry) => (entry.id === id ? { ...entry, ...patch } : entry))
+    });
+  }
+
+  private updateDisplayDisplayType(id: string, displayTypeId: string): void {
+    this.replaceProject({
+      ...this.project,
+      devices: (this.project.devices ?? []).map((entry) => (entry.id === id ? { ...entry, displayTypeId } : entry))
     });
   }
 
@@ -1769,11 +1997,7 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private addLayout(): void {
-    const displayTypeId = this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id;
-    if (!displayTypeId) {
-      return;
-    }
-    const layout = defaultLayout(displayTypeId);
+    const layout = defaultLayout();
     this.replaceProject({
       ...this.project,
       layoutDefinitions: [...(this.project.layoutDefinitions ?? []), layout]
@@ -1815,10 +2039,7 @@ export class EpPaperEditorApp extends LitElement {
     if (!displayId) {
       return;
     }
-    const display = this.project.devices?.find((entry) => entry.id === displayId);
-    const layoutId =
-      this.project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen" && entry.displayTypeId === display?.displayTypeId)?.id
-      ?? this.project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen")?.id;
+    const layoutId = this.project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen")?.id;
     const assignment = defaultAssignment(displayId, layoutId);
     this.replaceProject({
       ...this.project,
@@ -1843,7 +2064,7 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private updateRootNode(owner: { id: string; rootNode?: LayoutNode }, updater: (root: LayoutNode) => LayoutNode): void {
-    if ("kind" in owner && (owner as LayoutDefinition).displayTypeId) {
+    if ("kind" in owner) {
       this.updateLayout(owner.id, (layout) => ({
         ...layout,
         rootNode: layout.rootNode ? updater(layout.rootNode) : defaultRootNode("stack")
@@ -1857,7 +2078,7 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private setRootNode(owner: { id: string; rootNode?: LayoutNode }, rootNode: LayoutNode | undefined): void {
-    if ("kind" in owner && (owner as LayoutDefinition).displayTypeId) {
+    if ("kind" in owner) {
       this.updateLayout(owner.id, (layout) => ({ ...layout, rootNode }));
       return;
     }
@@ -2139,6 +2360,7 @@ export class EpPaperEditorApp extends LitElement {
     if (!descriptor) {
       return;
     }
+    const configFields = descriptor.configFields ?? [];
     this.providerInstances = [
       ...this.providerInstances,
       {
@@ -2146,9 +2368,14 @@ export class EpPaperEditorApp extends LitElement {
         providerId,
         name: descriptor.label,
         enabled: true,
-        config: Object.fromEntries(
-          descriptor.configFields.map((field) => [field.key, field.defaultValue ?? (field.kind === "checkbox" ? false : "")])
-        )
+        config: {
+          ...Object.fromEntries(
+            configFields.map((field) => [field.key, field.defaultValue ?? (field.kind === "checkbox" ? false : "")])
+          ),
+          ...(providerId === "virtual"
+            ? { virtualDisplays: [defaultVirtualDisplayDefinition(this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id || "")] }
+            : {})
+        }
       }
     ];
   }
@@ -2179,7 +2406,7 @@ export class EpPaperEditorApp extends LitElement {
     }
     const descriptor = this.providerDescriptor(instance.providerId);
     let payload = instance;
-    if (descriptor?.configFields.some((field) => field.key === "token")) {
+    if ((descriptor?.configFields ?? []).some((field) => field.key === "token")) {
       const currentToken = String(instance.config.token ?? "");
       payload = {
         ...instance,
@@ -2225,6 +2452,7 @@ export class EpPaperEditorApp extends LitElement {
       const result: AssignmentForceUpdateResponse = await forceAssignmentUpdate(this.project.id, assignment.id, this.project);
       this.uploadStatusMessage = result.message + (result.hash ? ` hash ${result.hash}` : "");
       await this.refreshAssignmentSchedules().catch(() => undefined);
+      await this.refreshDisplayUpdateLog().catch(() => undefined);
     } catch (error) {
       this.uploadStatusMessage = error instanceof Error ? error.message : "Forced update failed";
     }
@@ -2252,16 +2480,18 @@ export class EpPaperEditorApp extends LitElement {
 
   private async uploadFont(event: Event): Promise<void> {
     const input = event.target as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file) {
+    const files = Array.from(input.files ?? []);
+    if (!files.length) {
       return;
     }
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    let binary = "";
-    for (const byte of bytes) {
-      binary += String.fromCharCode(byte);
+    for (const file of files) {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = "";
+      for (const byte of bytes) {
+        binary += String.fromCharCode(byte);
+      }
+      await importFont(file.name, btoa(binary));
     }
-    await importFont(file.name, btoa(binary));
     this.fonts = await fetchFonts();
     this.ensureSelectedFontPreviewFamily();
     input.value = "";
@@ -2323,6 +2553,10 @@ export class EpPaperEditorApp extends LitElement {
 
   private get accessPointTagCandidates(): DiscoveredDisplayCandidate[] {
     return this.discoveredDisplays.filter((candidate) => candidate.providerId === "openepaperlink-ap");
+  }
+
+  private get discoveredDisplayCandidates(): DiscoveredDisplayCandidate[] {
+    return this.discoveredDisplays;
   }
 
   private get previewUploadCandidates(): DiscoveredDisplayCandidate[] {
@@ -2392,6 +2626,11 @@ export class EpPaperEditorApp extends LitElement {
     return parsed.toLocaleString();
   }
 
+  private formatUpdateLogTime(entry: AssignmentUpdateLogEntry): string {
+    const parsed = new Date(entry.timestamp);
+    return Number.isNaN(parsed.getTime()) ? entry.timestamp : parsed.toLocaleString();
+  }
+
   private get effectivePreviewThemeId(): string | undefined {
     return this.project.themes.find((entry) => entry.id === this.selectedPreviewThemeId)?.id
       ?? this.project.themes[0]?.id;
@@ -2418,7 +2657,7 @@ export class EpPaperEditorApp extends LitElement {
   private renderNavigation() {
     return html`
       <nav>
-        <h1>Display Designer</h1>
+        <h1>InkFrame Studio</h1>
         ${PAGE_ORDER.map(
           (page) => html`
             <button class="nav-button ${this.activePage === page ? "active" : ""}" @click=${() => this.navigate(page)}>
@@ -2441,16 +2680,13 @@ export class EpPaperEditorApp extends LitElement {
       return html`
         <div class="section">
           <h2>Displays</h2>
-          <div class="row">
-            <button @click=${() => void this.discoverDisplays()}>Discover OEL</button>
-            <button @click=${() => this.addVirtualDisplay()}>Add Virtual</button>
-          </div>
           ${this.visibleDisplays.map(
             (device) => html`
               <div class="row">
                 <button class="item-button ${device.id === this.selectedDisplayId ? "active" : ""}" @click=${() => {
                   this.selectedDisplayId = device.id;
                   this.selectedAssignmentId = this.project.deviceAssignments?.find((entry) => entry.displayId === device.id)?.id ?? "";
+                  void this.refreshDisplayUpdateLog();
                   void this.refreshPreview();
                 }}>${displayTitle(device)}</button>
               </div>
@@ -2458,8 +2694,11 @@ export class EpPaperEditorApp extends LitElement {
           )}
         </div>
         <div class="section">
-          <h3>Discovered</h3>
-          ${this.accessPointTagCandidates.map(
+          <div class="row">
+            <h3>Discovered</h3>
+            <button @click=${() => void this.discoverDisplays()}>Refresh</button>
+          </div>
+          ${this.discoveredDisplayCandidates.map(
             (candidate) => {
               const managedDisplay = this.managedDisplayForCandidate(candidate);
               return html`
@@ -2472,27 +2711,6 @@ export class EpPaperEditorApp extends LitElement {
                 </details>
               `;
             }
-          )}
-        </div>
-      `;
-    }
-    if (this.activePage === "display-types") {
-      return html`
-        <div class="section">
-          <h2>Display Types</h2>
-          <button @click=${() => this.addDisplayType()}>Add display type</button>
-          ${(this.project.displayTypes ?? []).map(
-            (displayType) => html`
-              <div class="row">
-                <button class="item-button ${displayType.id === this.selectedDisplayTypeId ? "active" : ""}" @click=${() => {
-                  this.selectedDisplayTypeId = displayType.id;
-                  if (this.activePage === "config") {
-                    void this.refreshFontSpecimens();
-                  }
-                  void this.refreshPreview();
-                }}>${displayType.name}</button>
-              </div>
-            `
           )}
         </div>
       `;
@@ -2547,7 +2765,10 @@ export class EpPaperEditorApp extends LitElement {
           ${this.project.themes.map(
             (theme) => html`
               <div class="row">
-                <button class="item-button ${theme.id === this.selectedThemeId ? "active" : ""}" @click=${() => (this.selectedThemeId = theme.id)}>${theme.name}</button>
+                <button class="item-button ${theme.id === this.selectedThemeId ? "active" : ""}" @click=${() => {
+                  this.selectedThemeId = theme.id;
+                  void this.refreshPreview();
+                }}>${theme.name}</button>
               </div>
             `
           )}
@@ -2558,16 +2779,16 @@ export class EpPaperEditorApp extends LitElement {
       return html`
         <div class="section">
           <h2>Config</h2>
-          <div class="muted">Home Assistant. OpenEPaperLink access point. Fonts.</div>
-        </div>
-        <div class="section">
-          <h3>Font Preview Display</h3>
-          <select .value=${this.selectedDisplayTypeId} @change=${(event: Event) => {
-            this.selectedDisplayTypeId = (event.target as HTMLSelectElement).value;
-            void this.refreshFontSpecimens();
-          }}>
-            ${(this.project.displayTypes ?? []).map((displayType) => html`<option value=${displayType.id}>${displayType.name}</option>`)}
-          </select>
+          ${CONFIG_SECTIONS.map((section) => html`
+            <div class="row">
+              <button class="item-button ${section.id === this.activeConfigSection ? "active" : ""}" @click=${() => {
+                this.activeConfigSection = section.id;
+                if (section.id === "fonts") {
+                  void this.refreshFontSpecimens();
+                }
+              }}>${section.label}</button>
+            </div>
+          `)}
         </div>
       `;
     }
@@ -2818,9 +3039,16 @@ export class EpPaperEditorApp extends LitElement {
     const currentFamily = family ?? this.fonts[0]?.id ?? "arial";
     const currentWeight = style?.weight ?? "regular";
     const currentSlope = style?.slope ?? "roman";
+    const variantStyles = availableFontVariants(this.fontOption(currentFamily)).map((variant) => {
+      const [weight, slope] = variantKeyToStyle(variant);
+      return { variant, weight, slope };
+    });
+    const weights = Array.from(new Set([
+      currentWeight,
+      ...variantStyles.filter((variant) => variant.slope === "roman").map((variant) => variant.weight)
+    ]));
     const italicAvailable = this.fontVariantAvailable(currentFamily, currentWeight, "italic");
     const regularAvailable = this.fontVariantAvailable(currentFamily, currentWeight, "roman");
-    const canUseBold = this.fontVariantAvailable(currentFamily, "bold", currentSlope) || this.fontVariantAvailable(currentFamily, "bold", "roman");
     return html`
       <label>
         Weight
@@ -2832,8 +3060,9 @@ export class EpPaperEditorApp extends LitElement {
             onChange({ weight: nextWeight, slope: nextSlope });
           }}
         >
-          <option value="regular">Regular</option>
-          <option value="bold" ?disabled=${!canUseBold}>Bold</option>
+          ${weights.map((weight) => html`
+            <option value=${weight} ?disabled=${!this.fontVariantAvailable(currentFamily, weight, "roman")}>${variantKeyLabel(weight)}</option>
+          `)}
         </select>
       </label>
       <label>
@@ -2892,9 +3121,11 @@ export class EpPaperEditorApp extends LitElement {
         ? "boldItalic"
         : weight === "bold"
           ? "bold"
-          : slope === "italic"
-            ? "italic"
-            : "regular";
+          : weight !== "regular"
+            ? (slope === "italic" ? `${weight}Italic` : weight)
+            : slope === "italic"
+              ? "italic"
+              : "regular";
     return variants.includes(variant) || supportsFontVariant(family, weight, slope);
   }
 
@@ -3843,10 +4074,10 @@ export class EpPaperEditorApp extends LitElement {
   private renderDisplayAssignmentEditor(device: ManagedDisplay): TemplateResult {
     const assignment = this.selectedDisplayAssignment;
     const status = this.selectedDisplayAssignmentStatus;
-    const fullscreenLayouts = (this.project.layoutDefinitions ?? []).filter((layout) => layout.kind === "fullscreen" && layout.displayTypeId === device.displayTypeId);
-    const fullscreenOptions = fullscreenLayouts.length
-      ? fullscreenLayouts
-      : (this.project.layoutDefinitions ?? []).filter((layout) => layout.kind === "fullscreen");
+    const fullscreenLayouts = (this.project.layoutDefinitions ?? []).filter((layout) => layout.kind === "fullscreen");
+    const selectedFullscreenLayoutId = fullscreenLayouts.some((layout) => layout.id === assignment?.defaultFullscreenLayoutId)
+      ? assignment?.defaultFullscreenLayoutId
+      : "";
     if (!device.managed) {
       return html`<div class="muted">Enable management to configure assignment rules.</div>`;
     }
@@ -3859,10 +4090,14 @@ export class EpPaperEditorApp extends LitElement {
     return html`
       <label>
         Default fullscreen
-        <select .value=${assignment.defaultFullscreenLayoutId ?? ""} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({ ...current, defaultFullscreenLayoutId: (event.target as HTMLSelectElement).value || undefined }))}>
-          ${fullscreenOptions.map((layout) => html`<option value=${layout.id}>${layout.name}</option>`)}
+        <select .value=${selectedFullscreenLayoutId} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({ ...current, defaultFullscreenLayoutId: (event.target as HTMLSelectElement).value || undefined }))}>
+          <option value="">None</option>
+          ${fullscreenLayouts.map((layout) => html`<option value=${layout.id}>${layout.name}</option>`)}
         </select>
       </label>
+      ${fullscreenLayouts.length
+        ? nothing
+        : html`<div class="muted">No fullscreen layouts.</div>`}
       <label>
         Theme
         <select .value=${assignment.defaultThemeId ?? "inherit"} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({ ...current, defaultThemeId: (event.target as HTMLSelectElement).value || undefined }))}>
@@ -3936,8 +4171,116 @@ export class EpPaperEditorApp extends LitElement {
     `;
   }
 
+  private renderDisplayUpdateLog(): TemplateResult {
+    return html`
+      <div class="section">
+        <div class="row">
+          <h3>Update Log</h3>
+          <button @click=${() => void this.refreshDisplayUpdateLog()}>Refresh</button>
+        </div>
+        <div class="row">
+          <label>
+            Show last
+            <input
+              type="number"
+              min="1"
+              .value=${String(this.displayUpdateLogSinceMinutes)}
+              @input=${(event: Event) => {
+                this.displayUpdateLogSinceMinutes = Math.max(1, Math.trunc(Number((event.target as HTMLInputElement).value) || 60));
+                void this.refreshDisplayUpdateLog();
+              }}
+            />
+            minutes
+          </label>
+        </div>
+        ${this.displayUpdateLog.length
+          ? html`
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Desired</th>
+                    <th>Succeeded</th>
+                    <th>Image</th>
+                    <th>Message</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${this.displayUpdateLog.map((entry) => html`
+                    <tr>
+                      <td>${this.formatUpdateLogTime(entry)}</td>
+                      <td>${entry.desired ? "Yes" : "No"}</td>
+                      <td>${entry.succeeded ? "Yes" : "No"}</td>
+                      <td>
+                        ${entry.imagePngBase64
+                          ? html`<img
+                              class="update-log-image"
+                              src=${`data:image/png;base64,${entry.imagePngBase64}`}
+                              @click=${() => {
+                                this.updateLogImageModal = entry;
+                                this.updateLogImageScale = 2;
+                              }}
+                            />`
+                          : html`<span class="muted">n/a</span>`}
+                      </td>
+                      <td>${entry.error ?? entry.message ?? ""}</td>
+                    </tr>
+                  `)}
+                </tbody>
+              </table>
+            `
+          : html`<div class="muted">No updates in this time range.</div>`}
+      </div>
+    `;
+  }
+
+  private renderUpdateLogImageModal(): TemplateResult | typeof nothing {
+    const entry = this.updateLogImageModal;
+    if (!entry?.imagePngBase64) {
+      return nothing;
+    }
+    const canNavigate = this.updateLogImageEntries().length > 1;
+    const imageKey = `${entry.timestampMs}:${entry.displayId}:${entry.hash ?? ""}:${this.updateLogImageScale}`;
+    const cssScale = this.updateLogImageScale / (typeof window !== "undefined" ? Math.max(1, window.devicePixelRatio || 1) : 1);
+    const width = entry.width ? Math.max(1, Math.round(entry.width * cssScale)) : undefined;
+    const height = entry.height ? Math.max(1, Math.round(entry.height * cssScale)) : undefined;
+    const imageStyle = width && height
+      ? `width:${width}px;height:${height}px;`
+      : `width:auto;height:auto;max-width:100%;transform:scale(${cssScale});transform-origin:top left;`;
+    return html`
+      <div class="modal-backdrop" @click=${() => (this.updateLogImageModal = null)}>
+        <div class="modal" @click=${(event: Event) => event.stopPropagation()}>
+          <div class="row">
+            <h3>Update Image</h3>
+            <button ?disabled=${!canNavigate} @click=${() => this.showAdjacentUpdateLogImage(-1)}>Previous</button>
+            <button ?disabled=${!canNavigate} @click=${() => this.showAdjacentUpdateLogImage(1)}>Next</button>
+            <button @click=${() => (this.updateLogImageModal = null)}>Close</button>
+          </div>
+          <div class="muted">${this.formatUpdateLogTime(entry)} ${entry.hash ? `hash ${entry.hash}` : ""}</div>
+          <label>
+            Scale
+            <select .value=${String(this.updateLogImageScale)} @change=${(event: Event) => (this.updateLogImageScale = Number((event.target as HTMLSelectElement).value))}>
+              <option value="1">1x</option>
+              <option value="2">2x</option>
+              <option value="3">3x</option>
+              <option value="4">4x</option>
+              <option value="5">5x</option>
+            </select>
+          </label>
+          ${keyed(imageKey, html`
+            <img
+              class="modal-image"
+              style=${imageStyle}
+              src=${`data:image/png;base64,${entry.imagePngBase64}`}
+            />
+          `)}
+        </div>
+      </div>
+    `;
+  }
+
   private renderProviderField(instance: ProviderInstance, descriptor: ProviderDescriptor, fieldKey: string): TemplateResult {
-    const field = descriptor.configFields.find((entry) => entry.key === fieldKey);
+    const field = (descriptor.configFields ?? []).find((entry) => entry.key === fieldKey);
     if (!field) {
       return html``;
     }
@@ -3980,6 +4323,104 @@ export class EpPaperEditorApp extends LitElement {
     `;
   }
 
+  private virtualDisplayDefinitions(instance: ProviderInstance): VirtualDisplayDefinition[] {
+    const raw = instance.config.virtualDisplays;
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+    return raw
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map((entry, index) => ({
+        id: String(entry.id || `virtual-${index + 1}`),
+        name: String(entry.name || `Virtual Display ${index + 1}`),
+        displayTypeId: String(entry.displayTypeId || this.project.displayTypes?.[0]?.id || "")
+      }));
+  }
+
+  private updateVirtualDisplayDefinitions(instanceId: string, definitions: VirtualDisplayDefinition[]): void {
+    this.providerInstances = this.providerInstances.map((instance) =>
+      instance.id === instanceId
+        ? {
+            ...instance,
+            config: {
+              ...instance.config,
+              virtualDisplays: definitions
+            }
+          }
+        : instance
+    );
+  }
+
+  private addVirtualDisplayDefinition(instanceId: string): void {
+    const instance = this.providerInstances.find((entry) => entry.id === instanceId);
+    const displayTypeId = this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id || "";
+    if (!instance) {
+      return;
+    }
+    const nextIndex = this.virtualDisplayDefinitions(instance).length + 1;
+    this.updateVirtualDisplayDefinitions(instanceId, [
+      ...this.virtualDisplayDefinitions(instance),
+      defaultVirtualDisplayDefinition(displayTypeId, nextIndex)
+    ]);
+  }
+
+  private updateVirtualDisplayDefinition(instanceId: string, definitionId: string, patch: Partial<VirtualDisplayDefinition>): void {
+    const instance = this.providerInstances.find((entry) => entry.id === instanceId);
+    if (!instance) {
+      return;
+    }
+    this.updateVirtualDisplayDefinitions(
+      instanceId,
+      this.virtualDisplayDefinitions(instance).map((definition) =>
+        definition.id === definitionId ? { ...definition, ...patch } : definition
+      )
+    );
+  }
+
+  private removeVirtualDisplayDefinition(instanceId: string, definitionId: string): void {
+    const instance = this.providerInstances.find((entry) => entry.id === instanceId);
+    if (!instance) {
+      return;
+    }
+    this.updateVirtualDisplayDefinitions(
+      instanceId,
+      this.virtualDisplayDefinitions(instance).filter((definition) => definition.id !== definitionId)
+    );
+  }
+
+  private renderVirtualDisplayDefinitions(instance: ProviderInstance): TemplateResult {
+    const definitions = this.virtualDisplayDefinitions(instance);
+    return html`
+      <div class="section">
+        <div class="row">
+          <h3>Virtual Displays</h3>
+          <button @click=${() => this.addVirtualDisplayDefinition(instance.id)}>Add virtual display</button>
+        </div>
+        ${definitions.map((definition) => html`
+          <details open>
+            <summary>${definition.name}</summary>
+            <label>
+              Name
+              <input .value=${definition.name} @input=${(event: Event) => this.updateVirtualDisplayDefinition(instance.id, definition.id, { name: (event.target as HTMLInputElement).value })} />
+            </label>
+            <label>
+              Reference
+              <input .value=${definition.id} @input=${(event: Event) => this.updateVirtualDisplayDefinition(instance.id, definition.id, { id: (event.target as HTMLInputElement).value })} />
+            </label>
+            <label>
+              Display type
+              <select .value=${definition.displayTypeId} @change=${(event: Event) => this.updateVirtualDisplayDefinition(instance.id, definition.id, { displayTypeId: (event.target as HTMLSelectElement).value })}>
+                ${(this.project.displayTypes ?? []).map((displayType) => html`<option value=${displayType.id}>${displayType.name}</option>`)}
+              </select>
+            </label>
+            <button class="danger" @click=${() => this.removeVirtualDisplayDefinition(instance.id, definition.id)}>Remove virtual display</button>
+          </details>
+        `)}
+        ${definitions.length ? html`<div class="muted">Save, then refresh display discovery to manage these displays.</div>` : html`<div class="muted">No virtual displays defined.</div>`}
+      </div>
+    `;
+  }
+
   private renderProviderInstanceEditor(instance: ProviderInstance): TemplateResult {
     const descriptor = this.providerDescriptor(instance.providerId);
     if (!descriptor) {
@@ -4010,7 +4451,8 @@ export class EpPaperEditorApp extends LitElement {
           />
           Enabled
         </label>
-        ${descriptor.configFields.map((field) => this.renderProviderField(instance, descriptor, field.key))}
+        ${(descriptor.configFields ?? []).map((field) => this.renderProviderField(instance, descriptor, field.key))}
+        ${instance.providerId === "virtual" ? this.renderVirtualDisplayDefinitions(instance) : nothing}
         <div class="row">
           <button @click=${() => void this.testProvider(instance.id)}>Test</button>
           <button class="primary" @click=${() => void this.saveProvider(instance.id)}>Save</button>
@@ -4043,7 +4485,7 @@ export class EpPaperEditorApp extends LitElement {
                   </label>
                   <label>
                     Display type
-                    <select .value=${device.displayTypeId} @change=${(event: Event) => this.updateDisplay(device.id, { displayTypeId: (event.target as HTMLSelectElement).value })}>
+                    <select .value=${device.displayTypeId} @change=${(event: Event) => this.updateDisplayDisplayType(device.id, (event.target as HTMLSelectElement).value)}>
                       ${(this.project.displayTypes ?? []).map((displayType) => html`<option value=${displayType.id}>${displayType.name}</option>`)}
                     </select>
                   </label>
@@ -4057,44 +4499,10 @@ export class EpPaperEditorApp extends LitElement {
                     <h3>Assignment</h3>
                     ${this.renderDisplayAssignmentEditor(device)}
                   </div>
+                  ${this.renderDisplayUpdateLog()}
                   ${this.uploadStatusMessage ? html`<div class="muted">${this.uploadStatusMessage}</div>` : nothing}
                 `
               : html`<div class="muted">Select display.</div>`}
-          </div>
-        </div>
-      `;
-    }
-
-    if (this.activePage === "display-types") {
-      const displayType = this.selectedDisplayType;
-      return html`
-        <div class="detail">
-          <div class="section">
-            <h2>Display Type</h2>
-            ${displayType
-              ? html`
-                  <label>Name <input .value=${displayType.name} @input=${(event: Event) => this.updateDisplayType(displayType.id, { name: (event.target as HTMLInputElement).value })} /></label>
-                  <div class="detail-danger-action">
-                    <button class="danger" @click=${() => this.removeDisplayType(displayType.id)}>Delete display type</button>
-                  </div>
-                  <div class="row">
-                    <label>Width <input type="number" .value=${String(displayType.width)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { width: Number((event.target as HTMLInputElement).value) })} /></label>
-                    <label>Height <input type="number" .value=${String(displayType.height)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { height: Number((event.target as HTMLInputElement).value) })} /></label>
-                  </div>
-                  <div class="row">
-                    <label>Grid unit <input type="number" .value=${String(displayType.gridUnitPx)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { gridUnitPx: Number((event.target as HTMLInputElement).value) })} /></label>
-                    <label>Padding top <input type="number" .value=${String(displayType.contentPadding.top)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { contentPadding: { ...displayType.contentPadding, top: Number((event.target as HTMLInputElement).value) } })} /></label>
-                    <label>Padding right <input type="number" .value=${String(displayType.contentPadding.right)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { contentPadding: { ...displayType.contentPadding, right: Number((event.target as HTMLInputElement).value) } })} /></label>
-                  </div>
-                  <div class="row">
-                    <label>Padding bottom <input type="number" .value=${String(displayType.contentPadding.bottom)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { contentPadding: { ...displayType.contentPadding, bottom: Number((event.target as HTMLInputElement).value) } })} /></label>
-                    <label>Padding left <input type="number" .value=${String(displayType.contentPadding.left)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { contentPadding: { ...displayType.contentPadding, left: Number((event.target as HTMLInputElement).value) } })} /></label>
-                  </div>
-                  <label>Background <input .value=${displayType.palette.bg} @input=${(event: Event) => this.updateDisplayType(displayType.id, { palette: { ...displayType.palette, bg: (event.target as HTMLInputElement).value } })} /></label>
-                  <label>Foreground <input .value=${displayType.palette.fg} @input=${(event: Event) => this.updateDisplayType(displayType.id, { palette: { ...displayType.palette, fg: (event.target as HTMLInputElement).value } })} /></label>
-                  <label>Accent <input .value=${displayType.palette.accent} @input=${(event: Event) => this.updateDisplayType(displayType.id, { palette: { ...displayType.palette, accent: (event.target as HTMLInputElement).value } })} /></label>
-                `
-              : html`<div class="muted">Select display type.</div>`}
           </div>
         </div>
       `;
@@ -4223,12 +4631,6 @@ export class EpPaperEditorApp extends LitElement {
                     <select .value=${layout.kind} @change=${(event: Event) => this.updateLayout(layout.id, (current) => ({ ...current, kind: (event.target as HTMLSelectElement).value as LayoutDefinition["kind"] }))}>
                       <option value="fullscreen">Fullscreen</option>
                       <option value="popup">Popup</option>
-                    </select>
-                  </label>
-                  <label>
-                    Display type
-                    <select .value=${layout.displayTypeId} @change=${(event: Event) => this.updateLayout(layout.id, (current) => ({ ...current, displayTypeId: (event.target as HTMLSelectElement).value }))}>
-                      ${(this.project.displayTypes ?? []).map((displayType) => html`<option value=${displayType.id}>${displayType.name}</option>`)}
                     </select>
                   </label>
                   ${layout.kind === "popup"
@@ -4362,12 +4764,23 @@ export class EpPaperEditorApp extends LitElement {
     }
 
     if (this.activePage === "config") {
-      const userFonts = this.fonts.filter((family) => family.source === "user");
+      const userFonts = this.fonts
+        .filter((family) => family.source === "user")
+        .sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
       const activeFontPreview = this.fontSpecimens[0];
       return html`
         <div class="detail">
-          <div class="section">
+          ${this.activeConfigSection === "project" ? html`<div class="section">
             <h2>Project</h2>
+            <label>
+              Name
+              <input .value=${this.project.name} @input=${(event: Event) => {
+                this.project = {
+                  ...this.project,
+                  name: (event.target as HTMLInputElement).value
+                };
+              }} />
+            </label>
             <label>
               Locale
               <input .value=${this.project.locale ?? "en-US"} @input=${(event: Event) => {
@@ -4394,8 +4807,19 @@ export class EpPaperEditorApp extends LitElement {
               </select>
             </label>
             <div class="muted">Live data and widget entity lists use this provider.</div>
-          </div>
-          <div class="section">
+            <div class="section">
+              <h3>Backup / Restore</h3>
+              <div class="row">
+                <button @click=${() => void this.downloadBackup()}>Download backup</button>
+              </div>
+              <label>
+                Restore backup
+                <input type="file" accept="application/json,.json" @change=${(event: Event) => void this.restoreBackup(event)} />
+              </label>
+              ${this.backupStatusMessage ? html`<div class="muted">${this.backupStatusMessage}</div>` : nothing}
+            </div>
+          </div>` : nothing}
+          ${this.activeConfigSection === "sources" ? html`<div class="section">
             <h2>Sources</h2>
             <div class="row">
               ${this.providerKinds
@@ -4405,8 +4829,8 @@ export class EpPaperEditorApp extends LitElement {
             ${this.providerInstances
               .filter((instance) => this.providerDescriptor(instance.providerId)?.domain === "source")
               .map((instance) => this.renderProviderInstanceEditor(instance))}
-          </div>
-          <div class="section">
+          </div>` : nothing}
+          ${this.activeConfigSection === "display-systems" ? html`<div class="section">
             <h2>Display Systems</h2>
             <div class="row">
               ${this.providerKinds
@@ -4416,8 +4840,60 @@ export class EpPaperEditorApp extends LitElement {
             ${this.providerInstances
               .filter((instance) => this.providerDescriptor(instance.providerId)?.domain === "display")
               .map((instance) => this.renderProviderInstanceEditor(instance))}
-          </div>
-          <div class="section">
+            <div class="section">
+              <h3>Scheduled Update Log</h3>
+              <label>
+                Keep log for
+                <input
+                  type="number"
+                  min="1"
+                  .value=${String(this.scheduleUpdateLogSettings.retentionDays)}
+                  @input=${(event: Event) => {
+                    this.scheduleUpdateLogSettings = {
+                      retentionDays: Math.max(1, Math.trunc(Number((event.target as HTMLInputElement).value) || 7))
+                    };
+                  }}
+                />
+                days
+              </label>
+              <button @click=${() => void this.persistScheduleUpdateLogSettings()}>Save log setting</button>
+            </div>
+            <div class="section">
+              <h3>Display Types</h3>
+              <button @click=${() => this.addDisplayType()}>Add display type</button>
+              ${(this.project.displayTypes ?? []).map(
+                (displayType) => html`
+                  <details ?open=${displayType.id === this.selectedDisplayTypeId}>
+                    <summary @click=${() => {
+                      this.selectedDisplayTypeId = displayType.id;
+                      void this.refreshPreview();
+                    }}>${displayType.name}</summary>
+                    <label>Name <input .value=${displayType.name} @input=${(event: Event) => this.updateDisplayType(displayType.id, { name: (event.target as HTMLInputElement).value })} /></label>
+                    <div class="detail-danger-action">
+                      <button class="danger" @click=${() => this.removeDisplayType(displayType.id)}>Delete display type</button>
+                    </div>
+                    <div class="row">
+                      <label>Width <input type="number" .value=${String(displayType.width)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { width: Number((event.target as HTMLInputElement).value) })} /></label>
+                      <label>Height <input type="number" .value=${String(displayType.height)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { height: Number((event.target as HTMLInputElement).value) })} /></label>
+                    </div>
+                    <div class="row">
+                      <label>Grid unit <input type="number" .value=${String(displayType.gridUnitPx)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { gridUnitPx: Number((event.target as HTMLInputElement).value) })} /></label>
+                      <label>Padding top <input type="number" .value=${String(displayType.contentPadding.top)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { contentPadding: { ...displayType.contentPadding, top: Number((event.target as HTMLInputElement).value) } })} /></label>
+                      <label>Padding right <input type="number" .value=${String(displayType.contentPadding.right)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { contentPadding: { ...displayType.contentPadding, right: Number((event.target as HTMLInputElement).value) } })} /></label>
+                    </div>
+                    <div class="row">
+                      <label>Padding bottom <input type="number" .value=${String(displayType.contentPadding.bottom)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { contentPadding: { ...displayType.contentPadding, bottom: Number((event.target as HTMLInputElement).value) } })} /></label>
+                      <label>Padding left <input type="number" .value=${String(displayType.contentPadding.left)} @input=${(event: Event) => this.updateDisplayType(displayType.id, { contentPadding: { ...displayType.contentPadding, left: Number((event.target as HTMLInputElement).value) } })} /></label>
+                    </div>
+                    <label>Background <input .value=${displayType.palette.bg} @input=${(event: Event) => this.updateDisplayType(displayType.id, { palette: { ...displayType.palette, bg: (event.target as HTMLInputElement).value } })} /></label>
+                    <label>Foreground <input .value=${displayType.palette.fg} @input=${(event: Event) => this.updateDisplayType(displayType.id, { palette: { ...displayType.palette, fg: (event.target as HTMLInputElement).value } })} /></label>
+                    <label>Accent <input .value=${displayType.palette.accent} @input=${(event: Event) => this.updateDisplayType(displayType.id, { palette: { ...displayType.palette, accent: (event.target as HTMLInputElement).value } })} /></label>
+                  </details>
+                `
+              )}
+            </div>
+          </div>` : nothing}
+          ${this.activeConfigSection === "scripting" ? html`<div class="section">
             <h2>Scripting</h2>
             <div class="muted">Globals in templates and scripts: <code>now</code>, <code>today</code>, <code>locale</code>, <code>display</code>, <code>project</code>.</div>
             <div class="muted">Helpers: JS function source. Filters: JS function source with signature <code>(value, args, context) =&gt; result</code>.</div>
@@ -4469,15 +4945,24 @@ export class EpPaperEditorApp extends LitElement {
             `)}
             <button @click=${() => this.addScriptingLibraryEntry("filters")}>Add filter</button>
             <div class="muted">Preview warnings surface compile/runtime script errors without crashing render.</div>
-          </div>
-          <div class="section">
+          </div>` : nothing}
+          ${this.activeConfigSection === "fonts" ? html`<div class="section">
             <h2>Fonts</h2>
             <div class="row">
               <button @click=${() => void this.rescanFontDirectory()}>Rescan font dir</button>
             </div>
             <label>
+              Font preview display
+              <select .value=${this.selectedDisplayTypeId} @change=${(event: Event) => {
+                this.selectedDisplayTypeId = (event.target as HTMLSelectElement).value;
+                void this.refreshFontSpecimens();
+              }}>
+                ${(this.project.displayTypes ?? []).map((displayType) => html`<option value=${displayType.id}>${displayType.name}</option>`)}
+              </select>
+            </label>
+            <label>
               Import font
-              <input type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" @change=${(event: Event) => void this.uploadFont(event)} />
+              <input type="file" multiple accept=".ttf,.otf,font/ttf,font/otf" @change=${(event: Event) => void this.uploadFont(event)} />
             </label>
             <label>
               Sample text
@@ -4510,7 +4995,7 @@ export class EpPaperEditorApp extends LitElement {
                   <div class="section font-preview-card">
                     <div class="row">
                       <strong>${family.label}</strong>
-                      ${family.variants.map((variant) => html`<span class="muted">${variantLabel(...variantKeyToStyle(variant))}</span>`)}
+                      ${family.variants.map((variant) => html`<span class="muted">${variantKeyLabel(variant)}</span>`)}
                       ${family.importSource === "dafont" ? html`<span class="pill">DaFont</span>` : html`<span class="pill">Upload</span>`}
                       ${family.declaredPixelSize ? html`<span class="pill">${family.declaredPixelSize}px base</span>` : nothing}
                       ${family.licenseCategory ? html`<span class="pill">${family.licenseCategory}</span>` : nothing}
@@ -4550,7 +5035,7 @@ export class EpPaperEditorApp extends LitElement {
                                     const tile = variant.tiles.find((entry) => entry.size === size);
                                     return html`
                                       <div class="font-variant-card">
-                                        <div class="font-variant-title">${variantLabel(variant.weight, variant.slope)}</div>
+                                        <div class="font-variant-title">${variantKeyLabel(variant.variantKey)}</div>
                                         ${tile
                                           ? html`
                                               <div class="preview-stage">
@@ -4579,7 +5064,7 @@ export class EpPaperEditorApp extends LitElement {
             ${userFonts.length
               ? nothing
               : html`<div class="muted">No imported font previews yet.</div>`}
-          </div>
+          </div>` : nothing}
         </div>
       `;
     }
@@ -4601,6 +5086,7 @@ export class EpPaperEditorApp extends LitElement {
         <section class="panel detail">${this.renderDetailPanel()}</section>
         <section class="panel preview">${this.renderPreviewPanel()}</section>
       </div>
+      ${this.renderUpdateLogImageModal()}
     `;
   }
 }

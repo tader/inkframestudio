@@ -16,6 +16,8 @@ pub(crate) async fn list_icons(State(state): State<AppState>) -> Json<Vec<IconDe
 }
 
 #[utoipa::path(get, path = "/api/v2/display-profiles", tag = "display-profiles", responses((status = 200, body = [DisplayProfile])))]
-pub(crate) async fn list_display_profiles(State(state): State<AppState>) -> Json<Vec<DisplayProfile>> {
+pub(crate) async fn list_display_profiles(
+    State(state): State<AppState>,
+) -> Json<Vec<DisplayProfile>> {
     Json(state.display_profiles.as_ref().clone())
 }

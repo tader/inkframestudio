@@ -19,8 +19,8 @@ use std::{
 
 use app::AppState;
 use axum::{
-    http::StatusCode,
-    response::{IntoResponse, Json},
+    http::{header, HeaderValue, StatusCode},
+    response::{IntoResponse, Json, Response},
     routing::{delete, get, post, put},
     Router,
 };
@@ -35,10 +35,9 @@ use providers::{
 };
 use reqwest::header::{ACCEPT, AUTHORIZATION};
 use reqwest::multipart::{Form, Part};
+use routes::backup::{export_backup, restore_backup};
 use routes::fonts::{delete_font, import_font, list_fonts, rescan_fonts, update_font_metadata};
-use routes::previews::{
-    device_preview, font_specimens, layout_preview, live_data, theme_preview,
-};
+use routes::previews::{device_preview, font_specimens, layout_preview, live_data, theme_preview};
 use routes::projects::{get_project, list_projects, save_project};
 use routes::providers::{
     create_provider_instance, delete_provider_instance, discover_displays, list_provider_instances,
@@ -46,10 +45,13 @@ use routes::providers::{
     upload_preview_to_provider,
 };
 use routes::publish::{
-    force_assignment_update, list_assignment_schedules, publish_project, upload_device_image,
+    force_assignment_update, get_schedule_update_log_settings, list_assignment_schedules,
+    list_display_update_log, publish_project, save_schedule_update_log_settings,
+    upload_device_image,
 };
 use routes::system::{__path_healthz, __path_list_display_profiles, __path_list_icons};
 use routes::system::{healthz, list_display_profiles, list_icons};
+use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use services::scheduler::spawn_assignment_scheduler;
@@ -57,10 +59,10 @@ use storage::{
     all_provider_instances, delete_provider_instance_from_settings, ensure_seeded,
     find_provider_instance, font_index_file_path, fonts_dir, masked_provider_instance,
     project_file_path, projects_dir, read_json_file, read_settings,
-    save_provider_instance_into_settings, write_json_file, write_settings,
+    save_provider_instance_into_settings, update_log_file_path, write_json_file, write_settings,
 };
 use tokio::fs;
-use tower_http::{services::ServeDir, trace::TraceLayer};
+use tower_http::trace::TraceLayer;
 use tracing::info;
 use utoipa::OpenApi;
 
@@ -387,6 +389,11 @@ pub(crate) struct ProviderInstancesDocument {
 pub(crate) struct StoredSettings {
     #[serde(flatten)]
     provider_instances: Option<ProviderInstancesDocument>,
+    #[serde(
+        rename = "scheduleUpdateLogRetentionDays",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) schedule_update_log_retention_days: Option<u64>,
     #[serde(rename = "homeAssistant", skip_serializing_if = "Option::is_none")]
     home_assistant: Option<HomeAssistantSettingsStored>,
     #[serde(
@@ -394,6 +401,36 @@ pub(crate) struct StoredSettings {
         skip_serializing_if = "Option::is_none"
     )]
     openepaperlink_access_point: Option<OpenEpaperLinkAccessPointSettings>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ScheduleUpdateLogSettings {
+    pub(crate) retention_days: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AssignmentUpdateLogEntry {
+    pub(crate) timestamp_ms: u64,
+    pub(crate) timestamp: String,
+    pub(crate) project_id: String,
+    pub(crate) assignment_id: String,
+    pub(crate) display_id: String,
+    pub(crate) desired: bool,
+    pub(crate) succeeded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) height: Option<u32>,
+    #[serde(rename = "imagePngBase64", skip_serializing_if = "Option::is_none")]
+    pub(crate) image_png_base64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -539,14 +576,38 @@ async fn openapi() -> Json<utoipa::openapi::OpenApi> {
     Json(ApiDoc::openapi())
 }
 
-async fn not_found() -> impl IntoResponse {
-    (StatusCode::NOT_FOUND, "not found")
-}
+#[derive(RustEmbed)]
+#[folder = "../../dist/editor-ui"]
+struct EmbeddedEditorAssets;
 
-fn editor_dist_dir() -> PathBuf {
-    env::var("EDITOR_DIST_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("dist/editor-ui"))
+async fn embedded_editor_asset(
+    axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+) -> Response {
+    let requested_path = uri.path().trim_start_matches('/');
+    let asset_path = if requested_path.is_empty() {
+        "index.html"
+    } else {
+        requested_path
+    };
+    let asset =
+        EmbeddedEditorAssets::get(asset_path).or_else(|| EmbeddedEditorAssets::get("index.html"));
+    let Some(asset) = asset else {
+        return (StatusCode::NOT_FOUND, "not found").into_response();
+    };
+    let mime = mime_guess::from_path(asset_path).first_or_octet_stream();
+    let mut response = asset.data.into_owned().into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(mime.as_ref())
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    if asset_path != "index.html" {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        );
+    }
+    response
 }
 
 fn data_dir() -> PathBuf {
@@ -556,10 +617,11 @@ fn data_dir() -> PathBuf {
 }
 
 fn app(state: AppState) -> Router {
-    let static_dir = editor_dist_dir();
     Router::new()
         .route("/healthz", get(healthz))
         .route("/api/v2/openapi.json", get(openapi))
+        .route("/api/v2/backup", get(export_backup))
+        .route("/api/v2/backup/restore", post(restore_backup))
         .route("/api/v2/display-profiles", get(list_display_profiles))
         .route("/api/v2/icons", get(list_icons))
         .route("/api/v2/provider-kinds", get(list_provider_kinds))
@@ -599,12 +661,20 @@ fn app(state: AppState) -> Router {
         .route("/api/v2/projects/:id/theme-preview", post(theme_preview))
         .route("/api/v2/projects/:id/publish", post(publish_project))
         .route(
+            "/api/v2/schedule-update-log-settings",
+            get(get_schedule_update_log_settings).put(save_schedule_update_log_settings),
+        )
+        .route(
             "/api/v2/projects/:id/displays/discover",
             get(discover_displays),
         )
         .route(
             "/api/v2/projects/:id/assignment-schedules",
             get(list_assignment_schedules),
+        )
+        .route(
+            "/api/v2/projects/:id/displays/:displayId/update-log",
+            get(list_display_update_log),
         )
         .route(
             "/api/v2/projects/:id/assignments/:assignmentId/force-update",
@@ -614,7 +684,7 @@ fn app(state: AppState) -> Router {
             "/api/v2/projects/:id/devices/:displayId/upload",
             post(upload_device_image),
         )
-        .fallback_service(ServeDir::new(static_dir).not_found_service(get(not_found)))
+        .fallback(get(embedded_editor_asset))
         .with_state(state)
         .layer(TraceLayer::new_for_http())
 }
@@ -727,12 +797,14 @@ pub(crate) async fn write_font_index(
 }
 
 pub(crate) async fn list_font_options(state: &AppState) -> Result<Vec<FontOption>, ApiError> {
-    Ok(read_font_index(state)
+    let mut fonts = read_font_index(state)
         .await?
         .fonts
         .iter()
         .map(to_font_option)
-        .collect())
+        .collect::<Vec<_>>();
+    fonts.sort_by_key(|font| font.label.to_ascii_lowercase());
+    Ok(fonts)
 }
 
 pub(crate) async fn load_user_font_data(state: &AppState) -> Result<Value, ApiError> {
@@ -752,10 +824,18 @@ pub(crate) async fn load_user_font_data(state: &AppState) -> Result<Value, ApiEr
             let bytes = fs::read(fonts_dir(&state.data_dir).join(filename))
                 .await
                 .map_err(internal_error)?;
-            entry.insert(
-                variant.into(),
-                Value::from(base64::engine::general_purpose::STANDARD.encode(bytes)),
-            );
+            let encoded = Value::from(base64::engine::general_purpose::STANDARD.encode(bytes));
+            entry.insert(variant.clone(), encoded.clone());
+            let (weight, slope) = font_variant_weight_slope(&variant);
+            let alias = match (weight, slope) {
+                ("bold", "italic") => Some("boldItalic"),
+                ("bold", _) => Some("bold"),
+                (_, "italic") => Some("italic"),
+                _ => Some("regular"),
+            };
+            if let Some(alias) = alias {
+                entry.entry(alias).or_insert(encoded);
+            }
         }
         families.insert(font.id, Value::Object(entry));
     }
@@ -779,25 +859,68 @@ pub(crate) fn slugify_font_id(value: &str) -> String {
 
 pub(crate) fn detect_font_variant_from_name(value: &str) -> String {
     let lower = value.to_ascii_lowercase();
-    let bold = lower.contains("bold");
     let italic = lower.contains("italic") || lower.contains("oblique");
-    match (bold, italic) {
-        (true, true) => "boldItalic".into(),
-        (true, false) => "bold".into(),
-        (false, true) => "italic".into(),
-        (false, false) => "regular".into(),
+    let weight = if lower.contains("thin") {
+        "thin"
+    } else if lower.contains("extralight")
+        || lower.contains("extra light")
+        || lower.contains("ultralight")
+        || lower.contains("ultra light")
+    {
+        "extraLight"
+    } else if lower.contains("light") {
+        "light"
+    } else if lower.contains("medium") {
+        "medium"
+    } else if lower.contains("semibold")
+        || lower.contains("semi bold")
+        || lower.contains("demibold")
+        || lower.contains("demi bold")
+    {
+        "semiBold"
+    } else if lower.contains("extrabold")
+        || lower.contains("extra bold")
+        || lower.contains("ultrabold")
+        || lower.contains("ultra bold")
+    {
+        "extraBold"
+    } else if lower.contains("black") || lower.contains("heavy") {
+        "black"
+    } else if lower.contains("bold") {
+        "bold"
+    } else {
+        "regular"
+    };
+    match (weight, italic) {
+        ("regular", true) => "italic".into(),
+        ("regular", false) => "regular".into(),
+        ("bold", true) => "boldItalic".into(),
+        (weight, true) => format!("{weight}Italic"),
+        (weight, false) => weight.into(),
     }
 }
 
+pub(crate) fn font_variant_weight_slope(variant: &str) -> (&'static str, &'static str) {
+    let lower = variant.to_ascii_lowercase();
+    let italic = lower.contains("italic") || lower.contains("oblique");
+    let bold = lower.contains("bold") || lower.contains("black") || lower.contains("heavy");
+    (
+        if bold { "bold" } else { "regular" },
+        if italic { "italic" } else { "roman" },
+    )
+}
+
 pub(crate) fn to_font_option(font: &StoredFontFamily) -> FontOption {
+    let mut variants = font_files(font)
+        .into_iter()
+        .map(|(variant, _)| variant)
+        .collect::<Vec<_>>();
+    variants.sort_by_key(|variant| font_variant_sort_key(variant));
     FontOption {
         id: font.id.clone(),
         label: font.label.clone(),
         source: "user".into(),
-        variants: font_files(font)
-            .into_iter()
-            .map(|(variant, _)| variant)
-            .collect(),
+        variants,
         allowed_pixel_sizes: font.allowed_pixel_sizes.clone(),
         import_source: font.import_source.clone(),
         source_url: font.source_url.clone(),
@@ -805,6 +928,25 @@ pub(crate) fn to_font_option(font: &StoredFontFamily) -> FontOption {
         declared_pixel_size: font.declared_pixel_size,
         license_category: font.license_category.clone(),
     }
+}
+
+fn font_variant_sort_key(variant: &str) -> (u8, String) {
+    let lower = variant.to_ascii_lowercase();
+    let rank = match lower.as_str() {
+        "thin" => 0,
+        "extralight" => 1,
+        "light" => 2,
+        "regular" => 3,
+        "italic" => 4,
+        "medium" => 5,
+        "semibold" => 6,
+        "bold" => 7,
+        "bolditalic" => 8,
+        "extrabold" => 9,
+        "black" => 10,
+        _ => 20,
+    };
+    (rank, lower)
 }
 
 pub(crate) fn font_files(font: &StoredFontFamily) -> Vec<(String, String)> {

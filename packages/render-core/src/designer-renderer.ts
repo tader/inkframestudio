@@ -1917,7 +1917,6 @@ export function resolveAssignedLayout(project: Project, displayId: string, data:
     ? project.layoutDefinitions?.find((entry) => entry.id === layoutId)
     : undefined;
   const fallbackLayout =
-    project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen" && entry.displayTypeId === display.displayTypeId) ??
     project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen");
   if (!layout) {
     if (!fallbackLayout) {
@@ -1935,14 +1934,19 @@ export function resolveAssignedLayout(project: Project, displayId: string, data:
   return { layout, popup, assignment, display };
 }
 
+function resolveLayoutDisplayType(project: Project, layout: LayoutDefinition, displayTypeId?: string): DisplayType {
+  return resolveDisplayType(project, displayTypeId ?? layout.displayTypeId ?? project.displayTypes?.[0]?.id ?? "");
+}
+
 export function renderLayoutDefinition(
   project: Project,
   layout: LayoutDefinition,
   data: RenderData,
   popup?: LayoutDefinition,
-  themeId?: string
+  themeId?: string,
+  displayTypeId?: string
 ): RenderedImage {
-  const displayType = resolveDisplayType(project, layout.displayTypeId);
+  const displayType = resolveLayoutDisplayType(project, layout, displayTypeId);
   const rootContentPadding = layout.kind === "fullscreen" ? displayType.contentPadding : undefined;
   const buffer = new PixelBuffer(displayType.width, displayType.height, COLOR_BG, project.fontPresets);
   buffer.fill(COLOR_BG);
@@ -1997,9 +2001,10 @@ export function inspectLayoutDefinition(
   data: RenderData,
   popup?: LayoutDefinition,
   themeId?: string,
-  expandCompoundRefs = false
+  expandCompoundRefs = false,
+  displayTypeId?: string
 ): LayoutInspectionResult {
-  const displayType = resolveDisplayType(project, layout.displayTypeId);
+  const displayType = resolveLayoutDisplayType(project, layout, displayTypeId);
   const rootContentPadding = layout.kind === "fullscreen" ? displayType.contentPadding : undefined;
   const buffer = new PixelBuffer(displayType.width, displayType.height, COLOR_BG, project.fontPresets);
   const scripting = createActiveRenderScripting(project, data, displayType);
@@ -2044,5 +2049,5 @@ export function inspectLayoutDefinition(
 
 export function renderAssignedDisplay(project: Project, displayId: string, data: RenderData): RenderedImage {
   const resolved = resolveAssignedLayout(project, displayId, data);
-  return renderLayoutDefinition(project, resolved.layout, data, resolved.popup, resolved.assignment.defaultThemeId);
+  return renderLayoutDefinition(project, resolved.layout, data, resolved.popup, resolved.assignment.defaultThemeId, resolved.display.displayTypeId);
 }

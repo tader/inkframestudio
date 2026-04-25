@@ -150,6 +150,8 @@ struct RuntimeFontFamilyData {
     bold: Option<String>,
     #[serde(rename = "boldItalic")]
     bold_italic: Option<String>,
+    #[serde(flatten)]
+    variants: HashMap<String, Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -236,10 +238,11 @@ impl IndexedCanvas {
                 header: presets.header,
             },
             font_family_data: EngineFontFamilyData {
-                regular: family_data.regular,
-                italic: family_data.italic,
-                bold: family_data.bold,
-                bold_italic: family_data.bold_italic,
+                regular: family_data.regular.clone(),
+                italic: family_data.italic.clone(),
+                bold: family_data.bold.clone(),
+                bold_italic: family_data.bold_italic.clone(),
+                variants: runtime_font_variants(&family_data),
             },
             render_mode: "mono_hint".into(),
             threshold: 128,
@@ -373,6 +376,13 @@ fn resolve_font_family_data(
     user_fonts: &HashMap<String, RuntimeFontFamilyData>,
 ) -> Option<RuntimeFontFamilyData> {
     user_fonts.get(family).cloned()
+}
+
+fn runtime_font_variants(data: &RuntimeFontFamilyData) -> HashMap<String, String> {
+    data.variants
+        .iter()
+        .filter_map(|(key, value)| value.as_str().map(|font| (key.clone(), font.to_string())))
+        .collect()
 }
 
 pub(crate) fn render_theme_preview_value(
@@ -609,11 +619,9 @@ mod tests {
     use super::render_theme_preview_value;
 
     fn fixture_font_base64() -> String {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../data/fonts/arial-regular.ttf");
-        base64::engine::general_purpose::STANDARD.encode(
-            std::fs::read(path).expect("fixture font"),
-        )
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/fonts/arial-regular.ttf");
+        base64::engine::general_purpose::STANDARD.encode(std::fs::read(path).expect("fixture font"))
     }
 
     #[test]

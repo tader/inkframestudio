@@ -38,7 +38,9 @@ pub(crate) async fn get_project(
     AxumPath(id): AxumPath<String>,
 ) -> ApiResult<Value> {
     ensure_seeded(&state).await?;
-    Ok(Json(read_json_file(&project_file_path(&state.data_dir, &id)).await?))
+    Ok(Json(
+        read_json_file(&project_file_path(&state.data_dir, &id)).await?,
+    ))
 }
 
 pub(crate) async fn save_project(
@@ -56,11 +58,7 @@ pub(crate) async fn save_project(
     if payload_id != id {
         return Err(ApiError::bad_request("Project id does not match route"));
     }
-    let next_version = object
-        .get("version")
-        .and_then(Value::as_i64)
-        .unwrap_or(0)
-        + 1;
+    let next_version = object.get("version").and_then(Value::as_i64).unwrap_or(0) + 1;
     object.insert("version".into(), Value::from(next_version));
     ensure_seeded(&state).await?;
     write_json_file(&project_file_path(&state.data_dir, &id), &project).await?;

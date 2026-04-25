@@ -75,6 +75,35 @@ export interface AssignmentForceUpdateResponse {
   message: string;
 }
 
+export interface AssignmentUpdateLogEntry {
+  timestampMs: number;
+  timestamp: string;
+  projectId: string;
+  assignmentId: string;
+  displayId: string;
+  desired: boolean;
+  succeeded: boolean;
+  hash?: string;
+  width?: number;
+  height?: number;
+  imagePngBase64?: string;
+  message?: string;
+  error?: string;
+}
+
+export interface ScheduleUpdateLogSettings {
+  retentionDays: number;
+}
+
+export interface BackupArchive {
+  version: number;
+  exportedAt: string;
+  settings?: unknown;
+  fontIndex?: unknown;
+  fonts: Array<{ filename: string; base64: string }>;
+  projects: Array<{ id: string; value: unknown }>;
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -190,15 +219,8 @@ export function fetchProject(id: string): Promise<Project> {
 }
 
 export async function fetchDiscoveredDisplays(projectId: string, providerInstanceId?: string): Promise<DiscoveredDisplayCandidate[]> {
-  let effectiveProviderInstanceId = providerInstanceId;
-  if (!effectiveProviderInstanceId) {
-    const instances = await fetchProviderInstances();
-    effectiveProviderInstanceId = providerById(instances, "openepaperlink-ap")?.id;
-  }
-  if (!effectiveProviderInstanceId) {
-    return [];
-  }
-  return requestJson(`${V2_API_BASE}/projects/${projectId}/displays/discover?providerInstanceId=${encodeURIComponent(effectiveProviderInstanceId)}`);
+  const suffix = providerInstanceId ? `?providerInstanceId=${encodeURIComponent(providerInstanceId)}` : "";
+  return requestJson(`${V2_API_BASE}/projects/${projectId}/displays/discover${suffix}`);
 }
 
 export function saveProject(project: Project): Promise<Project> {
@@ -210,6 +232,36 @@ export function saveProject(project: Project): Promise<Project> {
 
 export function fetchAssignmentSchedules(projectId: string): Promise<AssignmentScheduleStatusResponse[]> {
   return requestJson(`${V2_API_BASE}/projects/${projectId}/assignment-schedules`);
+}
+
+export function fetchDisplayUpdateLog(
+  projectId: string,
+  displayId: string,
+  sinceMs: number
+): Promise<AssignmentUpdateLogEntry[]> {
+  return requestJson(`${V2_API_BASE}/projects/${projectId}/displays/${displayId}/update-log?sinceMs=${Math.max(0, Math.trunc(sinceMs))}`);
+}
+
+export function fetchScheduleUpdateLogSettings(): Promise<ScheduleUpdateLogSettings> {
+  return requestJson(`${V2_API_BASE}/schedule-update-log-settings`);
+}
+
+export function saveScheduleUpdateLogSettings(settings: ScheduleUpdateLogSettings): Promise<ScheduleUpdateLogSettings> {
+  return requestJson(`${V2_API_BASE}/schedule-update-log-settings`, {
+    method: "PUT",
+    body: JSON.stringify(settings)
+  });
+}
+
+export function fetchBackupArchive(): Promise<BackupArchive> {
+  return requestJson(`${V2_API_BASE}/backup`);
+}
+
+export function restoreBackupArchive(archive: BackupArchive): Promise<BackupArchive> {
+  return requestJson(`${V2_API_BASE}/backup/restore`, {
+    method: "POST",
+    body: JSON.stringify(archive)
+  });
 }
 
 export function forceAssignmentUpdate(
@@ -247,11 +299,12 @@ export function fetchLayoutPreview(
   projectId: string,
   layoutId: string,
   popupLayoutId: string | undefined,
-  project: Project
+  project: Project,
+  displayTypeId?: string
 ): Promise<PreviewResponse> {
   return requestJson(`${V2_API_BASE}/projects/${projectId}/layout-preview`, {
     method: "POST",
-    body: JSON.stringify({ layoutId, popupLayoutId, project })
+    body: JSON.stringify({ layoutId, popupLayoutId, displayTypeId, project })
   });
 }
 

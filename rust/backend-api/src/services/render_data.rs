@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
 use crate::{
-    app::AppState, all_provider_instances, find_provider_instance, home_assistant_request,
+    all_provider_instances, app::AppState, find_provider_instance, home_assistant_request,
     providers::source_provider, read_settings, ApiError, HomeAssistantSettingsStored,
 };
 
@@ -16,7 +16,12 @@ fn format_local_date<Tz: TimeZone>(date: chrono::DateTime<Tz>) -> String
 where
     Tz::Offset: std::fmt::Display,
 {
-    format!("{}-{}-{}", date.year(), zero_pad(date.month()), zero_pad(date.day()))
+    format!(
+        "{}-{}-{}",
+        date.year(),
+        zero_pad(date.month()),
+        zero_pad(date.day())
+    )
 }
 
 fn parse_rollover_time(value: Option<&str>) -> Option<(u32, u32)> {
@@ -33,7 +38,12 @@ fn parse_rollover_time(value: Option<&str>) -> Option<(u32, u32)> {
 fn build_local_calendar_window(
     offset_days: i64,
     rollover_time: Option<&str>,
-) -> (chrono::DateTime<Local>, chrono::DateTime<Local>, String, i64) {
+) -> (
+    chrono::DateTime<Local>,
+    chrono::DateTime<Local>,
+    String,
+    i64,
+) {
     let now = Local::now();
     let mut effective_offset_days = offset_days;
     if let Some((hours, minutes)) = parse_rollover_time(rollover_time) {
@@ -66,7 +76,11 @@ fn extract_event_date_string(value: &Value) -> Option<String> {
             "end_time",
         ]
         .iter()
-        .find_map(|key| map.get(*key).and_then(Value::as_str).map(ToString::to_string)),
+        .find_map(|key| {
+            map.get(*key)
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        }),
         _ => None,
     }
 }
@@ -182,8 +196,14 @@ fn normalize_calendar_event(entity_id: &str, item: &Value) -> Value {
 
 fn sort_calendar_events(items: &mut [Value]) {
     items.sort_by(|left, right| {
-        let left_start = left.get("start").and_then(Value::as_str).unwrap_or_default();
-        let right_start = right.get("start").and_then(Value::as_str).unwrap_or_default();
+        let left_start = left
+            .get("start")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let right_start = right
+            .get("start")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let left_end = left.get("end").and_then(Value::as_str).unwrap_or_default();
         let right_end = right.get("end").and_then(Value::as_str).unwrap_or_default();
         let left_summary = left
@@ -211,7 +231,9 @@ fn sort_calendar_events(items: &mut [Value]) {
 }
 
 fn walk_layout_node(node: Option<&Value>, refs: &mut Vec<Value>) {
-    let Some(node) = node else { return; };
+    let Some(node) = node else {
+        return;
+    };
     if node.get("type").and_then(Value::as_str) == Some("data_query") {
         refs.push(node.clone());
     }
@@ -284,7 +306,9 @@ fn scan_layout_requirements_node(
     requirements: &mut RenderDataRequirements,
     visited_compounds: &mut BTreeSet<String>,
 ) {
-    let Some(node) = node else { return; };
+    let Some(node) = node else {
+        return;
+    };
     match node.get("type").and_then(Value::as_str).unwrap_or_default() {
         "primitive_instance" => {
             if node
@@ -314,34 +338,67 @@ fn scan_layout_requirements_node(
             if node.get("queryKind").and_then(Value::as_str) == Some("calendar_events") {
                 requirements.needs_meta_calendar_events = true;
             }
-            scan_layout_requirements_node(project, node.get("child"), requirements, visited_compounds);
+            scan_layout_requirements_node(
+                project,
+                node.get("child"),
+                requirements,
+                visited_compounds,
+            );
         }
         "stack" | "zstack" => {
             if let Some(children) = node.get("children").and_then(Value::as_array) {
                 for child in children {
-                    scan_layout_requirements_node(project, Some(child), requirements, visited_compounds);
+                    scan_layout_requirements_node(
+                        project,
+                        Some(child),
+                        requirements,
+                        visited_compounds,
+                    );
                 }
             }
         }
         "grid" => {
             if let Some(children) = node.get("children").and_then(Value::as_array) {
                 for child in children {
-                    scan_layout_requirements_node(project, child.get("node"), requirements, visited_compounds);
+                    scan_layout_requirements_node(
+                        project,
+                        child.get("node"),
+                        requirements,
+                        visited_compounds,
+                    );
                 }
             }
         }
         "foreach" | "filter" | "unique" | "script" => {
-            scan_layout_requirements_node(project, node.get("child"), requirements, visited_compounds);
+            scan_layout_requirements_node(
+                project,
+                node.get("child"),
+                requirements,
+                visited_compounds,
+            );
         }
         "if_else" => {
-            scan_layout_requirements_node(project, node.get("thenChild"), requirements, visited_compounds);
-            scan_layout_requirements_node(project, node.get("elseChild"), requirements, visited_compounds);
+            scan_layout_requirements_node(
+                project,
+                node.get("thenChild"),
+                requirements,
+                visited_compounds,
+            );
+            scan_layout_requirements_node(
+                project,
+                node.get("elseChild"),
+                requirements,
+                visited_compounds,
+            );
         }
         _ => {}
     }
 }
 
-fn render_data_requirements(project: &Value, target_layout_id: Option<&str>) -> RenderDataRequirements {
+fn render_data_requirements(
+    project: &Value,
+    target_layout_id: Option<&str>,
+) -> RenderDataRequirements {
     let mut requirements = RenderDataRequirements::default();
     let mut visited_compounds = BTreeSet::new();
     if let Some(layout_id) = target_layout_id {
@@ -354,12 +411,22 @@ fn render_data_requirements(project: &Value, target_layout_id: Option<&str>) -> 
                     .find(|layout| layout.get("id").and_then(Value::as_str) == Some(layout_id))
             })
             .and_then(|layout| layout.get("rootNode"));
-        scan_layout_requirements_node(project, target_root, &mut requirements, &mut visited_compounds);
+        scan_layout_requirements_node(
+            project,
+            target_root,
+            &mut requirements,
+            &mut visited_compounds,
+        );
         return requirements;
     }
     if let Some(layouts) = project.get("layoutDefinitions").and_then(Value::as_array) {
         for layout in layouts {
-            scan_layout_requirements_node(project, layout.get("rootNode"), &mut requirements, &mut visited_compounds);
+            scan_layout_requirements_node(
+                project,
+                layout.get("rootNode"),
+                &mut requirements,
+                &mut visited_compounds,
+            );
         }
     }
     requirements
@@ -384,41 +451,42 @@ pub(crate) async fn resolve_meta_queries(
         let rollover_time = node.get("rolloverTime").and_then(Value::as_str);
         let (start, end, date, effective_offset_days) =
             build_local_calendar_window(offset_days, rollover_time);
-        let items_and_warnings = if let Some(entity_ids) = node.get("calendarEntityIds").and_then(Value::as_array) {
-            let owned_entity_ids = entity_ids
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToString::to_string)
-                .collect::<Vec<_>>();
-            stream::iter(owned_entity_ids.into_iter().map(|entity_id| {
-                let path = format!(
-                    "/calendars/{}?start={}&end={}",
+        let items_and_warnings =
+            if let Some(entity_ids) = node.get("calendarEntityIds").and_then(Value::as_array) {
+                let owned_entity_ids = entity_ids
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                stream::iter(owned_entity_ids.into_iter().map(|entity_id| {
+                    let path = format!(
+                        "/calendars/{}?start={}&end={}",
                         entity_id,
                         urlencoding::encode(&start.to_rfc3339()),
                         urlencoding::encode(&end.to_rfc3339())
-                );
-                async move {
-                    match home_assistant_request::<Vec<Value>>(client, settings, &path).await {
-                        Ok(calendar_items) => (
-                            calendar_items
-                                .into_iter()
-                                .map(|item| normalize_calendar_event(&entity_id, &item))
-                                .collect::<Vec<_>>(),
-                            None,
-                        ),
-                        Err(error) => (
-                            Vec::new(),
-                            Some(format!("Calendar {} failed. {}", entity_id, error.message)),
-                        ),
+                    );
+                    async move {
+                        match home_assistant_request::<Vec<Value>>(client, settings, &path).await {
+                            Ok(calendar_items) => (
+                                calendar_items
+                                    .into_iter()
+                                    .map(|item| normalize_calendar_event(&entity_id, &item))
+                                    .collect::<Vec<_>>(),
+                                None,
+                            ),
+                            Err(error) => (
+                                Vec::new(),
+                                Some(format!("Calendar {} failed. {}", entity_id, error.message)),
+                            ),
+                        }
                     }
-                }
-            }))
-            .buffer_unordered(4)
-            .collect::<Vec<_>>()
-            .await
-        } else {
-            Vec::new()
-        };
+                }))
+                .buffer_unordered(4)
+                .collect::<Vec<_>>()
+                .await
+            } else {
+                Vec::new()
+            };
         let mut items = Vec::new();
         for (result_items, warning) in items_and_warnings {
             items.extend(result_items);
@@ -469,7 +537,9 @@ pub(crate) async fn resolve_project_render_data_value(
         .or_else(|| {
             all_provider_instances(&settings_document)
                 .into_iter()
-                .find(|instance| instance.enabled && source_provider(&instance.provider_id).is_some())
+                .find(|instance| {
+                    instance.enabled && source_provider(&instance.provider_id).is_some()
+                })
         });
     let Some(source_instance) = default_source_instance else {
         return Ok((
@@ -495,12 +565,18 @@ pub(crate) async fn resolve_project_render_data_value(
 
     let requirements = render_data_requirements(project, target_layout_id);
     let entities = if requirements.needs_live_entities {
-        match source_provider_impl.live_entities(state, &source_instance).await {
+        match source_provider_impl
+            .live_entities(state, &source_instance)
+            .await
+        {
             Ok(entities) => entities,
             Err(error) => {
                 return Ok((
                     unavailable_data,
-                    Some(format!("Live source failed. {} Using unknown state.", error.message)),
+                    Some(format!(
+                        "Live source failed. {} Using unknown state.",
+                        error.message
+                    )),
                 ))
             }
         }
@@ -509,9 +585,9 @@ pub(crate) async fn resolve_project_render_data_value(
     };
     let (meta_queries, meta_warnings) = if requirements.needs_meta_calendar_events {
         source_provider_impl
-        .resolve_meta_queries(state, &source_instance, project)
-        .await
-        .unwrap_or_default()
+            .resolve_meta_queries(state, &source_instance, project)
+            .await
+            .unwrap_or_default()
     } else {
         (serde_json::Map::new(), Vec::new())
     };

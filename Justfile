@@ -2,7 +2,7 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
 run:
 	if [ ! -d node_modules ]; then npm install; fi
-	npm run build
+	npm run build:editor
 	PORT="${PORT:-8099}" cargo run --release --manifest-path rust/backend-api/Cargo.toml
 
 build:
@@ -11,11 +11,12 @@ build:
 
 dev:
 	if [ ! -d node_modules ]; then npm install; fi
+	npm run build:editor
 	PORT="${PORT:-8099}" cargo run --manifest-path rust/backend-api/Cargo.toml
 
 rust-api:
 	if [ ! -d node_modules ]; then npm install; fi
-	npm run generate:font-awesome
+	npm run build:editor
 	PORT="${PORT:-8098}" cargo run --manifest-path rust/backend-api/Cargo.toml
 
 smoke-health:

@@ -119,7 +119,7 @@ const SAMPLE_ASSIGNMENTS: DeviceAssignment[] = SAMPLE_DEVICES.map((device) => ({
 
 export const SAMPLE_PROJECT: Project = {
   id: "demo-home",
-  name: "Home Demo",
+  name: "InkFrame Studio",
   version: 1,
   locale: "en-US",
   fontPresets: DEFAULT_FONT_PRESETS,

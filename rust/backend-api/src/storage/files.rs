@@ -24,6 +24,10 @@ pub(crate) fn settings_file_path(data_dir: &Path) -> PathBuf {
     data_dir.join("settings.json")
 }
 
+pub(crate) fn update_log_file_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("update-log.json")
+}
+
 pub(crate) fn project_file_path(data_dir: &Path, id: &str) -> PathBuf {
     projects_dir(data_dir).join(format!("{id}.json"))
 }
@@ -38,7 +42,12 @@ pub(crate) async fn ensure_seeded(state: &AppState) -> Result<(), ApiError> {
     let mut entries = fs::read_dir(projects_dir(&state.data_dir))
         .await
         .map_err(internal_error)?;
-    if entries.next_entry().await.map_err(internal_error)?.is_none() {
+    if entries
+        .next_entry()
+        .await
+        .map_err(internal_error)?
+        .is_none()
+    {
         let seeded: Value = serde_json::from_str(SEEDED_PROJECT_JSON)
             .map_err(|error| ApiError::internal(error.to_string()))?;
         let project_id = string_field(&seeded, "id");
@@ -51,7 +60,9 @@ pub(crate) async fn read_json_file(path: &Path) -> Result<Value, ApiError> {
     let content = fs::read_to_string(path)
         .await
         .map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => ApiError::not_found(format!("Missing {}", path.display())),
+            std::io::ErrorKind::NotFound => {
+                ApiError::not_found(format!("Missing {}", path.display()))
+            }
             _ => internal_error(error),
         })?;
     serde_json::from_str(&content).map_err(|error| ApiError::internal(error.to_string()))
@@ -68,7 +79,8 @@ pub(crate) async fn write_json_file(path: &Path, value: &Value) -> Result<(), Ap
             .map_err(|error| ApiError::internal(error.to_string()))?
             .as_nanos()
     ));
-    let bytes = serde_json::to_vec_pretty(value).map_err(|error| ApiError::internal(error.to_string()))?;
+    let bytes =
+        serde_json::to_vec_pretty(value).map_err(|error| ApiError::internal(error.to_string()))?;
     fs::write(&temp_path, [&bytes[..], b"\n"].concat())
         .await
         .map_err(internal_error)?;

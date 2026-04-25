@@ -81,7 +81,11 @@ pub struct ProviderInstance {
 pub(crate) trait SourceProvider: Sync + Send {
     fn descriptor(&self) -> ProviderDescriptor;
     fn is_configured(&self, instance: &ProviderInstance) -> bool;
-    async fn test_connection(&self, state: &AppState, instance: &ProviderInstance) -> Result<Value, ApiError>;
+    async fn test_connection(
+        &self,
+        state: &AppState,
+        instance: &ProviderInstance,
+    ) -> Result<Value, ApiError>;
     async fn entity_catalog(
         &self,
         state: &AppState,
@@ -104,7 +108,11 @@ pub(crate) trait SourceProvider: Sync + Send {
 pub(crate) trait DisplayProvider: Sync + Send {
     fn descriptor(&self) -> ProviderDescriptor;
     fn is_configured(&self, instance: &ProviderInstance) -> bool;
-    async fn test_connection(&self, state: &AppState, instance: &ProviderInstance) -> Result<Value, ApiError>;
+    async fn test_connection(
+        &self,
+        state: &AppState,
+        instance: &ProviderInstance,
+    ) -> Result<Value, ApiError>;
     async fn discover(
         &self,
         state: &AppState,

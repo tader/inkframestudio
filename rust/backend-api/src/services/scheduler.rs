@@ -1,17 +1,21 @@
 use axum::Json;
+use base64::Engine;
 use serde_json::{json, Value};
+use tokio::fs;
 use tokio::time::{sleep, Duration};
 
 use crate::{
     app::AppState, display_provider, find_provider_instance, load_user_font_data,
     native_layout_preview::try_render_assigned_preview, now_ms,
-    openepaperlink_settings_from_instance, project_file_path, read_json_file, read_settings,
-    png_to_jpeg, routes::projects::list_projects,
-    services::render_data::resolve_project_render_data_value, upload_image_to_access_point, ApiError,
-    AssignmentConfig, AssignmentForceUpdateResponse,
-    AssignmentScheduleStatusResponse, ProjectSummary, SchedulerState, StoredSettings,
+    openepaperlink_settings_from_instance, png_to_jpeg, project_file_path, read_json_file,
+    read_settings, routes::projects::list_projects,
+    services::render_data::resolve_project_render_data_value, update_log_file_path,
+    upload_image_to_access_point, write_json_file, ApiError, AssignmentConfig,
+    AssignmentForceUpdateResponse, AssignmentScheduleStatusResponse, AssignmentUpdateLogEntry,
+    ProjectSummary, SchedulerState, StoredSettings,
 };
 
+#[derive(Clone)]
 pub(crate) struct RenderedPreviewOutput {
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -57,6 +61,52 @@ fn iso_string(timestamp_ms: Option<u64>) -> Option<String> {
     })
 }
 
+fn iso_string_required(timestamp_ms: u64) -> String {
+    iso_string(Some(timestamp_ms)).unwrap_or_else(|| chrono::Utc::now().to_rfc3339())
+}
+
+pub(crate) fn schedule_update_log_retention_days(settings: &StoredSettings) -> u64 {
+    settings
+        .schedule_update_log_retention_days
+        .unwrap_or(7)
+        .max(1)
+}
+
+pub(crate) async fn read_assignment_update_log(
+    state: &AppState,
+) -> Result<Vec<AssignmentUpdateLogEntry>, ApiError> {
+    match fs::read_to_string(update_log_file_path(&state.data_dir)).await {
+        Ok(content) => {
+            serde_json::from_str(&content).map_err(|error| ApiError::internal(error.to_string()))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(crate::internal_error(error)),
+    }
+}
+
+async fn write_assignment_update_log(
+    state: &AppState,
+    entries: &[AssignmentUpdateLogEntry],
+) -> Result<(), ApiError> {
+    let value =
+        serde_json::to_value(entries).map_err(|error| ApiError::internal(error.to_string()))?;
+    write_json_file(&update_log_file_path(&state.data_dir), &value).await
+}
+
+async fn append_assignment_update_log(
+    state: &AppState,
+    settings: &StoredSettings,
+    entry: AssignmentUpdateLogEntry,
+) -> Result<(), ApiError> {
+    let cutoff = now_ms().saturating_sub(
+        schedule_update_log_retention_days(settings).saturating_mul(24 * 60 * 60 * 1000),
+    );
+    let mut entries = read_assignment_update_log(state).await.unwrap_or_default();
+    entries.retain(|candidate| candidate.timestamp_ms >= cutoff);
+    entries.push(entry);
+    write_assignment_update_log(state, &entries).await
+}
+
 fn assignment_configs(project: &Value, settings: Option<&StoredSettings>) -> Vec<AssignmentConfig> {
     let devices = project
         .get("devices")
@@ -72,12 +122,17 @@ fn assignment_configs(project: &Value, settings: Option<&StoredSettings>) -> Vec
         .filter_map(|assignment| {
             let assignment_id = assignment.get("id")?.as_str()?.to_string();
             let display_id = assignment.get("displayId")?.as_str()?.to_string();
-            let display = devices
-                .iter()
-                .find(|entry| entry.get("id").and_then(Value::as_str) == Some(display_id.as_str()))?;
+            let display = devices.iter().find(|entry| {
+                entry.get("id").and_then(Value::as_str) == Some(display_id.as_str())
+            })?;
             let enabled = bool_at(&assignment, &["schedule", "enabled"]).unwrap_or(false);
-            let interval_minutes = u64_at(&assignment, &["schedule", "intervalMinutes"]).unwrap_or(15).max(1);
-            let managed = display.get("managed").and_then(Value::as_bool).unwrap_or(false);
+            let interval_minutes = u64_at(&assignment, &["schedule", "intervalMinutes"])
+                .unwrap_or(15)
+                .max(1);
+            let managed = display
+                .get("managed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let provider_kind = display
                 .get("displayProviderInstanceId")
                 .and_then(Value::as_str)
@@ -91,7 +146,11 @@ fn assignment_configs(project: &Value, settings: Option<&StoredSettings>) -> Vec
             let provider_instance_id = if provider_kind.is_empty() {
                 if legacy_provider_kind == "openepaperlink-ap" {
                     "openepaperlink-ap-default".to_string()
-                } else if display.get("virtual").and_then(Value::as_bool).unwrap_or(false) {
+                } else if display
+                    .get("virtual")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
                     "virtual-default".to_string()
                 } else {
                     String::new()
@@ -105,13 +164,19 @@ fn assignment_configs(project: &Value, settings: Option<&StoredSettings>) -> Vec
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
-            let mac = string_at(display, &["metadata", "mac"]).unwrap_or_else(|| provider_device_ref.clone());
+            let mac = string_at(display, &["metadata", "mac"])
+                .unwrap_or_else(|| provider_device_ref.clone());
             let provider_supports_scheduling = settings
                 .and_then(|document| find_provider_instance(document, &provider_instance_id))
-                .and_then(|instance| display_provider(&instance.provider_id).map(|provider| provider.supports_scheduling()))
-                .unwrap_or(legacy_provider_kind == "openepaperlink-ap"
-                    || provider_instance_id == "openepaperlink-ap-default"
-                    || provider_instance_id.contains("openepaperlink-ap"));
+                .and_then(|instance| {
+                    display_provider(&instance.provider_id)
+                        .map(|provider| provider.supports_scheduling())
+                })
+                .unwrap_or(
+                    legacy_provider_kind == "openepaperlink-ap"
+                        || provider_instance_id == "openepaperlink-ap-default"
+                        || provider_instance_id.contains("openepaperlink-ap"),
+                );
             Some(AssignmentConfig {
                 assignment_id,
                 display_id,
@@ -136,7 +201,10 @@ fn build_assignment_status(
     config: &AssignmentConfig,
 ) -> AssignmentScheduleStatusResponse {
     let key = assignment_key(project_id, &config.assignment_id);
-    let states = state.assignment_states.lock().expect("assignment state mutex poisoned");
+    let states = state
+        .assignment_states
+        .lock()
+        .expect("assignment state mutex poisoned");
     let scheduler_state = states.get(&key).cloned().unwrap_or(SchedulerState {
         config_signature: None,
         next_run_at: None,
@@ -174,7 +242,9 @@ pub(crate) async fn render_assigned_live(
     let Some(rendered) =
         try_render_assigned_preview(project, &user_fonts, &data, display_id, message.clone())?
     else {
-        return Err(ApiError::bad_request("Native renderer does not support requested assignment render"));
+        return Err(ApiError::bad_request(
+            "Native renderer does not support requested assignment render",
+        ));
     };
     Ok(RenderedPreviewOutput {
         width: rendered.width,
@@ -202,7 +272,10 @@ pub(crate) async fn run_assignment_update(
         .ok_or_else(|| ApiError::not_found(format!("Unknown assignment {assignment_id}")))?;
     let key = assignment_key(project_id, assignment_id);
     {
-        let mut states = state.assignment_states.lock().expect("assignment state mutex poisoned");
+        let mut states = state
+            .assignment_states
+            .lock()
+            .expect("assignment state mutex poisoned");
         let entry = states.entry(key.clone()).or_insert(SchedulerState {
             config_signature: None,
             next_run_at: None,
@@ -217,12 +290,43 @@ pub(crate) async fn run_assignment_update(
         entry.last_run_at = Some(now_ms());
     }
 
+    let started_at = now_ms();
+    let mut log_rendered: Option<RenderedPreviewOutput> = None;
+    let mut log_desired = true;
     let result = async {
         if !config.schedulable {
             return Err(ApiError::bad_request(
                 "Scheduling requires a managed OpenEPaperLink AP display.",
             ));
         }
+        let rendered = render_assigned_live(state, project_id, project, &config.display_id).await?;
+        let state_previous_hash = {
+            let states = state
+                .assignment_states
+                .lock()
+                .expect("assignment state mutex poisoned");
+            states.get(&key).and_then(|entry| entry.last_hash.clone())
+        };
+        let previous_hash = match state_previous_hash {
+            Some(hash) => Some(hash),
+            None => read_assignment_update_log(state)
+                .await
+                .ok()
+                .and_then(|entries| {
+                    entries
+                        .into_iter()
+                        .filter(|entry| {
+                            entry.project_id == project_id
+                                && entry.assignment_id == assignment_id
+                                && entry.succeeded
+                                && entry.hash.is_some()
+                        })
+                        .max_by_key(|entry| entry.timestamp_ms)
+                        .and_then(|entry| entry.hash)
+                }),
+        };
+        log_desired = previous_hash.as_deref() != Some(rendered.hash.as_str());
+        log_rendered = Some(rendered.clone());
         let provider_instance = find_provider_instance(&settings_doc, &config.provider_instance_id)
             .ok_or_else(|| ApiError::bad_request("Display provider instance is not configured."))?;
         let settings = openepaperlink_settings_from_instance(&provider_instance);
@@ -231,13 +335,11 @@ pub(crate) async fn run_assignment_update(
                 "OpenEPaperLink access point URL is not configured.",
             ));
         }
-        let rendered = render_assigned_live(state, project_id, project, &config.display_id).await?;
-        let previous_hash = {
-            let states = state.assignment_states.lock().expect("assignment state mutex poisoned");
-            states.get(&key).and_then(|entry| entry.last_hash.clone())
-        };
         if !force && previous_hash.as_deref() == Some(rendered.hash.as_str()) {
-            let mut states = state.assignment_states.lock().expect("assignment state mutex poisoned");
+            let mut states = state
+                .assignment_states
+                .lock()
+                .expect("assignment state mutex poisoned");
             if let Some(entry) = states.get_mut(&key) {
                 entry.last_completed_at = Some(now_ms());
                 entry.last_result = Some("skipped_unchanged".into());
@@ -250,8 +352,8 @@ pub(crate) async fn run_assignment_update(
                 entry.running = false;
             }
             return Ok(AssignmentForceUpdateResponse {
-                assignment_id: config.assignment_id,
-                display_id: config.display_id,
+                assignment_id: config.assignment_id.clone(),
+                display_id: config.display_id.clone(),
                 updated: false,
                 skipped: true,
                 hash: Some(rendered.hash),
@@ -269,7 +371,10 @@ pub(crate) async fn run_assignment_update(
             format!("{}.jpg", config.provider_device_ref),
         )
         .await?;
-        let mut states = state.assignment_states.lock().expect("assignment state mutex poisoned");
+        let mut states = state
+            .assignment_states
+            .lock()
+            .expect("assignment state mutex poisoned");
         if let Some(entry) = states.get_mut(&key) {
             entry.last_hash = Some(rendered.hash.clone());
             entry.last_completed_at = Some(now_ms());
@@ -283,8 +388,8 @@ pub(crate) async fn run_assignment_update(
             entry.running = false;
         }
         Ok(AssignmentForceUpdateResponse {
-            assignment_id: config.assignment_id,
-            display_id: config.display_id,
+            assignment_id: config.assignment_id.clone(),
+            display_id: config.display_id.clone(),
             updated: true,
             skipped: false,
             hash: Some(rendered.hash),
@@ -300,7 +405,10 @@ pub(crate) async fn run_assignment_update(
     .await;
 
     if let Err(error) = &result {
-        let mut states = state.assignment_states.lock().expect("assignment state mutex poisoned");
+        let mut states = state
+            .assignment_states
+            .lock()
+            .expect("assignment state mutex poisoned");
         if let Some(entry) = states.get_mut(&key) {
             entry.last_completed_at = Some(now_ms());
             entry.last_result = Some("error".into());
@@ -313,6 +421,28 @@ pub(crate) async fn run_assignment_update(
             entry.running = false;
         }
     }
+    let (succeeded, message, error) = match &result {
+        Ok(response) => (true, Some(response.message.clone()), None),
+        Err(error) => (false, None, Some(error.message.clone())),
+    };
+    let log_entry = AssignmentUpdateLogEntry {
+        timestamp_ms: started_at,
+        timestamp: iso_string_required(started_at),
+        project_id: project_id.to_string(),
+        assignment_id: config.assignment_id.clone(),
+        display_id: config.display_id.clone(),
+        desired: log_desired,
+        succeeded,
+        hash: log_rendered.as_ref().map(|rendered| rendered.hash.clone()),
+        width: log_rendered.as_ref().map(|rendered| rendered.width),
+        height: log_rendered.as_ref().map(|rendered| rendered.height),
+        image_png_base64: log_rendered
+            .as_ref()
+            .map(|rendered| base64::engine::general_purpose::STANDARD.encode(&rendered.png_bytes)),
+        message,
+        error,
+    };
+    let _ = append_assignment_update_log(state, &settings_doc, log_entry).await;
     result
 }
 
@@ -359,7 +489,9 @@ pub(crate) async fn upload_device_image_for_display(
         .unwrap_or("openepaperlink-ap-default");
     let settings_store = read_settings(state).await?;
     let provider_instance = find_provider_instance(&settings_store, provider_instance_id)
-        .ok_or_else(|| ApiError::bad_request("OpenEPaperLink provider instance is not configured"))?;
+        .ok_or_else(|| {
+            ApiError::bad_request("OpenEPaperLink provider instance is not configured")
+        })?;
     let settings = openepaperlink_settings_from_instance(&provider_instance);
     if settings.url.trim().is_empty() {
         return Err(ApiError::bad_request(
@@ -395,13 +527,16 @@ pub(crate) async fn upload_device_image_for_display(
 pub(crate) async fn tick_assignment_scheduler(state: AppState) {
     let mut valid_keys = Vec::new();
     let settings = read_settings(&state).await.ok();
-    let projects: Vec<ProjectSummary> = if let Ok(Json(projects)) = list_projects(axum::extract::State(state.clone())).await {
-        projects
-    } else {
-        Vec::new()
-    };
+    let projects: Vec<ProjectSummary> =
+        if let Ok(Json(projects)) = list_projects(axum::extract::State(state.clone())).await {
+            projects
+        } else {
+            Vec::new()
+        };
     for project in projects {
-        if let Ok(project_value) = read_json_file(&project_file_path(&state.data_dir, &project.id)).await {
+        if let Ok(project_value) =
+            read_json_file(&project_file_path(&state.data_dir, &project.id)).await
+        {
             for config in assignment_configs(&project_value, settings.as_ref()) {
                 let key = assignment_key(&project.id, &config.assignment_id);
                 valid_keys.push(key.clone());
@@ -411,7 +546,10 @@ pub(crate) async fn tick_assignment_scheduler(state: AppState) {
                 );
                 let mut should_run = false;
                 {
-                    let mut states = state.assignment_states.lock().expect("assignment state mutex poisoned");
+                    let mut states = state
+                        .assignment_states
+                        .lock()
+                        .expect("assignment state mutex poisoned");
                     let entry = states.entry(key.clone()).or_insert(SchedulerState {
                         config_signature: None,
                         next_run_at: None,
@@ -430,12 +568,17 @@ pub(crate) async fn tick_assignment_scheduler(state: AppState) {
                             None
                         };
                         if !config.enabled {
-                            if !matches!(entry.last_result.as_deref(), Some("updated" | "skipped_unchanged")) {
+                            if !matches!(
+                                entry.last_result.as_deref(),
+                                Some("updated" | "skipped_unchanged")
+                            ) {
                                 entry.last_result = Some("disabled".into());
                             }
                         } else if !config.schedulable {
                             entry.last_result = Some("error".into());
-                            entry.last_error = Some("Scheduling requires a managed OpenEPaperLink AP display.".into());
+                            entry.last_error = Some(
+                                "Scheduling requires a managed OpenEPaperLink AP display.".into(),
+                            );
                         }
                     }
                     if config.enabled
@@ -447,12 +590,22 @@ pub(crate) async fn tick_assignment_scheduler(state: AppState) {
                     }
                 }
                 if should_run {
-                    let _ = run_assignment_update(&state, &project.id, &project_value, &config.assignment_id, false).await;
+                    let _ = run_assignment_update(
+                        &state,
+                        &project.id,
+                        &project_value,
+                        &config.assignment_id,
+                        false,
+                    )
+                    .await;
                 }
             }
         }
     }
-    let mut states = state.assignment_states.lock().expect("assignment state mutex poisoned");
+    let mut states = state
+        .assignment_states
+        .lock()
+        .expect("assignment state mutex poisoned");
     states.retain(|key, _| valid_keys.iter().any(|candidate| candidate == key));
 }
 

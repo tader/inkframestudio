@@ -1,8 +1,13 @@
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 
-use crate::providers::registry::{DisplayProvider, ProviderDescriptor, ProviderDomain, ProviderInstance};
-use crate::{app::AppState, ApiError, DiscoveredDisplayCandidate, UploadPreviewRequest, UploadPreviewResponse};
+use crate::providers::registry::{
+    DisplayProvider, ProviderDescriptor, ProviderDomain, ProviderInstance,
+};
+use crate::{
+    app::AppState, ApiError, DiscoveredDisplayCandidate, UploadPreviewRequest,
+    UploadPreviewResponse,
+};
 
 pub static PROVIDER: VirtualDisplayProvider = VirtualDisplayProvider;
 
@@ -28,7 +33,11 @@ impl DisplayProvider for VirtualDisplayProvider {
         true
     }
 
-    async fn test_connection(&self, _state: &AppState, _instance: &ProviderInstance) -> Result<serde_json::Value, ApiError> {
+    async fn test_connection(
+        &self,
+        _state: &AppState,
+        _instance: &ProviderInstance,
+    ) -> Result<serde_json::Value, ApiError> {
         Ok(json!({
             "ok": true,
             "message": "Virtual provider ready"
@@ -38,9 +47,51 @@ impl DisplayProvider for VirtualDisplayProvider {
     async fn discover(
         &self,
         _state: &AppState,
-        _instance: &ProviderInstance,
+        instance: &ProviderInstance,
     ) -> Result<Vec<DiscoveredDisplayCandidate>, ApiError> {
-        Ok(Vec::new())
+        Ok(instance
+            .config
+            .get("virtualDisplays")
+            .and_then(Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, entry)| {
+                        let id = entry
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .filter(|value| !value.trim().is_empty())
+                            .map(str::to_string)
+                            .unwrap_or_else(|| format!("virtual-{}", index + 1));
+                        let name = entry
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .filter(|value| !value.trim().is_empty())
+                            .map(str::to_string)
+                            .unwrap_or_else(|| format!("Virtual Display {}", index + 1));
+                        let display_type_id = entry
+                            .get("displayTypeId")
+                            .and_then(Value::as_str)
+                            .filter(|value| !value.trim().is_empty())
+                            .map(str::to_string)?;
+                        Some(DiscoveredDisplayCandidate {
+                            id: format!("{}:{id}", instance.id),
+                            name,
+                            provider_id: "virtual".into(),
+                            provider_instance_id: instance.id.clone(),
+                            provider_device_ref: id.clone(),
+                            provider_kind: "virtual".into(),
+                            provider_ref: id.clone(),
+                            suggested_display_type_id: Some(display_type_id),
+                            suggested_display_type: None,
+                            discovery_source: "virtual".into(),
+                            metadata: json!({ "virtual": true }),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default())
     }
 
     async fn upload_preview(
@@ -49,7 +100,9 @@ impl DisplayProvider for VirtualDisplayProvider {
         _instance: &ProviderInstance,
         _payload: UploadPreviewRequest,
     ) -> Result<UploadPreviewResponse, ApiError> {
-        Err(ApiError::bad_request("Provider does not support preview upload"))
+        Err(ApiError::bad_request(
+            "Provider does not support preview upload",
+        ))
     }
 
     fn supports_scheduling(&self) -> bool {

@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SAMPLE_PROJECT } from "../../render-core/src/sample-project.js";
+import { normalizeProject } from "../../render-core/src/themes.js";
 import "./app.js";
 
 async function flush(): Promise<void> {
@@ -62,8 +63,7 @@ describe("epaper editor app", () => {
               id: "virtual",
               label: "Virtual Display",
               domain: "display",
-              capabilities: ["virtual"],
-              configFields: []
+              capabilities: ["virtual"]
             }
           ]
         }), { status: 200 });
@@ -91,6 +91,17 @@ describe("epaper editor app", () => {
             config: {
               url: "http://192.168.1.170",
               defaultTestDisplayMac: "00000219BC483B18"
+            }
+          },
+          {
+            id: "virtual-default",
+            providerId: "virtual",
+            name: "Virtual Display",
+            enabled: true,
+            config: {
+              virtualDisplays: [
+                { id: "desk-preview", name: "Desk Preview", displayTypeId: "tri296x128-red" }
+              ]
             }
           }
         ]), { status: 200 });
@@ -130,6 +141,22 @@ describe("epaper editor app", () => {
           { status: 200 }
         );
       }
+      if (url.endsWith("/api/v2/schedule-update-log-settings")) {
+        return new Response(JSON.stringify({ retentionDays: 7 }), { status: 200 });
+      }
+      if (url.endsWith("/api/v2/backup") && !init?.method) {
+        return new Response(JSON.stringify({
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          settings: {},
+          fontIndex: { fonts: [] },
+          fonts: [],
+          projects: [{ id: SAMPLE_PROJECT.id, value: SAMPLE_PROJECT }]
+        }), { status: 200 });
+      }
+      if (url.endsWith("/api/v2/backup/restore") && init?.method === "POST") {
+        return new Response(String(init.body), { status: 200 });
+      }
       if (url.endsWith("/api/v2/projects")) {
         return new Response(JSON.stringify([{ id: SAMPLE_PROJECT.id, name: SAMPLE_PROJECT.name, version: SAMPLE_PROJECT.version }]), { status: 200 });
       }
@@ -160,11 +187,27 @@ describe("epaper editor app", () => {
             metadata: { mac: "00000219BC483B18" }
           },
           {
+            id: "virtual-default:desk-preview",
+            name: "Desk Preview",
+            providerId: "virtual",
+            providerInstanceId: "virtual-default",
+            providerDeviceRef: "desk-preview",
+            providerKind: "virtual",
+            providerRef: "desk-preview",
+            suggestedDisplayTypeId: "tri296x128-red",
+            discoverySource: "virtual",
+            metadata: { virtual: true }
+          },
+          {
             id: "oel-1",
             name: "HA Hall Tag",
+            providerId: "openepaperlink",
+            providerInstanceId: "home-assistant-default",
+            providerDeviceRef: "device-1",
             providerKind: "openepaperlink",
             providerRef: "device-1",
-            discoverySource: "home-assistant"
+            discoverySource: "home-assistant",
+            metadata: {}
           }
         ]), { status: 200 });
       }
@@ -178,6 +221,39 @@ describe("epaper editor app", () => {
           running: false,
           lastResult: "disabled"
         }]), { status: 200 });
+      }
+      if (url.includes(`/api/v2/projects/${SAMPLE_PROJECT.id}/displays/`) && url.includes("/update-log")) {
+        const now = Date.now();
+        return new Response(JSON.stringify([
+          {
+            timestampMs: now,
+            timestamp: new Date(now).toISOString(),
+            projectId: SAMPLE_PROJECT.id,
+            assignmentId: "assignment-virtual-tri296x128-red",
+            displayId: "virtual-tri296x128-red",
+            desired: true,
+            succeeded: true,
+            hash: "log-hash-new",
+            width: 296,
+            height: 128,
+            imagePngBase64: TINY_PNG,
+            message: "Scheduled update uploaded."
+          },
+          {
+            timestampMs: now - 60_000,
+            timestamp: new Date(now - 60_000).toISOString(),
+            projectId: SAMPLE_PROJECT.id,
+            assignmentId: "assignment-virtual-tri296x128-red",
+            displayId: "virtual-tri296x128-red",
+            desired: true,
+            succeeded: true,
+            hash: "log-hash-old",
+            width: 296,
+            height: 128,
+            imagePngBase64: TINY_PNG,
+            message: "Scheduled update uploaded."
+          }
+        ]), { status: 200 });
       }
       if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/assignments/assignment-virtual-tri296x128-red/force-update`)) {
         return new Response(JSON.stringify({
@@ -244,15 +320,67 @@ describe("epaper editor app", () => {
     vi.restoreAllMocks();
   });
 
+  it("does not inject virtual displays into empty projects", () => {
+    const project = normalizeProject({
+      ...SAMPLE_PROJECT,
+      devices: [],
+      deviceAssignments: []
+    });
+
+    expect(project.devices).toEqual([]);
+    expect(project.deviceAssignments).toEqual([]);
+  });
+
+  it("keeps fullscreen layout assignments display independent", () => {
+    const layoutId = SAMPLE_PROJECT.layoutDefinitions?.find((layout) => layout.kind === "fullscreen")?.id;
+    const project = normalizeProject({
+      ...SAMPLE_PROJECT,
+      devices: [{
+        id: "display-large",
+        name: "Large",
+        providerKind: "virtual",
+        providerRef: "large",
+        displayTypeId: "large",
+        managed: true,
+        virtual: true
+      }],
+      displayTypes: [
+        ...(SAMPLE_PROJECT.displayTypes ?? []),
+        {
+          id: "large",
+          name: "Large",
+          width: 400,
+          height: 300,
+          rotation: 0,
+          contentPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+          gridUnitPx: 8,
+          palette: { bg: "#ffffff", fg: "#000000", accent: "#ff0000" }
+        }
+      ],
+      deviceAssignments: [{
+        id: "assignment-large",
+        displayId: "display-large",
+        defaultFullscreenLayoutId: SAMPLE_PROJECT.layoutDefinitions?.find((layout) => layout.kind === "fullscreen")?.id,
+        defaultThemeId: SAMPLE_PROJECT.themes[0]?.id,
+        schedule: { enabled: true, intervalMinutes: 15 },
+        fullscreenRules: [],
+        popupRules: []
+      }]
+    });
+
+    expect(project.deviceAssignments?.[0]?.defaultFullscreenLayoutId).toBe(layoutId);
+    expect(project.layoutDefinitions?.some((layout) => "displayTypeId" in layout)).toBe(false);
+  });
+
   it("renders multi-page navigation and defaults to displays", async () => {
     const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
     document.body.append(element);
     await flush();
     await element.updateComplete;
 
-    expect(element.shadowRoot.textContent).toContain("Display Designer");
+    expect(element.shadowRoot.textContent).toContain("InkFrame Studio");
     expect(element.shadowRoot.textContent).toContain("Displays");
-    expect(element.shadowRoot.textContent).toContain("Display Types");
+    expect(Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).some((button) => button.textContent?.trim() === "Display Types")).toBe(false);
     expect(element.shadowRoot.textContent).not.toContain("Assignments");
     expect(element.shadowRoot.textContent).toContain("Config");
     expect(element.shadowRoot.textContent).toContain("Refresh preview");
@@ -297,7 +425,7 @@ describe("epaper editor app", () => {
     await flush();
     await element.updateComplete;
 
-    const discoverButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Discover OEL"));
+    const discoverButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.trim() === "Refresh");
     discoverButton?.click();
     await flush();
     await element.updateComplete;
@@ -319,7 +447,7 @@ describe("epaper editor app", () => {
     await flush();
     await element.updateComplete;
 
-    const discoverButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Discover OEL"));
+    const discoverButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.trim() === "Refresh");
     discoverButton?.click();
     await flush();
     await element.updateComplete;
@@ -334,21 +462,22 @@ describe("epaper editor app", () => {
     await element.updateComplete;
 
     expect(element.shadowRoot.textContent).toContain("Already managed");
-    expect(Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).some((button) => button.textContent?.includes("Manage device"))).toBe(false);
+    expect(element.shadowRoot.textContent).toContain("Hall Tag");
   });
 
-  it("adds virtual display from displays page", async () => {
+  it("manages virtual displays discovered from display systems", async () => {
     const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
     document.body.append(element);
     await flush();
     await element.updateComplete;
 
-    const addVirtualButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Add Virtual"));
-    addVirtualButton?.click();
+    const manageButtons = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).filter((button) => button.textContent?.includes("Manage device"));
+    manageButtons[1]?.click();
     await flush();
     await element.updateComplete;
 
-    expect(element.shadowRoot.textContent).toContain("Virtual Display");
+    expect(element.shadowRoot.textContent).toContain("Desk Preview");
+    expect(element.shadowRoot.textContent).toContain("Virtual device");
   });
 
   it("adds compound widget on widgets page", async () => {
@@ -406,10 +535,35 @@ describe("epaper editor app", () => {
     expect(element.shadowRoot.textContent).toContain("New Theme");
   });
 
+  it("refreshes preview when choosing a theme", async () => {
+    window.location.hash = "#/themes";
+    const fetchMock = vi.mocked(globalThis.fetch);
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    fetchMock.mockClear();
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Soft Fill")
+      ?.click();
+    await flush();
+    await element.updateComplete;
+
+    const urls = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(urls.some((url) => url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/theme-preview`))).toBe(true);
+  });
+
   it("adds provider draft on config page", async () => {
     window.location.hash = "#/config";
     const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
     document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Sources")
+      ?.click();
     await flush();
     await element.updateComplete;
 
@@ -429,6 +583,23 @@ describe("epaper editor app", () => {
       heading.textContent?.trim() === "Home Assistant"
     );
     expect(updatedHeadings.length).toBe(2);
+  });
+
+  it("shows display types in config display systems", async () => {
+    window.location.hash = "#/config";
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Display Systems")
+      ?.click();
+    await flush();
+    await element.updateComplete;
+
+    expect(element.shadowRoot.textContent).toContain("Display Types");
+    expect(element.shadowRoot.textContent).toContain("Add display type");
   });
 
   it("shows theme preview display type selector", async () => {
@@ -455,6 +626,39 @@ describe("epaper editor app", () => {
     expect(element.shadowRoot.textContent).toContain("Fullscreen Rules");
   });
 
+  it("navigates update log images from the modal", async () => {
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    element.shadowRoot.querySelector<HTMLImageElement>(".update-log-image")?.click();
+    await flush();
+    await element.updateComplete;
+
+    expect(element.shadowRoot.textContent).toContain("log-hash-new");
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }));
+    await flush();
+    await element.updateComplete;
+
+    expect(element.shadowRoot.textContent).toContain("log-hash-old");
+
+    const previousButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Previous");
+    previousButton?.click();
+    await flush();
+    await element.updateComplete;
+
+    expect(element.shadowRoot.textContent).toContain("log-hash-new");
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await flush();
+    await element.updateComplete;
+
+    expect(element.shadowRoot.querySelector(".modal")).toBeNull();
+  });
+
   it("shows home assistant and font management on config page", async () => {
     window.location.hash = "#/config";
     const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
@@ -462,13 +666,60 @@ describe("epaper editor app", () => {
     await flush();
     await element.updateComplete;
 
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Sources")
+      ?.click();
+    await flush();
+    await element.updateComplete;
     expect(element.shadowRoot.textContent).toContain("Home Assistant");
+
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Display Systems")
+      ?.click();
+    await flush();
+    await element.updateComplete;
     expect(element.shadowRoot.textContent).toContain("OpenEPaperLink Access Point");
     expect(element.shadowRoot.textContent).toContain("Default test display");
+
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Fonts")
+      ?.click();
+    await flush();
+    await element.updateComplete;
     expect(element.shadowRoot.textContent).toContain("Fonts");
     expect(element.shadowRoot.textContent).toContain("Rescan font dir");
     expect(element.shadowRoot.textContent).toContain("Delete font");
     expect(element.shadowRoot.textContent).toContain("8px");
+  });
+
+  it("adds virtual display definitions in display system config", async () => {
+    window.location.hash = "#/config";
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Display Systems")
+      ?.click();
+    await flush();
+    await element.updateComplete;
+
+    const addProviderButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Add Virtual Display");
+    addProviderButton?.click();
+    await flush();
+    await element.updateComplete;
+
+    expect(element.shadowRoot.textContent).toContain("Virtual Display 1");
+
+    const addButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.trim() === "Add virtual display");
+    addButton?.click();
+    await flush();
+    await element.updateComplete;
+
+    expect(element.shadowRoot.textContent).toContain("Virtual Display 2");
   });
 
   it("keeps app usable when home assistant entities fetch fails", async () => {
@@ -489,6 +740,7 @@ describe("epaper editor app", () => {
 
     expect(element.shadowRoot.textContent).toContain("Config");
     expect(element.shadowRoot.textContent).toContain("Fonts");
+    expect(element.shadowRoot.textContent).toContain("Backup / Restore");
     expect(element.shadowRoot.textContent).toContain("Home Assistant");
   });
 
@@ -557,8 +809,8 @@ describe("epaper editor app", () => {
       Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).filter((button) => button.textContent?.includes("Delete virtual display")).length;
 
     const beforeCount = countDeleteButtons();
-    const addVirtualButton = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Add Virtual"));
-    addVirtualButton?.click();
+    const manageButtons = Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).filter((button) => button.textContent?.includes("Manage device"));
+    manageButtons[1]?.click();
     await flush();
     await element.updateComplete;
 

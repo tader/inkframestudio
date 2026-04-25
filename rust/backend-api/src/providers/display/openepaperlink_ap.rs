@@ -8,9 +8,9 @@ use crate::providers::registry::{
 };
 use crate::{
     app::AppState, build_discovered_display_type, fetch_access_point_page,
-    fetch_access_point_tag_type, fetch_all_access_point_tags, openepaperlink_settings_from_instance,
-    png_to_jpeg, rgba_to_jpeg, upload_image_to_access_point, ApiError, DiscoveredDisplayCandidate,
-    UploadPreviewRequest, UploadPreviewResponse,
+    fetch_access_point_tag_type, fetch_all_access_point_tags,
+    openepaperlink_settings_from_instance, png_to_jpeg, rgba_to_jpeg, upload_image_to_access_point,
+    ApiError, DiscoveredDisplayCandidate, UploadPreviewRequest, UploadPreviewResponse,
 };
 
 pub static PROVIDER: OpenEpaperLinkApProvider = OpenEpaperLinkApProvider;
@@ -76,10 +76,17 @@ impl DisplayProvider for OpenEpaperLinkApProvider {
     }
 
     fn is_configured(&self, instance: &ProviderInstance) -> bool {
-        !openepaperlink_settings_from_instance(instance).url.trim().is_empty()
+        !openepaperlink_settings_from_instance(instance)
+            .url
+            .trim()
+            .is_empty()
     }
 
-    async fn test_connection(&self, state: &AppState, instance: &ProviderInstance) -> Result<serde_json::Value, ApiError> {
+    async fn test_connection(
+        &self,
+        state: &AppState,
+        instance: &ProviderInstance,
+    ) -> Result<serde_json::Value, ApiError> {
         let resolved = openepaperlink_settings_from_instance(instance);
         let value = match fetch_access_point_page(&state.http, &resolved, 0).await {
             Ok(page) => json!({
@@ -128,7 +135,9 @@ impl DisplayProvider for OpenEpaperLinkApProvider {
                 provider_device_ref: tag.mac.clone(),
                 provider_kind: "openepaperlink-ap".into(),
                 provider_ref: tag.mac.clone(),
-                suggested_display_type_id: suggested_display_type.as_ref().map(|entry| entry.id.clone()),
+                suggested_display_type_id: suggested_display_type
+                    .as_ref()
+                    .map(|entry| entry.id.clone()),
                 suggested_display_type,
                 discovery_source: "access-point".into(),
                 metadata: json!({

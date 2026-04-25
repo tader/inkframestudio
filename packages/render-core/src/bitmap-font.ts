@@ -40,6 +40,7 @@ type EmbeddedFontFamilyData = {
   italic?: string;
   bold?: string;
   boldItalic?: string;
+  [variant: string]: string | undefined;
 };
 
 interface GlyphCacheEntry {
@@ -88,7 +89,7 @@ const fontCache = new Map<string, FontkitFont>();
 const glyphCache = new Map<string, GlyphCacheEntry>();
 const tabularAdvanceCache = new Map<string, number>();
 const layoutCache = new Map<string, TextLayoutRun>();
-const userFontData = new Map<string, { regular?: string; italic?: string; bold?: string; boldItalic?: string; label?: string; allowedPixelSizes?: number[] }>();
+const userFontData = new Map<string, FontFamilyData>();
 const missingFontFamilyWarnings = new Set<string>();
 let textLayoutAdapter: TextLayoutAdapter | undefined;
 const DEFAULT_FALLBACK_FAMILY: ResolvedFontFamily = "arial";
@@ -102,6 +103,7 @@ export interface FontFamilyData {
   boldItalic?: string;
   label?: string;
   allowedPixelSizes?: number[];
+  [variant: string]: string | number[] | undefined;
 }
 
 export interface TextLayoutAdapterRequest {
@@ -131,7 +133,7 @@ export function setTextLayoutAdapter(adapter: TextLayoutAdapter | undefined): vo
   clearFontCaches();
 }
 
-export function registerUserFonts(fonts: Record<string, { regular?: string; italic?: string; bold?: string; boldItalic?: string; label?: string; allowedPixelSizes?: number[] }>): void {
+export function registerUserFonts(fonts: Record<string, FontFamilyData>): void {
   userFontData.clear();
   for (const [id, value] of Object.entries(fonts)) {
     userFontData.set(id, value);
@@ -167,6 +169,9 @@ function variantKeyFor(weight: FontWeight, slope: FontSlope): FontVariantKey {
   if (weight === "bold") {
     return "bold";
   }
+  if (weight !== "regular") {
+    return slope === "italic" ? `${weight}Italic` : weight;
+  }
   if (slope === "italic") {
     return "italic";
   }
@@ -177,13 +182,17 @@ function fontDataFor(family: ResolvedFontFamily, weight: FontWeight, slope: Font
   const preferredVariant = variantKeyFor(weight, slope);
   const imported = userFontData.get(family);
   if (imported) {
-    return imported[preferredVariant] ?? imported.regular ?? imported.bold ?? "";
+    return stringFontData(imported[preferredVariant]) ?? imported.regular ?? imported.bold ?? "";
   }
   const familyData = EMBEDDED_FONT_BINARY_BASE64[family as keyof typeof EMBEDDED_FONT_BINARY_BASE64] as EmbeddedFontFamilyData | undefined;
   if (familyData) {
     return familyData[preferredVariant] ?? familyData.regular;
   }
   throw new Error(`No TrueType font registered for family ${family}`);
+}
+
+function stringFontData(value: string | number[] | undefined): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function fontFamilyDataFor(family: ResolvedFontFamily): FontFamilyData {

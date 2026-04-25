@@ -1,4 +1,4 @@
-import { BUILT_IN_WIDGET_DEFINITIONS, defaultDisplayTypes, defaultVirtualDevices } from "./designer-defaults.js";
+import { BUILT_IN_WIDGET_DEFINITIONS, defaultDisplayTypes } from "./designer-defaults.js";
 import { DEFAULT_FONT_PRESETS, normalizeFontPresets } from "./font-presets.js";
 import { normalizeIconId } from "./icons.js";
 import { normalizeScriptLibraryEntries } from "./scripting.js";
@@ -221,13 +221,10 @@ function normalizeDisplayType(displayType: DisplayType & { safeMarginPx?: unknow
 }
 
 function defaultFullscreenLayoutIdForDisplay(layouts: LayoutDefinition[], display: ManagedDisplay, preferredId?: string): string | undefined {
-  if (preferredId && layouts.some((entry) => entry.id === preferredId)) {
+  if (preferredId && layouts.some((entry) => entry.id === preferredId && entry.kind === "fullscreen")) {
     return preferredId;
   }
-  return (
-    layouts.find((entry) => entry.kind === "fullscreen" && entry.displayTypeId === display.displayTypeId)?.id ??
-    layouts.find((entry) => entry.kind === "fullscreen")?.id
-  );
+  return layouts.find((entry) => entry.kind === "fullscreen")?.id;
 }
 
 function normalizeDeviceAssignments(
@@ -257,17 +254,20 @@ export function normalizeProject(project: Project): Project {
   }));
   const displayTypes = (project.displayTypes?.length ? project.displayTypes : defaultDisplayTypes())
     .map((displayType) => normalizeDisplayType(displayType as DisplayType & { safeMarginPx?: unknown }));
-  const devices = (project.devices?.length ? project.devices : defaultVirtualDevices(displayTypes)).map((device) => ({
+  const devices = (project.devices ?? []).map((device) => ({
     ...device,
     displayProviderInstanceId: device.displayProviderInstanceId
       ?? (device.virtual ? "virtual-default" : device.providerKind === "openepaperlink-ap" ? "openepaperlink-ap-default" : undefined),
     providerDeviceRef: device.providerDeviceRef ?? device.providerRef ?? device.id
   }));
   const layoutDefinitions = (project.layoutDefinitions ?? [])
-    .map((layout) => ({
-      ...layout,
-      rootNode: normalizeLayoutNode(layout.rootNode)
-    }));
+    .map((layout) => {
+      const { displayTypeId: _displayTypeId, ...layoutWithoutDisplayType } = layout;
+      return {
+        ...layoutWithoutDisplayType,
+        rootNode: normalizeLayoutNode(layout.rootNode)
+      };
+    });
   const widgetDefinitions = project.widgetDefinitions?.length
     ? project.widgetDefinitions
     : BUILT_IN_WIDGET_DEFINITIONS;

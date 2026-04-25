@@ -5,8 +5,7 @@ use boa_engine::{Context as BoaContext, Source};
 use chrono::{Datelike, Timelike};
 use epd_text_engine::{
     render as render_text_layout, FontFamilyData as EngineFontFamilyData,
-    FontPresets as EngineFontPresets, LayoutRequest, TextLayoutRun,
-    TextStyle as EngineTextStyle,
+    FontPresets as EngineFontPresets, LayoutRequest, TextLayoutRun, TextStyle as EngineTextStyle,
 };
 use resvg::{
     tiny_skia::{Pixmap, Transform},
@@ -66,6 +65,8 @@ struct ProjectView {
     name: String,
     #[serde(default)]
     locale: String,
+    #[serde(rename = "activeThemeId", default)]
+    active_theme_id: Option<String>,
     themes: Vec<WidgetTheme>,
     #[serde(rename = "displayTypes")]
     display_types: Vec<DisplayType>,
@@ -110,10 +111,18 @@ struct FontPresetValues {
 struct WidgetTheme {
     id: String,
     text: ThemeTextRoles,
+    #[serde(default)]
+    surface: ThemeSurface,
     #[serde(rename = "autoFitFontFamily")]
     auto_fit_font_family: Option<String>,
     #[serde(rename = "fontRoles")]
     font_roles: Option<ThemeFontRoles>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThemeSurface {
+    fill_role: Option<FillRole>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -128,7 +137,10 @@ struct ThemeTextRoles {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ThemeFontRoles {
+    tiny: Option<PartialTextStyle>,
     normal: Option<PartialTextStyle>,
+    #[serde(rename = "normalEmphasis")]
+    normal_emphasis: Option<PartialTextStyle>,
     header: Option<PartialTextStyle>,
 }
 
@@ -137,6 +149,11 @@ struct ThemeFontRoles {
 struct PartialTextStyle {
     family: Option<String>,
     pixel_size: Option<u32>,
+    color_role: Option<PaletteRole>,
+    weight: Option<String>,
+    slope: Option<String>,
+    line_spacing_px: Option<i32>,
+    top_padding_px: Option<i32>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
@@ -148,6 +165,17 @@ enum PaletteRole {
     Accent,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum FillRole {
+    Bg,
+    Fg,
+    Accent,
+    Gray,
+    LightAccent,
+    DarkAccent,
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeFontFamilyData {
@@ -156,14 +184,18 @@ struct RuntimeFontFamilyData {
     bold: Option<String>,
     #[serde(rename = "boldItalic")]
     bold_italic: Option<String>,
+    #[serde(flatten)]
+    variants: HashMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LayoutDefinition {
     id: String,
+    #[serde(default)]
+    kind: String,
     #[serde(rename = "displayTypeId")]
-    display_type_id: String,
+    display_type_id: Option<String>,
     #[serde(rename = "rootNode")]
     root_node: Option<Node>,
 }
@@ -249,6 +281,9 @@ struct WidgetProps {
     prefix: Option<String>,
     suffix: Option<String>,
     unit: Option<String>,
+    digits: Option<i32>,
+    #[serde(rename = "quantizeStep")]
+    quantize_step: Option<f64>,
     #[serde(rename = "lineDirection")]
     line_direction: Option<String>,
     #[serde(rename = "fixedPixelSize")]
@@ -489,6 +524,18 @@ impl IndexedCanvas {
         }
         self.pixels[y as usize * self.width as usize + x as usize] = color;
     }
+
+    fn fill_rect(&mut self, rect: Rect, color: u8) {
+        let x0 = rect.x.max(0);
+        let y0 = rect.y.max(0);
+        let x1 = (rect.x + rect.w).min(self.width as i32);
+        let y1 = (rect.y + rect.h).min(self.height as i32);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                self.set_pixel(x, y, color);
+            }
+        }
+    }
 }
 
 fn parse_hex_color(value: &str) -> Result<[u8; 3], ApiError> {
@@ -509,8 +556,14 @@ fn entity_value<'a>(data: &'a Value, entity_id: &str) -> Option<&'a Value> {
     data.get("entities")?.get(entity_id)
 }
 
-fn entity_attribute_value<'a>(data: &'a Value, entity_id: &str, attribute: &str) -> Option<&'a Value> {
-    entity_value(data, entity_id)?.get("attributes")?.get(attribute)
+fn entity_attribute_value<'a>(
+    data: &'a Value,
+    entity_id: &str,
+    attribute: &str,
+) -> Option<&'a Value> {
+    entity_value(data, entity_id)?
+        .get("attributes")?
+        .get(attribute)
 }
 
 fn value_ref_value(value_ref: &Value, data: &Value) -> Option<Value> {
@@ -540,13 +593,11 @@ fn value_as_f64(value: &Value) -> Option<f64> {
 }
 
 fn value_as_bool(value: &Value) -> Option<bool> {
-    value
-        .as_bool()
-        .or_else(|| match value.as_str() {
-            Some("true") => Some(true),
-            Some("false") => Some(false),
-            _ => None,
-        })
+    value.as_bool().or_else(|| match value.as_str() {
+        Some("true") => Some(true),
+        Some("false") => Some(false),
+        _ => None,
+    })
 }
 
 fn parse_hhmm(value: &str) -> Option<(u32, u32)> {
@@ -565,11 +616,19 @@ fn evaluate_condition(condition: &Value, data: &Value) -> bool {
         Some("all") => condition
             .get("conditions")
             .and_then(Value::as_array)
-            .is_some_and(|conditions| conditions.iter().all(|entry| evaluate_condition(entry, data))),
+            .is_some_and(|conditions| {
+                conditions
+                    .iter()
+                    .all(|entry| evaluate_condition(entry, data))
+            }),
         Some("any") => condition
             .get("conditions")
             .and_then(Value::as_array)
-            .is_some_and(|conditions| conditions.iter().any(|entry| evaluate_condition(entry, data))),
+            .is_some_and(|conditions| {
+                conditions
+                    .iter()
+                    .any(|entry| evaluate_condition(entry, data))
+            }),
         Some("not") => condition
             .get("condition")
             .is_some_and(|entry| !evaluate_condition(entry, data)),
@@ -577,10 +636,12 @@ fn evaluate_condition(condition: &Value, data: &Value) -> bool {
             let entity_id = condition.get("entityId").and_then(Value::as_str);
             let expected = condition.get("equals").and_then(Value::as_str);
             match (entity_id, expected) {
-                (Some(entity_id), Some(expected)) => entity_value(data, entity_id)
-                    .and_then(|entity| entity.get("state"))
-                    .and_then(Value::as_str)
-                    == Some(expected),
+                (Some(entity_id), Some(expected)) => {
+                    entity_value(data, entity_id)
+                        .and_then(|entity| entity.get("state"))
+                        .and_then(Value::as_str)
+                        == Some(expected)
+                }
                 _ => false,
             }
         }
@@ -609,7 +670,10 @@ fn evaluate_condition(condition: &Value, data: &Value) -> bool {
         Some("entity_duration_ge") => {
             let entity_id = condition.get("entityId").and_then(Value::as_str);
             let state = condition.get("state").and_then(Value::as_str);
-            let minutes = condition.get("minutes").and_then(Value::as_f64).unwrap_or(0.0);
+            let minutes = condition
+                .get("minutes")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
             match (entity_id, state) {
                 (Some(entity_id), Some(state)) => {
                     let Some(entity) = entity_value(data, entity_id) else {
@@ -638,7 +702,9 @@ fn evaluate_condition(condition: &Value, data: &Value) -> bool {
             }
         }
         Some("numeric_compare") => {
-            let left = condition.get("left").and_then(|value| value_ref_value(value, data));
+            let left = condition
+                .get("left")
+                .and_then(|value| value_ref_value(value, data));
             let right = condition.get("right").and_then(Value::as_f64);
             let op = condition.get("op").and_then(Value::as_str);
             match (left.as_ref().and_then(value_as_f64), right, op) {
@@ -652,7 +718,9 @@ fn evaluate_condition(condition: &Value, data: &Value) -> bool {
             }
         }
         Some("boolean_compare") => {
-            let left = condition.get("left").and_then(|value| value_ref_value(value, data));
+            let left = condition
+                .get("left")
+                .and_then(|value| value_ref_value(value, data));
             let expected = condition.get("equals").and_then(Value::as_bool);
             match (left.as_ref().and_then(value_as_bool), expected) {
                 (Some(left), Some(expected)) => left == expected,
@@ -660,7 +728,10 @@ fn evaluate_condition(condition: &Value, data: &Value) -> bool {
             }
         }
         Some("is_defined") => {
-            let expected = condition.get("expected").and_then(Value::as_bool).unwrap_or(true);
+            let expected = condition
+                .get("expected")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
             let defined = condition
                 .get("ref")
                 .and_then(|value| value_ref_value(value, data))
@@ -672,13 +743,23 @@ fn evaluate_condition(condition: &Value, data: &Value) -> bool {
                 .get("now")
                 .and_then(Value::as_str)
                 .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok());
-            let start = condition.get("start").and_then(Value::as_str).and_then(parse_hhmm);
-            let end = condition.get("end").and_then(Value::as_str).and_then(parse_hhmm);
+            let start = condition
+                .get("start")
+                .and_then(Value::as_str)
+                .and_then(parse_hhmm);
+            let end = condition
+                .get("end")
+                .and_then(Value::as_str)
+                .and_then(parse_hhmm);
             match (now, start, end) {
                 (Some(now), Some(start), Some(end)) => {
                     if let Some(weekdays) = condition.get("weekdays").and_then(Value::as_array) {
                         let weekday = now.weekday().num_days_from_monday() as i64;
-                        if !weekdays.iter().filter_map(Value::as_i64).any(|entry| entry == weekday) {
+                        if !weekdays
+                            .iter()
+                            .filter_map(Value::as_i64)
+                            .any(|entry| entry == weekday)
+                        {
                             return false;
                         }
                     }
@@ -698,10 +779,23 @@ fn evaluate_condition(condition: &Value, data: &Value) -> bool {
     }
 }
 
-fn select_rule_layout_id<'a>(rules: &'a [Value], action_type: &str, data: &Value) -> Option<&'a str> {
-    rules.iter()
-        .filter(|rule| rule.get("action").and_then(|value| value.get("type")).and_then(Value::as_str) == Some(action_type))
-        .filter(|rule| rule.get("condition").is_some_and(|condition| evaluate_condition(condition, data)))
+fn select_rule_layout_id<'a>(
+    rules: &'a [Value],
+    action_type: &str,
+    data: &Value,
+) -> Option<&'a str> {
+    rules
+        .iter()
+        .filter(|rule| {
+            rule.get("action")
+                .and_then(|value| value.get("type"))
+                .and_then(Value::as_str)
+                == Some(action_type)
+        })
+        .filter(|rule| {
+            rule.get("condition")
+                .is_some_and(|condition| evaluate_condition(condition, data))
+        })
         .max_by_key(|rule| rule.get("priority").and_then(Value::as_i64).unwrap_or(0))
         .and_then(|rule| rule.get("action"))
         .and_then(|action| action.get("layoutId"))
@@ -716,24 +810,64 @@ fn role_color(role: PaletteRole) -> u8 {
     }
 }
 
+fn fill_role_color(role: FillRole) -> u8 {
+    match role {
+        FillRole::Bg => COLOR_BG,
+        FillRole::Fg | FillRole::Gray => COLOR_FG,
+        FillRole::Accent | FillRole::LightAccent | FillRole::DarkAccent => COLOR_ACCENT,
+    }
+}
+
+fn contrasted_text_color(theme: &WidgetTheme, resolved: u8, fallback: PaletteRole) -> u8 {
+    match theme.surface.fill_role {
+        Some(fill_role) if fill_role_color(fill_role) == resolved => role_color(fallback),
+        _ => resolved,
+    }
+}
+
+fn should_fill_node_surface(style: &LayoutStyle) -> bool {
+    style
+        .theme_id
+        .as_deref()
+        .is_some_and(|theme_id| !theme_id.is_empty() && theme_id != "inherit")
+}
+
 fn resolve_font_family_data(
     family: &str,
     user_fonts: &HashMap<String, RuntimeFontFamilyData>,
 ) -> Option<RuntimeFontFamilyData> {
-    user_fonts.get(family).cloned()
+    user_fonts
+        .get(family)
+        .cloned()
+        .or_else(|| user_fonts.get("arial").cloned())
+        .or_else(|| {
+            let fallback_id = user_fonts.keys().min()?.clone();
+            user_fonts.get(&fallback_id).cloned()
+        })
+}
+
+fn runtime_font_variants(data: &RuntimeFontFamilyData) -> HashMap<String, String> {
+    data.variants
+        .iter()
+        .filter_map(|(key, value)| value.as_str().map(|font| (key.clone(), font.to_string())))
+        .collect()
 }
 
 fn get_size_value(spec: &Option<SizeSpec>, total: i32) -> Option<i32> {
     let spec = spec.as_ref()?;
     match spec.mode.as_deref() {
         Some("fixed_px") => spec.value.map(|value| value.round() as i32),
-        Some("fraction") => spec.value.map(|value| (value * total as f64).round() as i32),
+        Some("fraction") => spec
+            .value
+            .map(|value| (value * total as f64).round() as i32),
         _ => None,
     }
 }
 
 fn node_padding(style: &LayoutStyle, props_padding: Option<i32>) -> i32 {
-    props_padding.unwrap_or(style.padding_px.unwrap_or(0)).max(0)
+    props_padding
+        .unwrap_or(style.padding_px.unwrap_or(0))
+        .max(0)
 }
 
 fn unsupported_border(style: &LayoutStyle) -> bool {
@@ -745,7 +879,9 @@ fn unsupported_border(style: &LayoutStyle) -> bool {
 
 fn node_width_spec(node: &Node) -> Option<&SizeSpec> {
     match node {
-        Node::Stack { width, .. } | Node::Zstack { width, .. } | Node::Grid { width, .. } => width.as_ref(),
+        Node::Stack { width, .. } | Node::Zstack { width, .. } | Node::Grid { width, .. } => {
+            width.as_ref()
+        }
         Node::DataQuery(node) => node.width.as_ref(),
         Node::ForEach(node) => node.width.as_ref(),
         Node::CompoundRef(node) => node.width.as_ref(),
@@ -759,7 +895,9 @@ fn node_width_spec(node: &Node) -> Option<&SizeSpec> {
 
 fn node_height_spec(node: &Node) -> Option<&SizeSpec> {
     match node {
-        Node::Stack { height, .. } | Node::Zstack { height, .. } | Node::Grid { height, .. } => height.as_ref(),
+        Node::Stack { height, .. } | Node::Zstack { height, .. } | Node::Grid { height, .. } => {
+            height.as_ref()
+        }
         Node::DataQuery(node) => node.height.as_ref(),
         Node::ForEach(node) => node.height.as_ref(),
         Node::CompoundRef(node) => node.height.as_ref(),
@@ -771,8 +909,31 @@ fn node_height_spec(node: &Node) -> Option<&SizeSpec> {
     }
 }
 
+fn node_theme_id(node: &Node) -> Option<&str> {
+    match node {
+        Node::Stack { style, .. }
+        | Node::Zstack { style, .. }
+        | Node::Grid { style, .. }
+        | Node::PrimitiveInstance { style, .. }
+        | Node::Spacer { style, .. } => style.theme_id.as_deref(),
+        Node::DataQuery(node) => node.style.theme_id.as_deref(),
+        Node::ForEach(node) => node.style.theme_id.as_deref(),
+        Node::CompoundRef(node) => node.style.theme_id.as_deref(),
+        Node::Script(node) => node.style.theme_id.as_deref(),
+        Node::IfElse(node) => node.style.theme_id.as_deref(),
+        Node::Unsupported => None,
+    }
+}
+
 fn theme_for_node<'a>(project: &'a ProjectView, style: &LayoutStyle) -> &'a WidgetTheme {
     if let Some(theme_id) = style.theme_id.as_deref() {
+        if theme_id != "inherit" {
+            if let Some(theme) = project.themes.iter().find(|theme| theme.id == theme_id) {
+                return theme;
+            }
+        }
+    }
+    if let Some(theme_id) = project.active_theme_id.as_deref() {
         if let Some(theme) = project.themes.iter().find(|theme| theme.id == theme_id) {
             return theme;
         }
@@ -797,10 +958,26 @@ fn node_supported(node: &Node) -> bool {
             if unsupported_border(style) {
                 return false;
             }
-            if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content") | Some("fit_glyph_bounds") | Some("intrinsic_font_height")) {
+            if !matches!(
+                width.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill")
+                    | Some("fixed_px")
+                    | Some("fraction")
+                    | Some("fit_content")
+                    | Some("fit_glyph_bounds")
+                    | Some("intrinsic_font_height")
+            ) {
                 return false;
             }
-            if !matches!(height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content") | Some("fit_glyph_bounds") | Some("intrinsic_font_height")) {
+            if !matches!(
+                height.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill")
+                    | Some("fixed_px")
+                    | Some("fraction")
+                    | Some("fit_content")
+                    | Some("fit_glyph_bounds")
+                    | Some("intrinsic_font_height")
+            ) {
                 return false;
             }
             children.iter().all(node_supported)
@@ -815,10 +992,26 @@ fn node_supported(node: &Node) -> bool {
             if unsupported_border(style) {
                 return false;
             }
-            if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content") | Some("fit_glyph_bounds") | Some("intrinsic_font_height")) {
+            if !matches!(
+                width.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill")
+                    | Some("fixed_px")
+                    | Some("fraction")
+                    | Some("fit_content")
+                    | Some("fit_glyph_bounds")
+                    | Some("intrinsic_font_height")
+            ) {
                 return false;
             }
-            if !matches!(height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content") | Some("fit_glyph_bounds") | Some("intrinsic_font_height")) {
+            if !matches!(
+                height.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill")
+                    | Some("fixed_px")
+                    | Some("fraction")
+                    | Some("fit_content")
+                    | Some("fit_glyph_bounds")
+                    | Some("intrinsic_font_height")
+            ) {
                 return false;
             }
             children.iter().all(node_supported)
@@ -835,47 +1028,92 @@ fn node_supported(node: &Node) -> bool {
             if unsupported_border(style) || rows.is_empty() || columns.is_empty() {
                 return false;
             }
-            if !matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content") | Some("fit_glyph_bounds") | Some("intrinsic_font_height")) {
+            if !matches!(
+                width.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill")
+                    | Some("fixed_px")
+                    | Some("fraction")
+                    | Some("fit_content")
+                    | Some("fit_glyph_bounds")
+                    | Some("intrinsic_font_height")
+            ) {
                 return false;
             }
-            if !matches!(height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content") | Some("fit_glyph_bounds") | Some("intrinsic_font_height")) {
+            if !matches!(
+                height.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill")
+                    | Some("fixed_px")
+                    | Some("fraction")
+                    | Some("fit_content")
+                    | Some("fit_glyph_bounds")
+                    | Some("intrinsic_font_height")
+            ) {
                 return false;
             }
-            rows.iter().all(|track| matches!(track.size.mode.as_deref(), None | Some("fill") | Some("fixed_px") | Some("fraction")))
-                && columns.iter().all(|track| matches!(track.size.mode.as_deref(), None | Some("fill") | Some("fixed_px") | Some("fraction")))
-                && children.iter().all(|child| node_supported(&child.node))
+            rows.iter().all(|track| {
+                matches!(
+                    track.size.mode.as_deref(),
+                    None | Some("fill") | Some("fixed_px") | Some("fraction")
+                )
+            }) && columns.iter().all(|track| {
+                matches!(
+                    track.size.mode.as_deref(),
+                    None | Some("fill") | Some("fixed_px") | Some("fraction")
+                )
+            }) && children.iter().all(|child| node_supported(&child.node))
         }
         Node::DataQuery(node) => {
             if unsupported_border(&node.style) || node.query_kind != "calendar_events" {
                 return false;
             }
-            matches!(node.width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content"))
-                && matches!(node.height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content"))
-                && node.child.as_deref().is_some_and(node_supported)
+            matches!(
+                node.width.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")
+            ) && matches!(
+                node.height.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")
+            ) && node.child.as_deref().is_some_and(node_supported)
         }
         Node::ForEach(node) => {
-            if unsupported_border(&node.style) || !matches!(node.axis.as_str(), "horizontal" | "vertical") {
+            if unsupported_border(&node.style)
+                || !matches!(node.axis.as_str(), "horizontal" | "vertical")
+            {
                 return false;
             }
-            matches!(node.width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content"))
-                && matches!(node.height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content"))
-                && node.child.as_deref().is_some_and(node_supported)
+            matches!(
+                node.width.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")
+            ) && matches!(
+                node.height.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")
+            ) && node.child.as_deref().is_some_and(node_supported)
         }
         Node::CompoundRef(node) => {
             if unsupported_border(&node.style) {
                 return false;
             }
-            matches!(node.width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content"))
-                && matches!(node.height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content"))
+            matches!(
+                node.width.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")
+            ) && matches!(
+                node.height.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")
+            )
         }
         Node::Script(node) => {
             if unsupported_border(&node.style) {
                 return false;
             }
-            if !matches!(node.width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")) {
+            if !matches!(
+                node.width.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")
+            ) {
                 return false;
             }
-            if !matches!(node.height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")) {
+            if !matches!(
+                node.height.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")
+            ) {
                 return false;
             }
             node.bindings.values().all(|value| binding_supported(value))
@@ -885,10 +1123,16 @@ fn node_supported(node: &Node) -> bool {
             if unsupported_border(&node.style) {
                 return false;
             }
-            if !matches!(node.width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")) {
+            if !matches!(
+                node.width.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")
+            ) {
                 return false;
             }
-            if !matches!(node.height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")) {
+            if !matches!(
+                node.height.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill") | Some("fixed_px") | Some("fraction") | Some("fit_content")
+            ) {
                 return false;
             }
             node.then_child.as_deref().is_none_or(node_supported)
@@ -916,8 +1160,7 @@ fn node_supported(node: &Node) -> bool {
             }
             if !matches!(
                 width.as_ref().and_then(|spec| spec.mode.as_deref()),
-                None
-                    | Some("fill")
+                None | Some("fill")
                     | Some("fixed_px")
                     | Some("fraction")
                     | Some("fit_content")
@@ -928,8 +1171,7 @@ fn node_supported(node: &Node) -> bool {
             }
             if !matches!(
                 height.as_ref().and_then(|spec| spec.mode.as_deref()),
-                None
-                    | Some("fill")
+                None | Some("fill")
                     | Some("fixed_px")
                     | Some("fraction")
                     | Some("fit_content")
@@ -938,25 +1180,46 @@ fn node_supported(node: &Node) -> bool {
             ) {
                 return false;
             }
-            if props.text.as_deref().is_some_and(|value| value.contains("{{") || value.contains('\n')) {
+            if props
+                .text
+                .as_deref()
+                .is_some_and(|value| value.contains("{{") || value.contains('\n'))
+            {
                 if !props.text.as_deref().is_some_and(template_supported) {
                     return false;
                 }
             }
-            if props.prefix.as_deref().is_some_and(|value| !template_supported(value)) {
+            if props
+                .prefix
+                .as_deref()
+                .is_some_and(|value| !template_supported(value))
+            {
                 return false;
             }
-            if props.suffix.as_deref().is_some_and(|value| !template_supported(value)) {
+            if props
+                .suffix
+                .as_deref()
+                .is_some_and(|value| !template_supported(value))
+            {
                 return false;
             }
-            if props.unit.as_deref().is_some_and(|value| !template_supported(value)) {
+            if props
+                .unit
+                .as_deref()
+                .is_some_and(|value| !template_supported(value))
+            {
                 return false;
             }
             bindings.keys().all(|key| key == "entity")
         }
         Node::Spacer { width, height, .. } => {
-            matches!(width.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction"))
-                && matches!(height.as_ref().and_then(|spec| spec.mode.as_deref()), None | Some("fill") | Some("fixed_px") | Some("fraction"))
+            matches!(
+                width.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill") | Some("fixed_px") | Some("fraction")
+            ) && matches!(
+                height.as_ref().and_then(|spec| spec.mode.as_deref()),
+                None | Some("fill") | Some("fixed_px") | Some("fraction")
+            )
         }
         Node::Unsupported => false,
     }
@@ -967,9 +1230,9 @@ fn node_supported_with_project(project: &ProjectView, node: &Node) -> bool {
         return false;
     }
     match node {
-        Node::Stack { children, .. } | Node::Zstack { children, .. } => {
-            children.iter().all(|child| node_supported_with_project(project, child))
-        }
+        Node::Stack { children, .. } | Node::Zstack { children, .. } => children
+            .iter()
+            .all(|child| node_supported_with_project(project, child)),
         Node::Grid { children, .. } => children
             .iter()
             .all(|child| node_supported_with_project(project, &child.node)),
@@ -1028,7 +1291,16 @@ fn template_supported(value: &str) -> bool {
         let Some(base) = segments.next() else {
             return false;
         };
-        if !base.trim().split('.').all(simple_identifier) {
+        let base = base.trim();
+        if base.contains('.') {
+            if !base.split('.').all(simple_identifier) {
+                return false;
+            }
+        } else if !base.is_empty()
+            && !base
+                .chars()
+                .all(|ch| ch == ' ' || ch == '_' || ch == '$' || ch.is_ascii_alphanumeric())
+        {
             return false;
         }
         for filter in segments {
@@ -1036,9 +1308,13 @@ fn template_supported(value: &str) -> bool {
             if trimmed == "title" || trimmed == "downcase" || trimmed == "upcase" {
                 continue;
             }
-            if let Some(args) = trimmed.strip_prefix("format(").and_then(|rest| rest.strip_suffix(')')) {
+            if let Some(args) = trimmed
+                .strip_prefix("format(")
+                .and_then(|rest| rest.strip_suffix(')'))
+            {
                 let arg = args.trim();
-                if ((arg.starts_with('"') && arg.ends_with('"')) || (arg.starts_with('\'') && arg.ends_with('\'')))
+                if ((arg.starts_with('"') && arg.ends_with('"'))
+                    || (arg.starts_with('\'') && arg.ends_with('\'')))
                     && arg.len() >= 2
                 {
                     continue;
@@ -1128,15 +1404,158 @@ fn stringify_scope_value(value: &Value) -> String {
     }
 }
 
-fn format_date_part(date: chrono::DateTime<chrono::Utc>, locale: &str, options: chrono::format::StrftimeItems<'_>) -> String {
+fn quantize_number(value: f64, step: f64) -> f64 {
+    if !value.is_finite() || step <= 0.0 {
+        return value;
+    }
+    (value / step).round() * step
+}
+
+fn format_quantized_number(value: &str, step: f64, digits: Option<i32>) -> String {
+    let Ok(numeric) = value.trim().parse::<f64>() else {
+        return "--".into();
+    };
+    if !numeric.is_finite() {
+        return "--".into();
+    }
+    let quantized = quantize_number(numeric, step);
+    if let Some(digits) = digits {
+        return format!("{:.*}", digits.max(0) as usize, quantized);
+    }
+    if step.abs() < 1.0 {
+        let inferred_digits = step
+            .to_string()
+            .split('.')
+            .nth(1)
+            .map(|fraction| fraction.len())
+            .unwrap_or(0);
+        return format!("{:.*}", inferred_digits, quantized);
+    }
+    quantized.to_string()
+}
+
+fn format_date_part(
+    date: chrono::DateTime<chrono::Utc>,
+    locale: &str,
+    options: chrono::format::StrftimeItems<'_>,
+) -> String {
     let _ = locale;
     date.format_with_items(options).to_string()
 }
 
+fn locale_is_dutch(locale: &str) -> bool {
+    locale.to_ascii_lowercase().starts_with("nl")
+}
+
+fn localized_weekday_name(weekday: chrono::Weekday, locale: &str, short: bool) -> &'static str {
+    if locale_is_dutch(locale) {
+        match (weekday, short) {
+            (chrono::Weekday::Mon, false) => "maandag",
+            (chrono::Weekday::Tue, false) => "dinsdag",
+            (chrono::Weekday::Wed, false) => "woensdag",
+            (chrono::Weekday::Thu, false) => "donderdag",
+            (chrono::Weekday::Fri, false) => "vrijdag",
+            (chrono::Weekday::Sat, false) => "zaterdag",
+            (chrono::Weekday::Sun, false) => "zondag",
+            (chrono::Weekday::Mon, true) => "ma",
+            (chrono::Weekday::Tue, true) => "di",
+            (chrono::Weekday::Wed, true) => "wo",
+            (chrono::Weekday::Thu, true) => "do",
+            (chrono::Weekday::Fri, true) => "vr",
+            (chrono::Weekday::Sat, true) => "za",
+            (chrono::Weekday::Sun, true) => "zo",
+        }
+    } else {
+        match (weekday, short) {
+            (chrono::Weekday::Mon, false) => "Monday",
+            (chrono::Weekday::Tue, false) => "Tuesday",
+            (chrono::Weekday::Wed, false) => "Wednesday",
+            (chrono::Weekday::Thu, false) => "Thursday",
+            (chrono::Weekday::Fri, false) => "Friday",
+            (chrono::Weekday::Sat, false) => "Saturday",
+            (chrono::Weekday::Sun, false) => "Sunday",
+            (chrono::Weekday::Mon, true) => "Mon",
+            (chrono::Weekday::Tue, true) => "Tue",
+            (chrono::Weekday::Wed, true) => "Wed",
+            (chrono::Weekday::Thu, true) => "Thu",
+            (chrono::Weekday::Fri, true) => "Fri",
+            (chrono::Weekday::Sat, true) => "Sat",
+            (chrono::Weekday::Sun, true) => "Sun",
+        }
+    }
+}
+
+fn localized_month_name(month: u32, locale: &str, short: bool) -> &'static str {
+    if locale_is_dutch(locale) {
+        match (month, short) {
+            (1, false) => "januari",
+            (2, false) => "februari",
+            (3, false) => "maart",
+            (4, false) => "april",
+            (5, false) => "mei",
+            (6, false) => "juni",
+            (7, false) => "juli",
+            (8, false) => "augustus",
+            (9, false) => "september",
+            (10, false) => "oktober",
+            (11, false) => "november",
+            (12, false) => "december",
+            (1, true) => "jan",
+            (2, true) => "feb",
+            (3, true) => "mrt",
+            (4, true) => "apr",
+            (5, true) => "mei",
+            (6, true) => "jun",
+            (7, true) => "jul",
+            (8, true) => "aug",
+            (9, true) => "sep",
+            (10, true) => "okt",
+            (11, true) => "nov",
+            (12, true) => "dec",
+            _ => "",
+        }
+    } else {
+        match (month, short) {
+            (1, false) => "January",
+            (2, false) => "February",
+            (3, false) => "March",
+            (4, false) => "April",
+            (5, false) => "May",
+            (6, false) => "June",
+            (7, false) => "July",
+            (8, false) => "August",
+            (9, false) => "September",
+            (10, false) => "October",
+            (11, false) => "November",
+            (12, false) => "December",
+            (1, true) => "Jan",
+            (2, true) => "Feb",
+            (3, true) => "Mar",
+            (4, true) => "Apr",
+            (5, true) => "May",
+            (6, true) => "Jun",
+            (7, true) => "Jul",
+            (8, true) => "Aug",
+            (9, true) => "Sep",
+            (10, true) => "Oct",
+            (11, true) => "Nov",
+            (12, true) => "Dec",
+            _ => "",
+        }
+    }
+}
+
 fn parse_date_like_parts(value: &Value, locale: &str) -> Option<HashMap<String, String>> {
-    let _ = locale;
     if let Some(object) = value.as_object() {
-        for key in ["dateTime", "datetime", "date", "iso", "value", "start", "start_time"] {
+        for key in [
+            "dateTime",
+            "datetime",
+            "date",
+            "iso",
+            "value",
+            "start",
+            "start_time",
+        ] {
             if let Some(nested) = object.get(key) {
                 if let Some(parts) = parse_date_like_parts(nested, locale) {
                     return Some(parts);
@@ -1149,30 +1568,100 @@ fn parse_date_like_parts(value: &Value, locale: &str) -> Option<HashMap<String, 
         Value::Number(number) => number.to_string(),
         _ => return None,
     };
-    let parsed = chrono::DateTime::parse_from_rfc3339(&text)
-        .map(|value| value.with_timezone(&chrono::Utc))
-        .or_else(|_| chrono::NaiveDate::parse_from_str(&text, "%Y-%m-%d").map(|value| value.and_hms_opt(0, 0, 0).unwrap().and_utc()))
-        .ok()?;
     let mut parts = HashMap::new();
-    parts.insert("dddd".into(), parsed.format("%A").to_string());
-    parts.insert("ddd".into(), parsed.format("%a").to_string());
-    parts.insert("mmmm".into(), parsed.format("%B").to_string());
-    parts.insert("mmm".into(), parsed.format("%b").to_string());
-    parts.insert("yyyy".into(), parsed.format("%Y").to_string());
-    parts.insert("yy".into(), parsed.format("%y").to_string());
-    parts.insert("mm".into(), parsed.format("%m").to_string());
-    parts.insert("m".into(), parsed.format("%-m").to_string());
-    parts.insert("dd".into(), parsed.format("%d").to_string());
-    parts.insert("d".into(), parsed.format("%-d").to_string());
-    parts.insert("HH".into(), parsed.format("%H").to_string());
-    parts.insert("H".into(), parsed.format("%-H").to_string());
-    parts.insert("hh".into(), parsed.format("%I").to_string());
-    parts.insert("h".into(), parsed.format("%-I").to_string());
-    parts.insert("MM".into(), parsed.format("%M").to_string());
-    parts.insert("M".into(), parsed.format("%-M").to_string());
-    parts.insert("ss".into(), parsed.format("%S").to_string());
-    parts.insert("s".into(), parsed.format("%-S").to_string());
+    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&text) {
+        parts.insert(
+            "dddd".into(),
+            localized_weekday_name(parsed.weekday(), locale, false).into(),
+        );
+        parts.insert(
+            "ddd".into(),
+            localized_weekday_name(parsed.weekday(), locale, true).into(),
+        );
+        parts.insert(
+            "mmmm".into(),
+            localized_month_name(parsed.month(), locale, false).into(),
+        );
+        parts.insert(
+            "mmm".into(),
+            localized_month_name(parsed.month(), locale, true).into(),
+        );
+        parts.insert("yyyy".into(), parsed.format("%Y").to_string());
+        parts.insert("yy".into(), parsed.format("%y").to_string());
+        parts.insert("mm".into(), format!("{:02}", parsed.month()));
+        parts.insert("m".into(), parsed.month().to_string());
+        parts.insert("dd".into(), format!("{:02}", parsed.day()));
+        parts.insert("d".into(), parsed.day().to_string());
+        parts.insert("HH".into(), format!("{:02}", parsed.hour()));
+        parts.insert("H".into(), parsed.hour().to_string());
+        let hour12 = parsed.hour12().1;
+        parts.insert("hh".into(), format!("{:02}", hour12));
+        parts.insert("h".into(), hour12.to_string());
+        parts.insert("MM".into(), format!("{:02}", parsed.minute()));
+        parts.insert("M".into(), parsed.minute().to_string());
+        parts.insert("ss".into(), format!("{:02}", parsed.second()));
+        parts.insert("s".into(), parsed.second().to_string());
+        return Some(parts);
+    }
+    if let Ok(parsed) = chrono::NaiveDate::parse_from_str(&text, "%Y-%m-%d") {
+        parts.insert(
+            "dddd".into(),
+            localized_weekday_name(parsed.weekday(), locale, false).into(),
+        );
+        parts.insert(
+            "ddd".into(),
+            localized_weekday_name(parsed.weekday(), locale, true).into(),
+        );
+        parts.insert(
+            "mmmm".into(),
+            localized_month_name(parsed.month(), locale, false).into(),
+        );
+        parts.insert(
+            "mmm".into(),
+            localized_month_name(parsed.month(), locale, true).into(),
+        );
+        parts.insert("yyyy".into(), parsed.format("%Y").to_string());
+        parts.insert("yy".into(), parsed.format("%y").to_string());
+        parts.insert("mm".into(), format!("{:02}", parsed.month()));
+        parts.insert("m".into(), parsed.month().to_string());
+        parts.insert("dd".into(), format!("{:02}", parsed.day()));
+        parts.insert("d".into(), parsed.day().to_string());
+        parts.insert("HH".into(), "00".into());
+        parts.insert("H".into(), "0".into());
+        parts.insert("hh".into(), "12".into());
+        parts.insert("h".into(), "12".into());
+        parts.insert("MM".into(), "00".into());
+        parts.insert("M".into(), "0".into());
+        parts.insert("ss".into(), "00".into());
+        parts.insert("s".into(), "0".into());
+        return Some(parts);
+    }
+    if parts.is_empty() {
+        return None;
+    }
     Some(parts)
+}
+
+fn render_date_pattern(pattern: &str, parts: &HashMap<String, String>) -> String {
+    let tokens = [
+        "dddd", "mmmm", "yyyy", "ddd", "mmm", "yy", "HH", "hh", "MM", "ss", "mm", "dd", "H", "h",
+        "M", "s", "m", "d",
+    ];
+    let mut out = String::new();
+    let mut index = 0usize;
+    while index < pattern.len() {
+        let remainder = &pattern[index..];
+        if let Some(token) = tokens.iter().find(|token| remainder.starts_with(**token)) {
+            out.push_str(parts.get(*token).map(String::as_str).unwrap_or(token));
+            index += token.len();
+            continue;
+        }
+        let mut chars = remainder.chars();
+        let ch = chars.next().unwrap();
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+    out
 }
 
 fn format_scope_value(value: &Value, pattern: &str, locale: &str) -> Value {
@@ -1180,11 +1669,7 @@ fn format_scope_value(value: &Value, pattern: &str, locale: &str) -> Value {
     let Some(parts) = parse_date_like_parts(value, locale) else {
         return value.clone();
     };
-    let mut out = pattern.to_string();
-    for token in ["dddd", "ddd", "mmmm", "mmm", "yyyy", "yy", "HH", "H", "hh", "h", "MM", "M", "ss", "s", "mm", "m", "dd", "d"] {
-        out = out.replace(token, parts.get(token).map(String::as_str).unwrap_or(token));
-    }
-    Value::String(out)
+    Value::String(render_date_pattern(pattern, &parts))
 }
 
 fn title_case(text: &str) -> String {
@@ -1211,7 +1696,10 @@ fn apply_template_filter(value: Value, filter_expression: &str, locale: &str) ->
     if trimmed == "upcase" {
         return Value::String(stringify_scope_value(&value).to_uppercase());
     }
-    if let Some(args) = trimmed.strip_prefix("format(").and_then(|rest| rest.strip_suffix(')')) {
+    if let Some(args) = trimmed
+        .strip_prefix("format(")
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
         let pattern = args.trim().trim_matches('"').trim_matches('\'');
         return format_scope_value(&value, pattern, locale);
     }
@@ -1223,7 +1711,9 @@ fn resolve_scope_or_literal_expression(expression: &str, scope: &Value, locale: 
     if trimmed.is_empty() {
         return Value::Null;
     }
-    if (trimmed.starts_with('"') && trimmed.ends_with('"')) || (trimmed.starts_with('\'') && trimmed.ends_with('\'')) {
+    if (trimmed.starts_with('"') && trimmed.ends_with('"'))
+        || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+    {
         return Value::String(trimmed[1..trimmed.len() - 1].to_string());
     }
     if trimmed == "true" {
@@ -1238,7 +1728,11 @@ fn resolve_scope_or_literal_expression(expression: &str, scope: &Value, locale: 
         }
     }
     let segments = split_top_level(trimmed, '|');
-    let base = segments.first().map(String::as_str).unwrap_or(trimmed).trim();
+    let base = segments
+        .first()
+        .map(String::as_str)
+        .unwrap_or(trimmed)
+        .trim();
     let mut current = scope_value(scope, base).unwrap_or(Value::Null);
     for segment in segments.into_iter().skip(1) {
         current = apply_template_filter(current, &segment, locale);
@@ -1247,6 +1741,11 @@ fn resolve_scope_or_literal_expression(expression: &str, scope: &Value, locale: 
 }
 
 fn scope_value(scope: &Value, path: &str) -> Option<Value> {
+    if let Some(object) = scope.as_object() {
+        if let Some(value) = object.get(path) {
+            return Some(value.clone());
+        }
+    }
     let mut current = scope;
     for segment in path.split('.') {
         current = current.get(segment)?;
@@ -1282,7 +1781,9 @@ fn render_template(value: &str, scope: &Value, locale: &str) -> Option<String> {
 
 fn merge_scope(scope: &Value, derived: &Value) -> Value {
     let mut merged = scope.clone();
-    if let (Some(scope_object), Some(derived_object)) = (merged.as_object_mut(), derived.as_object()) {
+    if let (Some(scope_object), Some(derived_object)) =
+        (merged.as_object_mut(), derived.as_object())
+    {
         for (key, value) in derived_object {
             scope_object.insert(key.clone(), value.clone());
         }
@@ -1290,7 +1791,13 @@ fn merge_scope(scope: &Value, derived: &Value) -> Value {
     merged
 }
 
-fn build_array_item_scope(scope: &Value, value: &Value, index: usize, item_alias: &str, index_alias: &str) -> Value {
+fn build_array_item_scope(
+    scope: &Value,
+    value: &Value,
+    index: usize,
+    item_alias: &str,
+    index_alias: &str,
+) -> Value {
     let mut next = scope.clone();
     if let Some(object) = next.as_object_mut() {
         object.insert("$".into(), value.clone());
@@ -1302,7 +1809,13 @@ fn build_array_item_scope(scope: &Value, value: &Value, index: usize, item_alias
     next
 }
 
-fn evaluate_array_expression(expression: &str, scope: &Value, locale: &str, item_alias: &str, index_alias: &str) -> Vec<Value> {
+fn evaluate_array_expression(
+    expression: &str,
+    scope: &Value,
+    locale: &str,
+    item_alias: &str,
+    index_alias: &str,
+) -> Vec<Value> {
     let segments = split_top_level(expression, '|');
     let base = segments.first().cloned().unwrap_or_default();
     let mut current = match resolve_scope_or_literal_expression(&base, scope, locale) {
@@ -1311,12 +1824,16 @@ fn evaluate_array_expression(expression: &str, scope: &Value, locale: &str, item
     };
     for stage in segments.into_iter().skip(1) {
         let trimmed = stage.trim();
-        if let Some(condition) = trimmed.strip_prefix("filter(").and_then(|rest| rest.strip_suffix(')')) {
+        if let Some(condition) = trimmed
+            .strip_prefix("filter(")
+            .and_then(|rest| rest.strip_suffix(')'))
+        {
             current = current
                 .into_iter()
                 .enumerate()
                 .filter_map(|(index, value)| {
-                    let item_scope = build_array_item_scope(scope, &value, index, item_alias, index_alias);
+                    let item_scope =
+                        build_array_item_scope(scope, &value, index, item_alias, index_alias);
                     match evaluate_js_bool(condition, &item_scope) {
                         Ok(true) => Some(value),
                         _ => None,
@@ -1325,7 +1842,10 @@ fn evaluate_array_expression(expression: &str, scope: &Value, locale: &str, item
                 .collect();
             continue;
         }
-        if let Some(template_expr) = trimmed.strip_prefix("unique_by(").and_then(|rest| rest.strip_suffix(')')) {
+        if let Some(template_expr) = trimmed
+            .strip_prefix("unique_by(")
+            .and_then(|rest| rest.strip_suffix(')'))
+        {
             let template = match resolve_scope_or_literal_expression(template_expr, scope, locale) {
                 Value::String(text) => text,
                 other => stringify_scope_value(&other),
@@ -1335,7 +1855,8 @@ fn evaluate_array_expression(expression: &str, scope: &Value, locale: &str, item
                 .into_iter()
                 .enumerate()
                 .filter_map(|(index, value)| {
-                    let item_scope = build_array_item_scope(scope, &value, index, item_alias, index_alias);
+                    let item_scope =
+                        build_array_item_scope(scope, &value, index, item_alias, index_alias);
                     let key = render_template(&template, &item_scope, locale).unwrap_or_default();
                     if seen.insert(key) {
                         Some(value)
@@ -1387,11 +1908,19 @@ fn scope_declarations(scope: &Value) -> String {
     declarations
 }
 
-fn run_js_json(script: &str, scope: &Value, bindings: &Value, globals: &Value) -> Result<Value, ApiError> {
+fn run_js_json(
+    script: &str,
+    scope: &Value,
+    bindings: &Value,
+    globals: &Value,
+) -> Result<Value, ApiError> {
     let mut context = BoaContext::default();
-    let scope_json = serde_json::to_string(scope).map_err(|error| ApiError::internal(error.to_string()))?;
-    let bindings_json = serde_json::to_string(bindings).map_err(|error| ApiError::internal(error.to_string()))?;
-    let globals_json = serde_json::to_string(globals).map_err(|error| ApiError::internal(error.to_string()))?;
+    let scope_json =
+        serde_json::to_string(scope).map_err(|error| ApiError::internal(error.to_string()))?;
+    let bindings_json =
+        serde_json::to_string(bindings).map_err(|error| ApiError::internal(error.to_string()))?;
+    let globals_json =
+        serde_json::to_string(globals).map_err(|error| ApiError::internal(error.to_string()))?;
     let source = format!(
         "(function(){{ const scope = {scope_json}; const bindings = {bindings_json}; const globals = {globals_json}; const locale = globals.locale; const shared = {{}}; const helpers = {{}}; function warn(_msg){{}}; {decls} return JSON.stringify((function(){{ {script} }})()); }})()",
         decls = scope_declarations(scope)
@@ -1408,7 +1937,8 @@ fn run_js_json(script: &str, scope: &Value, bindings: &Value, globals: &Value) -
 
 fn evaluate_js_bool(expression: &str, scope: &Value) -> Result<bool, ApiError> {
     let mut context = BoaContext::default();
-    let scope_json = serde_json::to_string(scope).map_err(|error| ApiError::internal(error.to_string()))?;
+    let scope_json =
+        serde_json::to_string(scope).map_err(|error| ApiError::internal(error.to_string()))?;
     let source = format!(
         "(function(){{ const scope = {scope_json}; {decls} return Boolean({expression}); }})()",
         decls = scope_declarations(scope)
@@ -1422,6 +1952,8 @@ fn evaluate_js_bool(expression: &str, scope: &Value) -> Result<bool, ApiError> {
 fn text_run(
     text: &str,
     family: &str,
+    weight: &str,
+    slope: &str,
     pixel_size: u32,
     tabular: bool,
     presets: &FontPresetValues,
@@ -1435,8 +1967,8 @@ fn text_run(
         text: text.into(),
         style: EngineTextStyle {
             family: family.into(),
-            weight: "regular".into(),
-            slope: "roman".into(),
+            weight: weight.into(),
+            slope: slope.into(),
             size: "normal".into(),
             tabular_numbers: Some(tabular),
             pixel_size: Some(pixel_size),
@@ -1448,10 +1980,11 @@ fn text_run(
             header: presets.header,
         },
         font_family_data: EngineFontFamilyData {
-            regular: family_data.regular,
-            italic: family_data.italic,
-            bold: family_data.bold,
-            bold_italic: family_data.bold_italic,
+            regular: family_data.regular.clone(),
+            italic: family_data.italic.clone(),
+            bold: family_data.bold.clone(),
+            bold_italic: family_data.bold_italic.clone(),
+            variants: runtime_font_variants(&family_data),
         },
         render_mode: "mono_hint".into(),
         threshold: 128,
@@ -1459,6 +1992,27 @@ fn text_run(
     })
     .map_err(ApiError::internal)?;
     Ok(Some(run))
+}
+
+fn theme_font_role<'a>(theme: &'a WidgetTheme, role: &str) -> Option<&'a PartialTextStyle> {
+    match role {
+        "tiny" => theme
+            .font_roles
+            .as_ref()
+            .and_then(|roles| roles.tiny.as_ref()),
+        "header" => theme
+            .font_roles
+            .as_ref()
+            .and_then(|roles| roles.header.as_ref()),
+        "normalEmphasis" => theme
+            .font_roles
+            .as_ref()
+            .and_then(|roles| roles.normal_emphasis.as_ref()),
+        _ => theme
+            .font_roles
+            .as_ref()
+            .and_then(|roles| roles.normal.as_ref()),
+    }
 }
 
 fn painted_bounds(run: &TextLayoutRun) -> (i32, i32) {
@@ -1477,6 +2031,8 @@ fn painted_bounds(run: &TextLayoutRun) -> (i32, i32) {
 fn auto_fit_pixel_size(
     text: &str,
     family: &str,
+    weight: &str,
+    slope: &str,
     tabular: bool,
     frame: Rect,
     presets: &FontPresetValues,
@@ -1487,7 +2043,10 @@ fn auto_fit_pixel_size(
     let mut best = None;
     while low <= high {
         let mid = low + (high - low) / 2;
-        let Some(run) = text_run(text, family, mid, tabular, presets, user_fonts)? else {
+        let Some(run) = text_run(
+            text, family, weight, slope, mid, tabular, presets, user_fonts,
+        )?
+        else {
             return Ok(None);
         };
         let (w, h) = painted_bounds(&run);
@@ -1512,6 +2071,15 @@ fn entity_state_text(data: &Value, entity_id: &str) -> String {
         .to_string()
 }
 
+fn bound_entity_text(data: &Value, rendered_binding: &str) -> String {
+    let resolved = entity_state_text(data, rendered_binding);
+    if resolved.is_empty() {
+        rendered_binding.to_string()
+    } else {
+        resolved
+    }
+}
+
 fn draw_text_run(canvas: &mut IndexedCanvas, run: &TextLayoutRun, x: i32, y: i32, color: u8) {
     for glyph in &run.glyphs {
         for (gy, row) in glyph.pixels.iter().enumerate() {
@@ -1524,29 +2092,65 @@ fn draw_text_run(canvas: &mut IndexedCanvas, run: &TextLayoutRun, x: i32, y: i32
     }
 }
 
+struct PrimitiveTextSpec {
+    text: String,
+    family: String,
+    weight: String,
+    slope: String,
+    color: u8,
+    tabular: bool,
+    default_px: u32,
+    h_align: String,
+    v_align: String,
+    padding: i32,
+    line_spacing_px: i32,
+    top_padding_px: i32,
+}
+
 fn primitive_render_spec(
     project: &ProjectView,
     scope: &Value,
     node: &Node,
     user_fonts: &HashMap<String, RuntimeFontFamilyData>,
-) -> Result<Option<(String, String, u8, bool, u32, String, String, i32)>, ApiError> {
+) -> Result<Option<PrimitiveTextSpec>, ApiError> {
     let Node::PrimitiveInstance {
         primitive_type,
         props,
         bindings,
         style,
         ..
-    } = node else {
+    } = node
+    else {
         return Ok(None);
     };
     let theme = theme_for_node(project, style);
     let padding = node_padding(style, props.padding_px);
-    let (text, family, color, tabular, default_px, h_align, v_align) = if primitive_type == "text" {
+    let font_role = props
+        .font_role
+        .as_deref()
+        .unwrap_or(if primitive_type == "number" {
+            "header"
+        } else {
+            "normal"
+        });
+    let role_style = theme_font_role(theme, font_role);
+    let spec = if primitive_type == "text" {
+        let effective_color_role =
+            if font_role == "normalEmphasis" && theme.surface.fill_role.is_some() {
+                theme.text.body
+            } else {
+                role_style
+                    .and_then(|style| style.color_role)
+                    .unwrap_or(theme.text.body)
+            };
         let text = if props.render_entity_state.unwrap_or(false) {
             bindings
                 .get("entity")
-                .map(|entity_id| render_template(entity_id, scope, &project.locale).unwrap_or_else(|| entity_id.clone()))
-                .map(|entity_id| entity_state_text(scope, &entity_id))
+                .map(|entity_id| {
+                    render_template(entity_id, scope, &project.locale)
+                        .unwrap_or_else(|| entity_id.clone())
+                })
+                .map(|entity_id| bound_entity_text(scope, &entity_id))
                 .unwrap_or_default()
         } else {
             props
@@ -1555,77 +2159,125 @@ fn primitive_render_spec(
                 .and_then(|value| render_template(value, scope, &project.locale))
                 .unwrap_or_default()
         };
-        (
+        PrimitiveTextSpec {
             text,
-            theme
-                .font_roles
-                .as_ref()
-                .and_then(|roles| roles.normal.as_ref())
+            family: role_style
                 .and_then(|style| style.family.clone())
                 .or_else(|| theme.auto_fit_font_family.clone())
                 .unwrap_or_else(|| "arial".into()),
-            role_color(theme.text.body),
-            false,
-            theme
-                .font_roles
-                .as_ref()
-                .and_then(|roles| roles.normal.as_ref())
+            weight: role_style
+                .and_then(|style| style.weight.clone())
+                .unwrap_or_else(|| "regular".into()),
+            slope: role_style
+                .and_then(|style| style.slope.clone())
+                .unwrap_or_else(|| "roman".into()),
+            color: contrasted_text_color(theme, role_color(effective_color_role), theme.text.body),
+            tabular: false,
+            default_px: role_style
                 .and_then(|style| style.pixel_size)
                 .unwrap_or(project.font_presets.normal),
-            props.horizontal_align.as_deref().unwrap_or("left").to_string(),
-            props.vertical_align.as_deref().unwrap_or("top").to_string(),
-        )
-    } else if primitive_type == "number" {
-        let mut value = bindings
-            .get("entity")
-            .map(|entity_id| render_template(entity_id, scope, &project.locale).unwrap_or_else(|| entity_id.clone()))
-            .map(|entity_id| entity_state_text(scope, &entity_id))
-            .unwrap_or_default();
-        if let Some(unit) = &props.unit {
-            value.push_str(&render_template(unit, scope, &project.locale).unwrap_or_else(|| unit.clone()));
+            h_align: props
+                .horizontal_align
+                .as_deref()
+                .unwrap_or("left")
+                .to_string(),
+            v_align: props.vertical_align.as_deref().unwrap_or("top").to_string(),
+            padding,
+            line_spacing_px: role_style
+                .and_then(|style| style.line_spacing_px)
+                .unwrap_or(0),
+            top_padding_px: role_style
+                .and_then(|style| style.top_padding_px)
+                .unwrap_or(0),
         }
+    } else if primitive_type == "number" {
+        let effective_color_role =
+            if font_role == "normalEmphasis" && theme.surface.fill_role.is_some() {
+                theme.text.value
+            } else {
+                role_style
+                    .and_then(|style| style.color_role)
+                    .unwrap_or(theme.text.value)
+            };
+        let value = bindings
+            .get("entity")
+            .map(|entity_id| {
+                render_template(entity_id, scope, &project.locale)
+                    .unwrap_or_else(|| entity_id.clone())
+            })
+            .map(|entity_id| bound_entity_text(scope, &entity_id))
+            .unwrap_or_default();
+        let quantize_step = props.quantize_step.unwrap_or(0.0);
+        let digits = props.digits.map(|value| value.max(0));
+        let formatted_value = format_quantized_number(&value, quantize_step, digits);
         let text = format!(
-            "{}{}{}",
+            "{}{}{}{}",
             props
                 .prefix
                 .as_deref()
                 .and_then(|value| render_template(value, scope, &project.locale))
                 .unwrap_or_default(),
-            value,
+            formatted_value,
+            props
+                .unit
+                .as_deref()
+                .and_then(|value| render_template(value, scope, &project.locale))
+                .unwrap_or_default(),
             props
                 .suffix
                 .as_deref()
                 .and_then(|value| render_template(value, scope, &project.locale))
                 .unwrap_or_default()
         );
-        (
+        PrimitiveTextSpec {
             text,
-            theme
-                .font_roles
-                .as_ref()
-                .and_then(|roles| roles.header.as_ref())
+            family: role_style
                 .and_then(|style| style.family.clone())
                 .or_else(|| theme.auto_fit_font_family.clone())
                 .unwrap_or_else(|| "arial".into()),
-            role_color(theme.text.value),
-            true,
-            theme
-                .font_roles
-                .as_ref()
-                .and_then(|roles| roles.header.as_ref())
-                .and_then(|style| style.pixel_size)
-                .unwrap_or(project.font_presets.header),
-            props.horizontal_align.as_deref().unwrap_or("center").to_string(),
-            props.vertical_align.as_deref().unwrap_or("middle").to_string(),
-        )
+            weight: role_style
+                .and_then(|style| style.weight.clone())
+                .unwrap_or_else(|| "regular".into()),
+            slope: role_style
+                .and_then(|style| style.slope.clone())
+                .unwrap_or_else(|| "roman".into()),
+            color: contrasted_text_color(theme, role_color(effective_color_role), theme.text.value),
+            tabular: true,
+            default_px: role_style.and_then(|style| style.pixel_size).unwrap_or(
+                if font_role == "tiny" {
+                    project.font_presets.tiny
+                } else if font_role == "normal" || font_role == "normalEmphasis" {
+                    project.font_presets.normal
+                } else {
+                    project.font_presets.header
+                },
+            ),
+            h_align: props
+                .horizontal_align
+                .as_deref()
+                .unwrap_or("center")
+                .to_string(),
+            v_align: props
+                .vertical_align
+                .as_deref()
+                .unwrap_or("middle")
+                .to_string(),
+            padding,
+            line_spacing_px: role_style
+                .and_then(|style| style.line_spacing_px)
+                .unwrap_or(0),
+            top_padding_px: role_style
+                .and_then(|style| style.top_padding_px)
+                .unwrap_or(0),
+        }
     } else {
         return Ok(None);
     };
-    if text.is_empty() {
+    if spec.text.is_empty() {
         return Ok(None);
     }
     let _ = user_fonts;
-    Ok(Some((text, family, color, tabular, default_px, h_align, v_align, padding)))
+    Ok(Some(spec))
 }
 
 fn measure_primitive(
@@ -1634,8 +2286,20 @@ fn measure_primitive(
     node: &Node,
     user_fonts: &HashMap<String, RuntimeFontFamilyData>,
 ) -> Result<Option<(i32, i32)>, ApiError> {
-    let Some((text, family, _color, tabular, pixel_size, _h_align, _v_align, padding)) =
-        primitive_render_spec(project, scope, node, user_fonts)?
+    let Some(PrimitiveTextSpec {
+        text,
+        family,
+        weight,
+        slope,
+        color: _color,
+        tabular,
+        default_px: pixel_size,
+        h_align: _h_align,
+        v_align: _v_align,
+        padding,
+        line_spacing_px: _line_spacing_px,
+        top_padding_px,
+    }) = primitive_render_spec(project, scope, node, user_fonts)?
     else {
         let Node::PrimitiveInstance {
             primitive_type,
@@ -1656,11 +2320,24 @@ fn measure_primitive(
         }
         return Ok(None);
     };
-    let Some(run) = text_run(&text, &family, pixel_size, tabular, &project.font_presets, user_fonts)? else {
+    let Some(run) = text_run(
+        &text,
+        &family,
+        &weight,
+        &slope,
+        pixel_size,
+        tabular,
+        &project.font_presets,
+        user_fonts,
+    )?
+    else {
         return Ok(None);
     };
     let (painted_w, painted_h) = painted_bounds(&run);
-    Ok(Some((painted_w + padding * 2, painted_h + padding * 2)))
+    Ok(Some((
+        painted_w + padding * 2,
+        painted_h + padding * 2 + top_padding_px.max(0),
+    )))
 }
 
 fn measure_node(
@@ -1671,7 +2348,12 @@ fn measure_node(
 ) -> Result<Option<(i32, i32)>, ApiError> {
     match node {
         Node::PrimitiveInstance { .. } => measure_primitive(project, scope, node, user_fonts),
-        Node::Stack { axis, children, style, .. } => {
+        Node::Stack {
+            axis,
+            children,
+            style,
+            ..
+        } => {
             let padding = style.padding_px.unwrap_or(0).max(0);
             let gap = style.gap_px.unwrap_or(0).max(0);
             let mut width = 0;
@@ -1699,7 +2381,16 @@ fn measure_node(
             Ok(Some((width + padding * 2, height + padding * 2)))
         }
         Node::Script(node) => {
-            let globals = globals_value(project, scope, Rect { x: 0, y: 0, w: 0, h: 0 });
+            let globals = globals_value(
+                project,
+                scope,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: 0,
+                    h: 0,
+                },
+            );
             let bindings = Value::Object(
                 node.bindings
                     .iter()
@@ -1709,14 +2400,19 @@ fn measure_node(
                                 .map(Value::String)
                                 .unwrap_or(Value::Null)
                         } else {
-                            scope_value(scope, value).unwrap_or_else(|| Value::String(value.clone()))
+                            scope_value(scope, value)
+                                .unwrap_or_else(|| Value::String(value.clone()))
                         };
                         (key.clone(), resolved)
                     })
                     .collect(),
             );
             let derived = run_js_json(&node.source, scope, &bindings, &globals)?;
-            let merged_scope = if derived.is_object() { merge_scope(scope, &derived) } else { scope.clone() };
+            let merged_scope = if derived.is_object() {
+                merge_scope(scope, &derived)
+            } else {
+                scope.clone()
+            };
             node.child
                 .as_deref()
                 .map(|child| measure_node(project, &merged_scope, child, user_fonts))
@@ -1735,11 +2431,9 @@ fn measure_node(
                 .map(|value| value.flatten())
         }
         Node::CompoundRef(node) => {
-            let Some(definition) = project
-                .widget_definitions
-                .iter()
-                .find(|definition| definition.id == node.definition_id && definition.kind == "compound")
-            else {
+            let Some(definition) = project.widget_definitions.iter().find(|definition| {
+                definition.id == node.definition_id && definition.kind == "compound"
+            }) else {
                 return Ok(None);
             };
             let Some(root) = definition.root_node.as_ref() else {
@@ -1756,7 +2450,10 @@ fn measure_node(
                     node.input_bindings
                         .get(key)
                         .or_else(|| node.input_bindings.get(alias))
-                        .map(|value| render_template(value, scope, &project.locale).unwrap_or_else(|| value.clone()))
+                        .map(|value| {
+                            render_template(value, scope, &project.locale)
+                                .unwrap_or_else(|| value.clone())
+                        })
                         .map(Value::String)
                         .or_else(|| node.input_values.get(key).cloned())
                         .or_else(|| node.input_values.get(alias).cloned())
@@ -1794,7 +2491,9 @@ fn measure_node(
             if let Some(object) = nested_scope.as_object_mut() {
                 object.insert(node.variable_name.clone(), items);
                 object.insert(
-                    node.date_variable_name.clone().unwrap_or_else(|| "date".into()),
+                    node.date_variable_name
+                        .clone()
+                        .unwrap_or_else(|| "date".into()),
                     date,
                 );
             }
@@ -1820,8 +2519,16 @@ fn measure_node(
             let mut height = 0;
             let gap = node.style.gap_px.unwrap_or(0).max(0);
             for (index, value) in values.into_iter().take(count).enumerate() {
-                let item_scope = build_array_item_scope(scope, &value, index, &node.item_alias, &node.index_alias);
-                if let Some((child_w, child_h)) = measure_node(project, &item_scope, template, user_fonts)? {
+                let item_scope = build_array_item_scope(
+                    scope,
+                    &value,
+                    index,
+                    &node.item_alias,
+                    &node.index_alias,
+                );
+                if let Some((child_w, child_h)) =
+                    measure_node(project, &item_scope, template, user_fonts)?
+                {
                     if node.axis == "horizontal" {
                         width += child_w;
                         height = height.max(child_h);
@@ -1861,6 +2568,12 @@ fn render_primitive(
     else {
         return Ok(());
     };
+    let theme = theme_for_node(project, style);
+    if should_fill_node_surface(style) {
+        if let Some(fill_role) = theme.surface.fill_role {
+            canvas.fill_rect(frame, fill_role_color(fill_role));
+        }
+    }
     if primitive_type == "line" {
         let padding = node_padding(style, props.padding_px);
         let inner = Rect {
@@ -1877,7 +2590,12 @@ fn render_primitive(
                 inner.x + inner.w / 2,
                 inner.y + inner.h - 1,
             ),
-            "diag_down" => (inner.x, inner.y, inner.x + inner.w - 1, inner.y + inner.h - 1),
+            "diag_down" => (
+                inner.x,
+                inner.y,
+                inner.x + inner.w - 1,
+                inner.y + inner.h - 1,
+            ),
             "diag_up" => (
                 inner.x,
                 inner.y + inner.h - 1,
@@ -1891,7 +2609,7 @@ fn render_primitive(
                 inner.y + inner.h / 2,
             ),
         };
-        draw_line(canvas, x1, y1, x2, y2, role_color(theme_for_node(project, style).text.body));
+        draw_line(canvas, x1, y1, x2, y2, role_color(theme.text.body));
         return Ok(());
     }
     if primitive_type == "icon" {
@@ -1906,14 +2624,26 @@ fn render_primitive(
             canvas,
             props.icon.as_deref().unwrap_or(DEFAULT_ICON_ID),
             inner,
-            role_color(theme_for_node(project, style).text.body),
+            role_color(theme.text.body),
             props.horizontal_align.as_deref().unwrap_or("center"),
             props.vertical_align.as_deref().unwrap_or("middle"),
         )?;
         return Ok(());
     }
-    let Some((text, family, color, tabular, default_px, h_align, v_align, padding)) =
-        primitive_render_spec(project, scope, node, user_fonts)?
+    let Some(PrimitiveTextSpec {
+        text,
+        family,
+        weight,
+        slope,
+        color,
+        tabular,
+        default_px,
+        h_align,
+        v_align,
+        padding,
+        line_spacing_px: _line_spacing_px,
+        top_padding_px,
+    }) = primitive_render_spec(project, scope, node, user_fonts)?
     else {
         return Ok(());
     };
@@ -1924,12 +2654,31 @@ fn render_primitive(
         h: (frame.h - padding * 2).max(1),
     };
     let pixel_size = if props.auto_fit.unwrap_or(false) {
-        auto_fit_pixel_size(&text, &family, tabular, inner, &project.font_presets, user_fonts)?
-            .unwrap_or(default_px)
+        auto_fit_pixel_size(
+            &text,
+            &family,
+            &weight,
+            &slope,
+            tabular,
+            inner,
+            &project.font_presets,
+            user_fonts,
+        )?
+        .unwrap_or(default_px)
     } else {
         props.fixed_pixel_size.unwrap_or(default_px)
     };
-    let Some(run) = text_run(&text, &family, pixel_size, tabular, &project.font_presets, user_fonts)? else {
+    let Some(run) = text_run(
+        &text,
+        &family,
+        &weight,
+        &slope,
+        pixel_size,
+        tabular,
+        &project.font_presets,
+        user_fonts,
+    )?
+    else {
         return Ok(());
     };
     let (painted_w, painted_h) = painted_bounds(&run);
@@ -1942,7 +2691,7 @@ fn render_primitive(
         "middle" => inner.y + ((inner.h - painted_h) / 2),
         "bottom" => inner.y + inner.h - painted_h,
         _ => inner.y,
-    };
+    } + top_padding_px;
     draw_text_run(canvas, &run, draw_x, draw_y, color);
     Ok(())
 }
@@ -1960,11 +2709,14 @@ fn draw_icon(
     };
     let svg = fs::read_to_string(path).map_err(|error| ApiError::internal(error.to_string()))?;
     let options = Options::default();
-    let tree = Tree::from_str(&svg, &options).map_err(|error| ApiError::internal(error.to_string()))?;
+    let tree =
+        Tree::from_str(&svg, &options).map_err(|error| ApiError::internal(error.to_string()))?;
     let size = tree.size();
     let source_w = size.width().max(1.0);
     let source_h = size.height().max(1.0);
-    let scale = (frame.w as f32 / source_w).min(frame.h as f32 / source_h).max(0.01);
+    let scale = (frame.w as f32 / source_w)
+        .min(frame.h as f32 / source_h)
+        .max(0.01);
     let draw_w = (source_w * scale).round().max(1.0) as u32;
     let draw_h = (source_h * scale).round().max(1.0) as u32;
     let offset_x = match horizontal_align {
@@ -2032,16 +2784,42 @@ fn child_rects(
     let mut sizes = Vec::with_capacity(children.len());
     for child in children {
         let (width, height, style, props_padding) = match child {
-            Node::Stack { width, height, style, .. } => (width, height, style, None),
-            Node::Zstack { width, height, style, .. } => (width, height, style, None),
-            Node::Grid { width, height, style, .. } => (width, height, style, None),
+            Node::Stack {
+                width,
+                height,
+                style,
+                ..
+            } => (width, height, style, None),
+            Node::Zstack {
+                width,
+                height,
+                style,
+                ..
+            } => (width, height, style, None),
+            Node::Grid {
+                width,
+                height,
+                style,
+                ..
+            } => (width, height, style, None),
             Node::DataQuery(node) => (&node.width, &node.height, &node.style, None),
             Node::ForEach(node) => (&node.width, &node.height, &node.style, None),
             Node::CompoundRef(node) => (&node.width, &node.height, &node.style, None),
             Node::Script(node) => (&node.width, &node.height, &node.style, None),
             Node::IfElse(node) => (&node.width, &node.height, &node.style, None),
-            Node::PrimitiveInstance { width, height, style, props, .. } => (width, height, style, props.padding_px),
-            Node::Spacer { width, height, style, .. } => (width, height, style, None),
+            Node::PrimitiveInstance {
+                width,
+                height,
+                style,
+                props,
+                ..
+            } => (width, height, style, props.padding_px),
+            Node::Spacer {
+                width,
+                height,
+                style,
+                ..
+            } => (width, height, style, None),
             Node::Unsupported => {
                 sizes.push(None);
                 continue;
@@ -2068,7 +2846,11 @@ fn child_rects(
         }
     }
     let remaining = (total - fixed).max(0);
-    let flex_size = if flex_count > 0 { remaining / flex_count } else { 0 };
+    let flex_size = if flex_count > 0 {
+        remaining / flex_count
+    } else {
+        0
+    };
     let mut cursor_x = frame.x;
     let mut cursor_y = frame.y;
     children
@@ -2107,7 +2889,8 @@ fn track_sizes(tracks: &[GridTrack], total: i32, gap: i32) -> Vec<i32> {
     let mut flex_count = 0;
     let mut sizes = Vec::with_capacity(tracks.len());
     for track in tracks {
-        let measured = get_size_value(&Some(track.size.clone()), available).map(|value| value.max(1));
+        let measured =
+            get_size_value(&Some(track.size.clone()), available).map(|value| value.max(1));
         if let Some(value) = measured {
             fixed += value;
             sizes.push(Some(value));
@@ -2117,7 +2900,11 @@ fn track_sizes(tracks: &[GridTrack], total: i32, gap: i32) -> Vec<i32> {
         }
     }
     let remaining = (available - fixed).max(0);
-    let flex_size = if flex_count > 0 { remaining / flex_count } else { 0 };
+    let flex_size = if flex_count > 0 {
+        remaining / flex_count
+    } else {
+        0
+    };
     sizes
         .into_iter()
         .map(|size| size.unwrap_or(flex_size.max(1)))
@@ -2153,6 +2940,12 @@ fn render_node(
             style,
             ..
         } => {
+            let theme = theme_for_node(project, style);
+            if should_fill_node_surface(style) {
+                if let Some(fill_role) = theme.surface.fill_role {
+                    canvas.fill_rect(frame, fill_role_color(fill_role));
+                }
+            }
             let padding = style.padding_px.unwrap_or(0).max(0);
             let gap = style.gap_px.unwrap_or(0).max(0);
             let inner = Rect {
@@ -2187,7 +2980,15 @@ fn render_node(
             }
             Ok(())
         }
-        Node::Zstack { children, style, .. } => {
+        Node::Zstack {
+            children, style, ..
+        } => {
+            let theme = theme_for_node(project, style);
+            if should_fill_node_surface(style) {
+                if let Some(fill_role) = theme.surface.fill_role {
+                    canvas.fill_rect(frame, fill_role_color(fill_role));
+                }
+            }
             let padding = style.padding_px.unwrap_or(0).max(0);
             let inner = Rect {
                 x: frame.x + padding,
@@ -2207,6 +3008,12 @@ fn render_node(
             style,
             ..
         } => {
+            let theme = theme_for_node(project, style);
+            if should_fill_node_surface(style) {
+                if let Some(fill_role) = theme.surface.fill_role {
+                    canvas.fill_rect(frame, fill_role_color(fill_role));
+                }
+            }
             let padding = style.padding_px.unwrap_or(0).max(0);
             let gap = style.gap_px.unwrap_or(0).max(0);
             let inner = Rect {
@@ -2257,7 +3064,9 @@ fn render_node(
             if let Some(object) = nested_scope.as_object_mut() {
                 object.insert(node.variable_name.clone(), items);
                 object.insert(
-                    node.date_variable_name.clone().unwrap_or_else(|| "date".into()),
+                    node.date_variable_name
+                        .clone()
+                        .unwrap_or_else(|| "date".into()),
                     date,
                 );
             }
@@ -2287,34 +3096,70 @@ fn render_node(
                 h: (frame.h - padding * 2).max(1),
             };
             let horizontal = node.axis == "horizontal";
-            let available_main = if horizontal { inner.w } else { inner.h } - gap * (count.saturating_sub(1) as i32);
-            let template_spec = if horizontal { node_width_spec(template) } else { node_height_spec(template) };
+            let available_main =
+                if horizontal { inner.w } else { inner.h } - gap * (count.saturating_sub(1) as i32);
+            let template_spec = if horizontal {
+                node_width_spec(template)
+            } else {
+                node_height_spec(template)
+            };
             let shared_main = match template_spec.and_then(|spec| spec.mode.as_deref()) {
-                None | Some("fill") | Some("fraction") => Some((available_main.max(0) / count.max(1) as i32).max(1)),
+                None | Some("fill") | Some("fraction") => {
+                    Some((available_main.max(0) / count.max(1) as i32).max(1))
+                }
                 _ => None,
             };
             let mut cursor = if horizontal { inner.x } else { inner.y };
             for (index, value) in values.into_iter().take(count).enumerate() {
-                let item_scope = build_array_item_scope(scope, &value, index, &node.item_alias, &node.index_alias);
-                let measured = measure_node(project, &item_scope, template, user_fonts)?.unwrap_or((inner.w, inner.h));
-                let main = shared_main.unwrap_or(if horizontal { measured.0 } else { measured.1 }).max(1);
-                let cross = if horizontal { measured.1.min(inner.h) } else { measured.0.min(inner.w) }.max(1);
-                let child_frame = if horizontal {
-                    Rect { x: cursor, y: inner.y, w: main.min(inner.w.max(1)), h: cross }
+                let item_scope = build_array_item_scope(
+                    scope,
+                    &value,
+                    index,
+                    &node.item_alias,
+                    &node.index_alias,
+                );
+                let measured = measure_node(project, &item_scope, template, user_fonts)?
+                    .unwrap_or((inner.w, inner.h));
+                let main = shared_main
+                    .unwrap_or(if horizontal { measured.0 } else { measured.1 })
+                    .max(1);
+                let cross = if horizontal {
+                    measured.1.min(inner.h)
                 } else {
-                    Rect { x: inner.x, y: cursor, w: cross, h: main.min(inner.h.max(1)) }
+                    measured.0.min(inner.w)
+                }
+                .max(1);
+                let child_frame = if horizontal {
+                    Rect {
+                        x: cursor,
+                        y: inner.y,
+                        w: main.min(inner.w.max(1)),
+                        h: cross,
+                    }
+                } else {
+                    Rect {
+                        x: inner.x,
+                        y: cursor,
+                        w: cross,
+                        h: main.min(inner.h.max(1)),
+                    }
                 };
-                render_node(canvas, project, &item_scope, template, child_frame, user_fonts)?;
+                render_node(
+                    canvas,
+                    project,
+                    &item_scope,
+                    template,
+                    child_frame,
+                    user_fonts,
+                )?;
                 cursor += main + gap;
             }
             Ok(())
         }
         Node::CompoundRef(node) => {
-            let Some(definition) = project
-                .widget_definitions
-                .iter()
-                .find(|definition| definition.id == node.definition_id && definition.kind == "compound")
-            else {
+            let Some(definition) = project.widget_definitions.iter().find(|definition| {
+                definition.id == node.definition_id && definition.kind == "compound"
+            }) else {
                 return Ok(());
             };
             let Some(root) = definition.root_node.as_ref() else {
@@ -2331,7 +3176,10 @@ fn render_node(
                     node.input_bindings
                         .get(key)
                         .or_else(|| node.input_bindings.get(alias))
-                        .map(|value| render_template(value, scope, &project.locale).unwrap_or_else(|| value.clone()))
+                        .map(|value| {
+                            render_template(value, scope, &project.locale)
+                                .unwrap_or_else(|| value.clone())
+                        })
                         .map(Value::String)
                         .or_else(|| node.input_values.get(key).cloned())
                         .or_else(|| node.input_values.get(alias).cloned())
@@ -2363,7 +3211,8 @@ fn render_node(
                                 .map(Value::String)
                                 .unwrap_or(Value::Null)
                         } else {
-                            scope_value(scope, value).unwrap_or_else(|| Value::String(value.clone()))
+                            scope_value(scope, value)
+                                .unwrap_or_else(|| Value::String(value.clone()))
                         };
                         (key.clone(), resolved)
                     })
@@ -2391,7 +3240,9 @@ fn render_node(
             }
             Ok(())
         }
-        Node::PrimitiveInstance { .. } => render_primitive(canvas, project, scope, node, frame, user_fonts),
+        Node::PrimitiveInstance { .. } => {
+            render_primitive(canvas, project, scope, node, frame, user_fonts)
+        }
         Node::Spacer { .. } => Ok(()),
         Node::Unsupported => Ok(()),
     }
@@ -2403,14 +3254,20 @@ fn render_layout_preview(
     data_value: &Value,
     layout_id: &str,
     popup_layout_id: Option<&str>,
+    default_theme_id: Option<&str>,
+    display_type_id: Option<&str>,
     data_source_message: Option<String>,
 ) -> Result<Option<NativeRenderedPreview>, ApiError> {
-    let project: ProjectView = serde_json::from_value(project_value.clone())
+    let mut project: ProjectView = serde_json::from_value(project_value.clone())
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let user_fonts: HashMap<String, RuntimeFontFamilyData> =
         serde_json::from_value(user_fonts_value.clone())
             .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let layout = match project.layout_definitions.iter().find(|layout| layout.id == layout_id) {
+    let layout = match project
+        .layout_definitions
+        .iter()
+        .find(|layout| layout.id == layout_id)
+    {
         Some(layout) => layout,
         None => return Ok(None),
     };
@@ -2418,6 +3275,14 @@ fn render_layout_preview(
         Some(root) if node_supported_with_project(&project, root) => root,
         _ => return Ok(None),
     };
+    project.active_theme_id = default_theme_id
+        .filter(|theme_id| *theme_id != "inherit")
+        .map(str::to_string)
+        .or_else(|| {
+            node_theme_id(root)
+                .filter(|theme_id| *theme_id != "inherit")
+                .map(str::to_string)
+        });
     let popup = match popup_layout_id {
         Some(popup_layout_id) => match project
             .layout_definitions
@@ -2432,15 +3297,31 @@ fn render_layout_preview(
         },
         None => None,
     };
-    let display_type = match project
-        .display_types
-        .iter()
-        .find(|display_type| display_type.id == layout.display_type_id)
-    {
+    let display_type = match project.display_types.iter().find(|display_type| {
+        Some(display_type.id.as_str())
+            == display_type_id
+                .or(layout.display_type_id.as_deref())
+                .or_else(|| project.display_types.first().map(|entry| entry.id.as_str()))
+    }) {
         Some(display_type) => display_type,
         None => return Ok(None),
     };
     let mut canvas = IndexedCanvas::new(display_type.width, display_type.height, COLOR_BG);
+    if let Some(theme_id) = project.active_theme_id.as_deref() {
+        if let Some(theme) = project.themes.iter().find(|theme| theme.id == theme_id) {
+            if let Some(fill_role) = theme.surface.fill_role {
+                canvas.fill_rect(
+                    Rect {
+                        x: 0,
+                        y: 0,
+                        w: display_type.width as i32,
+                        h: display_type.height as i32,
+                    },
+                    fill_role_color(fill_role),
+                );
+            }
+        }
+    }
     if render_node(
         &mut canvas,
         &project,
@@ -2512,6 +3393,44 @@ fn render_layout_preview(
     }))
 }
 
+fn render_empty_display_preview(
+    project: &ProjectView,
+    display_type_id: &str,
+    data_source_message: Option<String>,
+) -> Result<Option<NativeRenderedPreview>, ApiError> {
+    let display_type = match project
+        .display_types
+        .iter()
+        .find(|display_type| display_type.id == display_type_id)
+    {
+        Some(display_type) => display_type,
+        None => return Ok(None),
+    };
+    let [bg_r, bg_g, bg_b] = parse_hex_color(&display_type.palette.bg)?;
+    let mut rgba = vec![0u8; display_type.width as usize * display_type.height as usize * 4];
+    for pixel in rgba.chunks_exact_mut(4) {
+        pixel[0] = bg_r;
+        pixel[1] = bg_g;
+        pixel[2] = bg_b;
+        pixel[3] = 255;
+    }
+    let png_bytes = rgba_to_png(&rgba, display_type.width, display_type.height)?;
+    Ok(Some(NativeRenderedPreview {
+        width: display_type.width,
+        height: display_type.height,
+        hash: format!(
+            "native-empty:{}:{}",
+            display_type.id,
+            base64::engine::general_purpose::STANDARD.encode(&png_bytes[..png_bytes.len().min(24)])
+        ),
+        active_screen_id: String::new(),
+        active_overlay_id: None,
+        data_source_message,
+        script_warnings: None,
+        png_bytes,
+    }))
+}
+
 pub(crate) fn preview_value(rendered: &NativeRenderedPreview) -> Value {
     json!({
         "width": rendered.width,
@@ -2531,7 +3450,11 @@ pub(crate) fn try_render_layout_preview_value(
     body: &Value,
     data_value: &Value,
 ) -> Result<Option<Value>, ApiError> {
-    if body.get("includeInspection").and_then(Value::as_bool).unwrap_or(false) {
+    if body
+        .get("includeInspection")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
         return Ok(None);
     }
     if body.get("displayId").and_then(Value::as_str).is_some() {
@@ -2547,9 +3470,11 @@ pub(crate) fn try_render_layout_preview_value(
         data_value,
         layout_id,
         body.get("popupLayoutId").and_then(Value::as_str),
+        body.get("themeId").and_then(Value::as_str),
+        body.get("displayTypeId").and_then(Value::as_str),
         None,
     )?
-        .map(|rendered| preview_value(&rendered)))
+    .map(|rendered| preview_value(&rendered)))
 }
 
 pub(crate) fn try_render_assigned_preview(
@@ -2561,7 +3486,11 @@ pub(crate) fn try_render_assigned_preview(
 ) -> Result<Option<NativeRenderedPreview>, ApiError> {
     let project: ProjectView = serde_json::from_value(project_value.clone())
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let display = match project.devices.iter().find(|display| display.id == display_id) {
+    let display = match project
+        .devices
+        .iter()
+        .find(|display| display.id == display_id)
+    {
         Some(display) => display,
         None => return Ok(None),
     };
@@ -2572,31 +3501,50 @@ pub(crate) fn try_render_assigned_preview(
     let Some(assignment) = assignment else {
         return Ok(None);
     };
-    let layout_id = select_rule_layout_id(
+    let layout_for_display = |layout_id: &str| {
+        project
+            .layout_definitions
+            .iter()
+            .find(|layout| layout.id == layout_id && layout.kind != "popup")
+            .map(|layout| layout.id.as_str())
+    };
+    let selected_rule_layout_id = select_rule_layout_id(
         &assignment.fullscreen_rules,
         "activate_fullscreen_layout",
         data_value,
     )
-        .or(assignment
+    .and_then(layout_for_display);
+    let default_layout_id = assignment
         .default_fullscreen_layout_id
         .as_deref()
-        .or_else(|| {
-            project
-                .layout_definitions
-                .iter()
-                .find(|layout| layout.display_type_id == display.display_type_id)
-                .map(|layout| layout.id.as_str())
-        }));
+        .and_then(layout_for_display);
+    let fallback_layout_id = project
+        .layout_definitions
+        .iter()
+        .find(|layout| layout.kind != "popup" && layout.root_node.is_some())
+        .map(|layout| layout.id.as_str());
+    let layout_id = selected_rule_layout_id
+        .or(default_layout_id)
+        .or(fallback_layout_id);
     let Some(layout_id) = layout_id else {
-        return Ok(None);
+        return render_empty_display_preview(
+            &project,
+            &display.display_type_id,
+            data_source_message,
+        );
     };
-    let popup_layout_id = select_rule_layout_id(
-        &assignment.popup_rules,
-        "activate_popup_layout",
+    let popup_layout_id =
+        select_rule_layout_id(&assignment.popup_rules, "activate_popup_layout", data_value);
+    let rendered = render_layout_preview(
+        project_value,
+        user_fonts_value,
         data_value,
-    );
-    let rendered =
-        render_layout_preview(project_value, user_fonts_value, data_value, layout_id, popup_layout_id, data_source_message)?;
+        layout_id,
+        popup_layout_id,
+        assignment.default_theme_id.as_deref(),
+        Some(display.display_type_id.as_str()),
+        data_source_message,
+    )?;
     let Some(mut rendered) = rendered else {
         return Ok(None);
     };
@@ -2613,7 +3561,10 @@ mod tests {
     fn first_unsupported(project: &ProjectView, node: &Node) -> Option<String> {
         match node {
             Node::Stack { children, .. } | Node::Zstack { children, .. } => {
-                if let Some(found) = children.iter().find_map(|child| first_unsupported(project, child)) {
+                if let Some(found) = children
+                    .iter()
+                    .find_map(|child| first_unsupported(project, child))
+                {
                     return Some(found);
                 }
             }
@@ -2626,10 +3577,9 @@ mod tests {
                 }
             }
             Node::CompoundRef(node) => {
-                let definition = project
-                    .widget_definitions
-                    .iter()
-                    .find(|definition| definition.id == node.definition_id && definition.kind == "compound");
+                let definition = project.widget_definitions.iter().find(|definition| {
+                    definition.id == node.definition_id && definition.kind == "compound"
+                });
                 let Some(definition) = definition else {
                     return Some(format!("missing-definition:{}", node.definition_id));
                 };
@@ -2654,7 +3604,11 @@ mod tests {
                     .then_child
                     .as_deref()
                     .and_then(|child| first_unsupported(project, child))
-                    .or_else(|| node.else_child.as_deref().and_then(|child| first_unsupported(project, child)))
+                    .or_else(|| {
+                        node.else_child
+                            .as_deref()
+                            .and_then(|child| first_unsupported(project, child))
+                    })
                 {
                     return Some(found);
                 }
@@ -2702,7 +3656,7 @@ mod tests {
         let mut project_value = demo_project();
         project_value["layoutDefinitions"] = json!([{
             "id": "layout-climate-native",
-            "displayTypeId": "tri296x128-red",
+            "displayTypeId": "oel-ap-hw-01-296x128",
             "rootNode": {
                 "type": "compound_ref",
                 "id": "node-compound",
@@ -2729,10 +3683,159 @@ mod tests {
             }),
             "layout-climate-native",
             None,
+            None,
+            None,
+            None,
         )
         .unwrap();
         assert!(rendered.is_some());
         assert!(rendered.unwrap().hash.starts_with("native-layout:"));
+    }
+
+    #[test]
+    fn assigned_preview_ignores_mismatched_default_layout_size() {
+        let project_value = json!({
+            "id": "demo",
+            "name": "Demo",
+            "locale": "en-US",
+            "fontPresets": { "tiny": 8, "normal": 12, "header": 24 },
+            "themes": [{
+                "id": "classic-outline",
+                "text": { "title": "fg", "body": "fg", "value": "fg" }
+            }],
+            "displayTypes": [
+                {
+                    "id": "small",
+                    "width": 296,
+                    "height": 128,
+                    "palette": { "bg": "#ffffff", "fg": "#000000", "accent": "#ff0000" }
+                },
+                {
+                    "id": "large",
+                    "width": 400,
+                    "height": 300,
+                    "palette": { "bg": "#ffffff", "fg": "#000000", "accent": "#ff0000" }
+                }
+            ],
+            "devices": [{
+                "id": "display-large",
+                "displayTypeId": "large",
+                "managed": true,
+                "virtual": false
+            }],
+            "deviceAssignments": [{
+                "id": "assignment-large",
+                "displayId": "display-large",
+                "defaultFullscreenLayoutId": "layout-small",
+                "fullscreenRules": [],
+                "popupRules": []
+            }],
+            "layoutDefinitions": [
+                {
+                    "id": "layout-small",
+                    "kind": "fullscreen",
+                    "displayTypeId": "small",
+                    "rootNode": {
+                        "id": "small-root",
+                        "type": "stack",
+                        "axis": "vertical",
+                        "children": []
+                    }
+                },
+                {
+                    "id": "layout-large",
+                    "kind": "fullscreen",
+                    "displayTypeId": "large",
+                    "rootNode": {
+                        "id": "large-root",
+                        "type": "stack",
+                        "axis": "vertical",
+                        "children": []
+                    }
+                }
+            ]
+        });
+        let rendered = try_render_assigned_preview(
+            &project_value,
+            &json!({}),
+            &json!({ "entities": {}, "now": "2026-04-25T10:00:00Z" }),
+            "display-large",
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(rendered.width, 400);
+        assert_eq!(rendered.height, 300);
+    }
+
+    #[test]
+    fn assigned_preview_renders_layout_at_assigned_display_size() {
+        let project_value = json!({
+            "id": "demo",
+            "name": "Demo",
+            "locale": "en-US",
+            "fontPresets": { "tiny": 8, "normal": 12, "header": 24 },
+            "themes": [{
+                "id": "classic-outline",
+                "text": { "title": "fg", "body": "fg", "value": "fg" }
+            }],
+            "displayTypes": [
+                {
+                    "id": "small",
+                    "width": 296,
+                    "height": 128,
+                    "palette": { "bg": "#ffffff", "fg": "#000000", "accent": "#ff0000" }
+                },
+                {
+                    "id": "large",
+                    "width": 400,
+                    "height": 300,
+                    "palette": { "bg": "#ffffff", "fg": "#000000", "accent": "#ff0000" }
+                }
+            ],
+            "devices": [{
+                "id": "display-large",
+                "displayTypeId": "large",
+                "managed": true,
+                "virtual": false
+            }],
+            "deviceAssignments": [{
+                "id": "assignment-large",
+                "displayId": "display-large",
+                "defaultFullscreenLayoutId": "layout-small",
+                "fullscreenRules": [],
+                "popupRules": []
+            }],
+            "layoutDefinitions": [{
+                "id": "layout-small",
+                "kind": "fullscreen",
+                "displayTypeId": "small",
+                "rootNode": {
+                    "id": "small-root",
+                    "type": "stack",
+                    "axis": "vertical",
+                    "children": []
+                }
+            }]
+        });
+        let rendered = try_render_assigned_preview(
+            &project_value,
+            &json!({}),
+            &json!({ "entities": {}, "now": "2026-04-25T10:00:00Z" }),
+            "display-large",
+            Some("Live data unavailable".into()),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(rendered.width, 400);
+        assert_eq!(rendered.height, 300);
+        assert!(rendered
+            .hash
+            .starts_with("native-layout:layout-small:large:"));
+        assert_eq!(
+            rendered.data_source_message.as_deref(),
+            Some("Live data unavailable")
+        );
     }
 
     #[test]
@@ -2742,13 +3845,26 @@ mod tests {
         let root = project
             .layout_definitions
             .iter()
-            .find(|layout| layout.id == "layout-fef18f50")
+            .find(|layout| layout.id == "layout-a93ccdde")
             .and_then(|layout| layout.root_node.as_ref())
             .unwrap();
         assert!(
             node_supported_with_project(&project, root),
             "{:?}",
             first_unsupported(&project, root)
+        );
+    }
+
+    #[test]
+    fn dutch_format_tokens_do_not_corrupt_weekday_or_month() {
+        let value = Value::String("2026-04-25".into());
+        assert_eq!(
+            format_scope_value(&value, "dddd", "nl-NL"),
+            Value::String("zaterdag".into())
+        );
+        assert_eq!(
+            format_scope_value(&value, "d mmmm", "nl-NL"),
+            Value::String("25 april".into())
         );
     }
 

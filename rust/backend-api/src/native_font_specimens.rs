@@ -8,14 +8,7 @@ use epd_text_engine::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::{rgba_to_png, ApiError, DisplayProfile, FontOption};
-
-const SPECIMEN_VARIANTS: [(&str, &str, &str); 4] = [
-    ("regular", "roman", "regular"),
-    ("regular", "italic", "italic"),
-    ("bold", "roman", "bold"),
-    ("bold", "italic", "boldItalic"),
-];
+use crate::{font_variant_weight_slope, rgba_to_png, ApiError, DisplayProfile, FontOption};
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,6 +33,8 @@ struct RuntimeFontFamilyData {
     bold: Option<String>,
     #[serde(rename = "boldItalic")]
     bold_italic: Option<String>,
+    #[serde(flatten)]
+    variants: HashMap<String, Value>,
 }
 
 fn resolve_font_family_data(
@@ -93,6 +88,7 @@ fn render_specimen_tile(
     family: &str,
     weight: &str,
     slope: &str,
+    variant_key: &str,
     sample_text: &str,
     size: i32,
 ) -> Result<Value, ApiError> {
@@ -104,6 +100,18 @@ fn render_specimen_tile(
             "pngBase64": "",
         }));
     };
+    let variant_data = family_data
+        .variants
+        .get(variant_key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| match variant_key {
+            "regular" => family_data.regular.clone(),
+            "italic" => family_data.italic.clone(),
+            "bold" => family_data.bold.clone(),
+            "boldItalic" => family_data.bold_italic.clone(),
+            _ => None,
+        });
     let run = render_text_layout(LayoutRequest {
         op: "layout".into(),
         text: sample_text.into(),
@@ -122,10 +130,17 @@ fn render_specimen_tile(
             header: presets.header,
         },
         font_family_data: EngineFontFamilyData {
-            regular: family_data.regular,
-            italic: family_data.italic,
-            bold: family_data.bold,
-            bold_italic: family_data.bold_italic,
+            regular: variant_data.clone().or(family_data.regular),
+            italic: variant_data.clone().or(family_data.italic),
+            bold: variant_data.clone().or(family_data.bold),
+            bold_italic: variant_data.or(family_data.bold_italic),
+            variants: family_data
+                .variants
+                .iter()
+                .filter_map(|(key, value)| {
+                    value.as_str().map(|font| (key.clone(), font.to_string()))
+                })
+                .collect(),
         },
         render_mode: "mono_hint".into(),
         threshold: 128,
@@ -148,8 +163,7 @@ fn render_specimen_tile(
     }
 
     let padding = 2i32;
-    let (content_width, content_height, origin_x, origin_y) = if min_x <= max_x && min_y <= max_y
-    {
+    let (content_width, content_height, origin_x, origin_y) = if min_x <= max_x && min_y <= max_y {
         (
             (max_x - min_x).max(1),
             (max_y - min_y).max(1),
@@ -226,10 +240,11 @@ pub(crate) fn render_font_specimens_value(
         .iter()
         .filter(|font| family_id.is_none_or(|target| font.id == target))
         .map(|font| {
-            let variants = SPECIMEN_VARIANTS
+            let variants = font
+                .variants
                 .iter()
-                .filter(|(_, _, variant_key)| font.variants.iter().any(|entry| entry == *variant_key))
-                .map(|(weight, slope, variant_key)| {
+                .map(|variant_key| {
+                    let (weight, slope) = font_variant_weight_slope(variant_key);
                     let tiles = allowed_or_all_sizes(font, min_size, max_size, include_all_sizes)
                         .into_iter()
                         .map(|size| {
@@ -240,6 +255,7 @@ pub(crate) fn render_font_specimens_value(
                                 &font.id,
                                 weight,
                                 slope,
+                                variant_key,
                                 sample_text,
                                 size,
                             )
@@ -283,11 +299,9 @@ mod tests {
     use super::render_font_specimens_value;
 
     fn fixture_font_base64() -> String {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../data/fonts/arial-regular.ttf");
-        base64::engine::general_purpose::STANDARD.encode(
-            std::fs::read(path).expect("fixture font"),
-        )
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/fonts/arial-regular.ttf");
+        base64::engine::general_purpose::STANDARD.encode(std::fs::read(path).expect("fixture font"))
     }
 
     #[test]

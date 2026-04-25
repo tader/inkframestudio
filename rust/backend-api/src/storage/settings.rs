@@ -14,8 +14,8 @@ pub(crate) async fn read_settings(state: &AppState) -> Result<StoredSettings, Ap
     }
     match fs::read_to_string(settings_file_path(&state.data_dir)).await {
         Ok(content) => {
-            let mut settings: StoredSettings =
-                serde_json::from_str(&content).map_err(|error| ApiError::internal(error.to_string()))?;
+            let mut settings: StoredSettings = serde_json::from_str(&content)
+                .map_err(|error| ApiError::internal(error.to_string()))?;
             if settings.provider_instances.is_none() {
                 settings.provider_instances = Some(migrate_provider_instances(&settings));
             }
@@ -32,6 +32,7 @@ pub(crate) async fn read_settings(state: &AppState) -> Result<StoredSettings, Ap
                     .filter(|instance| instance.provider_id != "home-assistant")
                     .collect(),
             }),
+            schedule_update_log_retention_days: Some(7),
             home_assistant: None,
             openepaperlink_access_point: None,
         }),
@@ -39,8 +40,12 @@ pub(crate) async fn read_settings(state: &AppState) -> Result<StoredSettings, Ap
     }
 }
 
-pub(crate) async fn write_settings(state: &AppState, settings: &StoredSettings) -> Result<(), ApiError> {
-    let value = serde_json::to_value(settings).map_err(|error| ApiError::internal(error.to_string()))?;
+pub(crate) async fn write_settings(
+    state: &AppState,
+    settings: &StoredSettings,
+) -> Result<(), ApiError> {
+    let value =
+        serde_json::to_value(settings).map_err(|error| ApiError::internal(error.to_string()))?;
     write_json_file(&settings_file_path(&state.data_dir), &value).await
 }
 
@@ -81,7 +86,10 @@ fn migrate_provider_instances(settings: &StoredSettings) -> ProviderInstancesDoc
             });
         }
     }
-    if !display_providers.iter().any(|instance| instance.provider_id == "virtual") {
+    if !display_providers
+        .iter()
+        .any(|instance| instance.provider_id == "virtual")
+    {
         display_providers.push(ProviderInstance {
             id: "virtual-default".into(),
             provider_id: "virtual".into(),
@@ -132,13 +140,19 @@ pub(crate) fn masked_provider_instance(instance: &ProviderInstance) -> ProviderI
     next
 }
 
-pub(crate) fn find_provider_instance(settings: &StoredSettings, instance_id: &str) -> Option<ProviderInstance> {
+pub(crate) fn find_provider_instance(
+    settings: &StoredSettings,
+    instance_id: &str,
+) -> Option<ProviderInstance> {
     all_provider_instances(settings)
         .into_iter()
         .find(|instance| instance.id == instance_id)
 }
 
-pub(crate) fn save_provider_instance_into_settings(settings: &mut StoredSettings, instance: ProviderInstance) {
+pub(crate) fn save_provider_instance_into_settings(
+    settings: &mut StoredSettings,
+    instance: ProviderInstance,
+) {
     let mut document = settings
         .provider_instances
         .clone()
@@ -152,7 +166,10 @@ pub(crate) fn save_provider_instance_into_settings(settings: &mut StoredSettings
         ProviderDomain::Source => &mut document.source_providers,
         ProviderDomain::Display => &mut document.display_providers,
     };
-    if let Some(existing) = target.iter_mut().find(|existing| existing.id == instance.id) {
+    if let Some(existing) = target
+        .iter_mut()
+        .find(|existing| existing.id == instance.id)
+    {
         *existing = instance;
     } else {
         target.push(instance);
@@ -160,14 +177,21 @@ pub(crate) fn save_provider_instance_into_settings(settings: &mut StoredSettings
     settings.provider_instances = Some(document);
 }
 
-pub(crate) fn delete_provider_instance_from_settings(settings: &mut StoredSettings, instance_id: &str) -> bool {
+pub(crate) fn delete_provider_instance_from_settings(
+    settings: &mut StoredSettings,
+    instance_id: &str,
+) -> bool {
     let mut document = settings
         .provider_instances
         .clone()
         .unwrap_or_else(|| migrate_provider_instances(settings));
     let before = document.source_providers.len() + document.display_providers.len();
-    document.source_providers.retain(|instance| instance.id != instance_id);
-    document.display_providers.retain(|instance| instance.id != instance_id);
+    document
+        .source_providers
+        .retain(|instance| instance.id != instance_id);
+    document
+        .display_providers
+        .retain(|instance| instance.id != instance_id);
     let changed = before != document.source_providers.len() + document.display_providers.len();
     settings.provider_instances = Some(document);
     changed

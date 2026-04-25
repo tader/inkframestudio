@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use base64::Engine;
 use freetype::face::LoadFlag;
 use freetype::{Library, RenderMode};
@@ -11,6 +13,8 @@ pub struct FontFamilyData {
     pub italic: Option<String>,
     pub bold: Option<String>,
     pub bold_italic: Option<String>,
+    #[serde(flatten)]
+    pub variants: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +79,18 @@ pub struct TextLayoutRun {
 }
 
 fn variant_bytes<'a>(family: &'a FontFamilyData, weight: &str, slope: &str) -> Option<&'a str> {
+    let custom_key = if weight == "regular" && slope == "italic" {
+        "italic".to_string()
+    } else if weight == "bold" && slope == "italic" {
+        "boldItalic".to_string()
+    } else if slope == "italic" {
+        format!("{weight}Italic")
+    } else {
+        weight.to_string()
+    };
+    if let Some(value) = family.variants.get(&custom_key) {
+        return Some(value.as_str());
+    }
     match (weight, slope) {
         ("bold", "italic") => family
             .bold_italic

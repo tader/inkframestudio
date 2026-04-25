@@ -15,25 +15,29 @@ pub(crate) async fn discover_displays(
     Query(query): Query<DiscoverDisplaysQuery>,
 ) -> ApiResult<Vec<DiscoveredDisplayCandidate>> {
     let settings = read_settings(&state).await?;
-    let instance = query
-        .provider_instance_id
-        .as_deref()
-        .and_then(|id| find_provider_instance(&settings, id))
-        .or_else(|| {
-            all_provider_instances(&settings)
-                .into_iter()
-                .find(|instance| instance.provider_id == "openepaperlink-ap" && instance.enabled)
-        });
-    let Some(instance) = instance else {
-        return Ok(Json(Vec::new()));
+    let instances = if let Some(instance_id) = query.provider_instance_id.as_deref() {
+        find_provider_instance(&settings, instance_id)
+            .into_iter()
+            .collect::<Vec<_>>()
+    } else {
+        all_provider_instances(&settings)
+            .into_iter()
+            .filter(|instance| {
+                instance.enabled && display_provider(&instance.provider_id).is_some()
+            })
+            .collect::<Vec<_>>()
     };
-    let Some(provider) = display_provider(&instance.provider_id) else {
-        return Ok(Json(Vec::new()));
-    };
-    if !provider.is_configured(&instance) {
-        return Ok(Json(Vec::new()));
+    let mut discovered = Vec::new();
+    for instance in instances {
+        let Some(provider) = display_provider(&instance.provider_id) else {
+            continue;
+        };
+        if !provider.is_configured(&instance) {
+            continue;
+        }
+        discovered.extend(provider.discover(&state, &instance).await?);
     }
-    Ok(Json(provider.discover(&state, &instance).await?))
+    Ok(Json(discovered))
 }
 
 pub(crate) async fn list_provider_kinds() -> ApiResult<ProviderKindsResponse> {
@@ -42,7 +46,9 @@ pub(crate) async fn list_provider_kinds() -> ApiResult<ProviderKindsResponse> {
     }))
 }
 
-pub(crate) async fn list_provider_instances(State(state): State<AppState>) -> ApiResult<Vec<ProviderInstance>> {
+pub(crate) async fn list_provider_instances(
+    State(state): State<AppState>,
+) -> ApiResult<Vec<ProviderInstance>> {
     let settings = read_settings(&state).await?;
     Ok(Json(
         all_provider_instances(&settings)
@@ -102,7 +108,9 @@ pub(crate) async fn delete_provider_instance(
 ) -> Result<StatusCode, ApiError> {
     let mut settings = read_settings(&state).await?;
     if !delete_provider_instance_from_settings(&mut settings, &instance_id) {
-        return Err(ApiError::not_found(format!("Unknown provider instance {instance_id}")));
+        return Err(ApiError::not_found(format!(
+            "Unknown provider instance {instance_id}"
+        )));
     }
     write_settings(&state, &settings).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -152,7 +160,11 @@ pub(crate) async fn upload_preview_to_provider(
     let instance = find_provider_instance(&settings, &instance_id)
         .ok_or_else(|| ApiError::not_found(format!("Unknown provider instance {instance_id}")))?;
     let Some(provider) = display_provider(&instance.provider_id) else {
-        return Err(ApiError::bad_request("Provider does not support preview upload"));
+        return Err(ApiError::bad_request(
+            "Provider does not support preview upload",
+        ));
     };
-    Ok(Json(provider.upload_preview(&state, &instance, payload).await?))
+    Ok(Json(
+        provider.upload_preview(&state, &instance, payload).await?,
+    ))
 }

@@ -3,5 +3,6 @@ dist
 data
 coverage
 rust/target
+target
 *.log
 *.DS_Store

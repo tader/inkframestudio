@@ -2,13 +2,14 @@ use async_trait::async_trait;
 use serde_json::json;
 
 use crate::providers::registry::{
-    ProviderDescriptor, ProviderDomain, ProviderFieldDescriptor, ProviderFieldKind, ProviderFieldOption,
-    ProviderInstance, SourceProvider,
+    ProviderDescriptor, ProviderDomain, ProviderFieldDescriptor, ProviderFieldKind,
+    ProviderFieldOption, ProviderInstance, SourceProvider,
 };
 use crate::{
-    app::AppState, home_assistant_settings_from_instance, has_configured_home_assistant,
-    normalize_home_assistant_mode, services::render_data::resolve_meta_queries,
-    ApiError, EntityCatalogEntry, fetch_home_assistant_config, fetch_home_assistant_states,
+    app::AppState, fetch_home_assistant_config, fetch_home_assistant_states,
+    has_configured_home_assistant, home_assistant_settings_from_instance,
+    normalize_home_assistant_mode, services::render_data::resolve_meta_queries, ApiError,
+    EntityCatalogEntry,
 };
 
 pub static PROVIDER: HomeAssistantProvider = HomeAssistantProvider;
@@ -37,8 +38,14 @@ pub fn descriptor() -> ProviderDescriptor {
                 help: None,
                 default_value: Some(json!(normalize_home_assistant_mode(Some("custom")))),
                 options: vec![
-                    ProviderFieldOption { value: "custom".into(), label: "Custom host".into() },
-                    ProviderFieldOption { value: "supervisor".into(), label: "Use local HA".into() },
+                    ProviderFieldOption {
+                        value: "custom".into(),
+                        label: "Custom host".into(),
+                    },
+                    ProviderFieldOption {
+                        value: "supervisor".into(),
+                        label: "Use local HA".into(),
+                    },
                 ],
             },
             ProviderFieldDescriptor {
@@ -116,7 +123,11 @@ impl SourceProvider for HomeAssistantProvider {
         has_configured_home_assistant(&settings)
     }
 
-    async fn test_connection(&self, state: &AppState, instance: &ProviderInstance) -> Result<serde_json::Value, ApiError> {
+    async fn test_connection(
+        &self,
+        state: &AppState,
+        instance: &ProviderInstance,
+    ) -> Result<serde_json::Value, ApiError> {
         let resolved = home_assistant_settings_from_instance(instance);
         let value = match fetch_home_assistant_config(&state.http, &resolved).await {
             Ok(config) => json!({
@@ -183,7 +194,10 @@ impl SourceProvider for HomeAssistantProvider {
     ) -> Result<serde_json::Map<String, serde_json::Value>, ApiError> {
         let settings = home_assistant_settings_from_instance(instance);
         let mut entities = serde_json::Map::new();
-        for value in fetch_home_assistant_states(&state.http, &settings).await.map_err(|error| ApiError::bad_request(error.message))? {
+        for value in fetch_home_assistant_states(&state.http, &settings)
+            .await
+            .map_err(|error| ApiError::bad_request(error.message))?
+        {
             entities.insert(
                 value.entity_id.clone(),
                 json!({
@@ -203,6 +217,11 @@ impl SourceProvider for HomeAssistantProvider {
         instance: &ProviderInstance,
         project: &serde_json::Value,
     ) -> Result<(serde_json::Map<String, serde_json::Value>, Vec<String>), ApiError> {
-        Ok(resolve_meta_queries(&state.http, &home_assistant_settings_from_instance(instance), project).await)
+        Ok(resolve_meta_queries(
+            &state.http,
+            &home_assistant_settings_from_instance(instance),
+            project,
+        )
+        .await)
     }
 }
