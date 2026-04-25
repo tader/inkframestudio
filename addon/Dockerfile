@@ -17,6 +17,7 @@ LABEL \
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:$PATH
+ENV RUSTFLAGS="-C target-feature=-crt-static"
 
 RUN apk add --no-cache nodejs npm curl freetype-dev harfbuzz-dev pkgconf build-base \
   && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \

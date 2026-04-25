@@ -51,14 +51,6 @@ jobs:
         include:
           - arch: amd64
             platform: linux/amd64
-          - arch: aarch64
-            platform: linux/arm64
-          - arch: armv7
-            platform: linux/arm/v7
-          - arch: armhf
-            platform: linux/arm/v6
-          - arch: i386
-            platform: linux/386
     steps:
       - uses: actions/checkout@v4
 
@@ -112,10 +104,6 @@ jobs:
         run: |
           images=(
             "${IMAGE_PREFIX}/amd64-${IMAGE_NAME}"
-            "${IMAGE_PREFIX}/aarch64-${IMAGE_NAME}"
-            "${IMAGE_PREFIX}/armv7-${IMAGE_NAME}"
-            "${IMAGE_PREFIX}/armhf-${IMAGE_NAME}"
-            "${IMAGE_PREFIX}/i386-${IMAGE_NAME}"
           )
           for tag in "${VERSION}" "${RELEASE_TAG}" latest; do
             sources=()
