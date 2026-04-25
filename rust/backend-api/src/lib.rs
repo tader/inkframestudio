@@ -67,7 +67,7 @@ use tracing::info;
 use utoipa::OpenApi;
 
 const FONT_AWESOME_ICONS_JSON: &str = include_str!("../assets/font-awesome-icons.json");
-const SEEDED_PROJECT_JSON: &str = include_str!("../../../data/projects/demo-home.json");
+const SEEDED_PROJECT_JSON: &str = include_str!("seed/demo-home.json");
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub(crate) struct IconDefinition {

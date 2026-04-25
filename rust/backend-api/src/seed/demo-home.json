@@ -1,0 +1,1549 @@
+{
+  "defaultSourceProviderInstanceId": "home-assistant-default",
+  "deviceAssignments": [
+    {
+      "defaultFullscreenLayoutId": "layout-a93ccdde",
+      "defaultThemeId": "classic-outline",
+      "displayId": "display-dad98c95",
+      "fullscreenRules": [],
+      "id": "assignment-2c0d8682",
+      "popupRules": [],
+      "schedule": {
+        "enabled": true,
+        "intervalMinutes": 7
+      }
+    },
+    {
+      "defaultFullscreenLayoutId": "layout-2d4d981e",
+      "defaultThemeId": "theme-8190829a",
+      "displayId": "display-81c20ac4",
+      "fullscreenRules": [],
+      "id": "assignment-7d6b2806",
+      "popupRules": [],
+      "schedule": {
+        "enabled": true,
+        "intervalMinutes": 1
+      }
+    },
+    {
+      "defaultFullscreenLayoutId": "layout-a93ccdde",
+      "defaultThemeId": "soft-fill",
+      "displayId": "display-1831b945",
+      "fullscreenRules": [],
+      "id": "assignment-bbe01a8b",
+      "popupRules": [],
+      "schedule": {
+        "enabled": false,
+        "intervalMinutes": 15
+      }
+    }
+  ],
+  "devices": [
+    {
+      "displayProviderInstanceId": "openepaperlink-ap-instance-227569ff",
+      "displayTypeId": "oel-ap-hw-01-296x128",
+      "id": "display-dad98c95",
+      "managed": true,
+      "metadata": {
+        "apip": "0.0.0.0",
+        "batteryMv": 2600,
+        "capabilities": 4,
+        "contentMode": 25,
+        "hwType": 1,
+        "invert": 0,
+        "isexternal": false,
+        "lastseen": 1776980019,
+        "lut": 0,
+        "mac": "0000021ECBB23B1A",
+        "nextcheckin": 1776980079,
+        "rotate": 0,
+        "tagTypeName": "M2 2.9\"",
+        "temperature": 21
+      },
+      "name": "Attic TR",
+      "providerDeviceRef": "0000021ECBB23B1A",
+      "providerKind": "openepaperlink-ap",
+      "providerRef": "0000021ECBB23B1A",
+      "virtual": false
+    },
+    {
+      "displayProviderInstanceId": "openepaperlink-ap-instance-227569ff",
+      "displayTypeId": "oel-ap-hw-34-400x300",
+      "id": "display-81c20ac4",
+      "managed": true,
+      "metadata": {
+        "apip": "0.0.0.0",
+        "batteryMv": 3084,
+        "capabilities": 225,
+        "contentMode": 25,
+        "hwType": 52,
+        "invert": 0,
+        "isexternal": false,
+        "lastseen": 1777113953,
+        "lut": 1,
+        "mac": "00000618E0A3B6D8",
+        "nextcheckin": 1777114013,
+        "rotate": 0,
+        "tagTypeName": "M3 4.2\"",
+        "temperature": 20
+      },
+      "name": "4 Inch",
+      "providerDeviceRef": "00000618E0A3B6D8",
+      "providerKind": "openepaperlink-ap",
+      "providerRef": "00000618E0A3B6D8",
+      "virtual": false
+    },
+    {
+      "displayProviderInstanceId": "virtual-instance-20cee0c3",
+      "displayTypeId": "oel-ap-hw-01-296x128",
+      "id": "display-1831b945",
+      "managed": true,
+      "metadata": {
+        "virtual": true
+      },
+      "name": "Virtual Display 1",
+      "providerDeviceRef": "virtual-device-42f15b05",
+      "providerKind": "virtual",
+      "providerRef": "virtual-device-42f15b05",
+      "virtual": true
+    }
+  ],
+  "displayTypes": [
+    {
+      "contentPadding": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "gridUnitPx": 8,
+      "height": 128,
+      "id": "oel-ap-hw-01-296x128",
+      "name": "M2 2.9\"",
+      "palette": {
+        "accent": "#ff0000",
+        "bg": "#ffffff",
+        "fg": "#000000"
+      },
+      "rotation": 0,
+      "safeMarginPx": 4,
+      "width": 296
+    },
+    {
+      "contentPadding": {
+        "bottom": 4,
+        "left": 4,
+        "right": 4,
+        "top": 4
+      },
+      "gridUnitPx": 8,
+      "height": 300,
+      "id": "oel-ap-hw-34-400x300",
+      "name": "M3 4.2\"",
+      "palette": {
+        "accent": "#ff0000",
+        "bg": "#ffffff",
+        "fg": "#000000"
+      },
+      "rotation": 0,
+      "width": 400
+    }
+  ],
+  "fontPresets": {
+    "header": 28,
+    "normal": 16,
+    "tiny": 16
+  },
+  "id": "demo-home",
+  "layoutDefinitions": [
+    {
+      "id": "layout-25e9a9f0",
+      "kind": "popup",
+      "name": "Dandelight On",
+      "rootNode": {
+        "axis": "vertical",
+        "children": [
+          {
+            "bindings": {},
+            "height": {
+              "mode": "fill"
+            },
+            "id": "node-077fd823",
+            "primitiveType": "icon",
+            "props": {
+              "icon": "fa-solid:triangle-exclamation"
+            },
+            "style": {
+              "borderToken": "none",
+              "paddingPx": 4
+            },
+            "type": "primitive_instance",
+            "width": {
+              "mode": "fill"
+            }
+          },
+          {
+            "bindings": {
+              "entity": ""
+            },
+            "height": {
+              "mode": "fill"
+            },
+            "id": "node-277a74a5",
+            "primitiveType": "text",
+            "props": {
+              "autoFit": false,
+              "fontRole": "normalEmphasis",
+              "horizontalAlign": "center",
+              "overflow": "wrap",
+              "paddingPx": 4,
+              "placeholderText": "Placeholder",
+              "renderEntityState": false,
+              "text": "Dandelight is aan!",
+              "verticalAlign": "top"
+            },
+            "style": {
+              "borderToken": "none",
+              "paddingPx": 4
+            },
+            "type": "primitive_instance",
+            "width": {
+              "mode": "fill"
+            }
+          }
+        ],
+        "height": {
+          "mode": "fill"
+        },
+        "id": "node-3d36f7f2",
+        "style": {
+          "borderToken": "none",
+          "gapPx": 0,
+          "paddingPx": 0,
+          "themeId": "soft-fill"
+        },
+        "type": "stack",
+        "width": {
+          "mode": "fill"
+        }
+      }
+    },
+    {
+      "id": "layout-a93ccdde",
+      "kind": "fullscreen",
+      "name": "Calendar",
+      "rootNode": {
+        "axis": "vertical",
+        "children": [
+          {
+            "definitionId": "widget-81774834",
+            "height": {
+              "mode": "fill"
+            },
+            "id": "node-4322ed03",
+            "inputBindings": {},
+            "inputValues": {},
+            "style": {
+              "borderToken": "none",
+              "paddingPx": 0
+            },
+            "type": "compound_ref",
+            "width": {
+              "mode": "fill"
+            }
+          }
+        ],
+        "height": {
+          "mode": "fill"
+        },
+        "id": "node-ff9274fe",
+        "style": {
+          "borderToken": "none",
+          "gapPx": 0,
+          "paddingPx": 0
+        },
+        "type": "stack",
+        "width": {
+          "mode": "fill"
+        }
+      }
+    },
+    {
+      "id": "layout-2d4d981e",
+      "kind": "fullscreen",
+      "name": "Word Clock",
+      "rootNode": {
+        "axis": "vertical",
+        "children": [
+          {
+            "definitionId": "widget-b870979f",
+            "height": {
+              "mode": "fill"
+            },
+            "id": "node-667a16dc",
+            "inputBindings": {},
+            "inputValues": {},
+            "style": {
+              "borderToken": "none",
+              "paddingPx": 0
+            },
+            "type": "compound_ref",
+            "width": {
+              "mode": "fill"
+            }
+          }
+        ],
+        "height": {
+          "mode": "fill"
+        },
+        "id": "node-543781a4",
+        "style": {
+          "borderToken": "none",
+          "gapPx": 0,
+          "paddingPx": 0
+        },
+        "type": "stack",
+        "width": {
+          "mode": "fill"
+        }
+      }
+    }
+  ],
+  "locale": "nl-NL",
+  "name": "InkFrame Studio",
+  "overlays": [],
+  "queries": [],
+  "scenarios": [],
+  "screens": [],
+  "scripting": {
+    "filters": [
+      {
+        "name": "length",
+        "source": "(value) => {\n  if (value != null && typeof value.length === \"number\") {\n    return value.length;\n  }\n  return 0;\n}"
+      }
+    ],
+    "helpers": [],
+    "sharedSource": ""
+  },
+  "themes": [
+    {
+      "accentRole": "accent",
+      "autoFitFontFamily": "lucida-sans-unicode",
+      "border": {
+        "colorRole": "fg",
+        "mergeAdjacentBorders": true,
+        "visible": true
+      },
+      "fontRoles": {
+        "header": {
+          "family": "arial",
+          "pixelSize": 23,
+          "slope": "roman",
+          "weight": "bold"
+        },
+        "normal": {
+          "family": "arial",
+          "pixelSize": 16,
+          "slope": "roman",
+          "weight": "bold"
+        },
+        "normalEmphasis": {
+          "colorRole": "accent",
+          "family": "arial",
+          "slope": "roman",
+          "weight": "bold"
+        },
+        "tiny": {
+          "family": "pixelsix10",
+          "pixelSize": 8,
+          "slope": "roman",
+          "weight": "regular"
+        }
+      },
+      "id": "classic-outline",
+      "name": "Default",
+      "surface": {},
+      "text": {
+        "body": "fg",
+        "title": "fg",
+        "value": "fg"
+      },
+      "textOutline": {
+        "colorRole": "bg",
+        "enabled": true,
+        "thicknessPx": 1
+      }
+    },
+    {
+      "accentRole": "fg",
+      "autoFitFontFamily": "helvetica",
+      "border": {
+        "colorRole": "fg",
+        "mergeAdjacentBorders": true,
+        "visible": true
+      },
+      "fontRoles": {
+        "header": {
+          "family": "vhs-gothic",
+          "pixelSize": 16
+        },
+        "normal": {
+          "family": "sweet16",
+          "pixelSize": 16,
+          "slope": "roman"
+        },
+        "tiny": {
+          "family": "pixelsix10",
+          "pixelSize": 8
+        }
+      },
+      "id": "soft-fill",
+      "name": "Alert",
+      "surface": {
+        "fillRole": "accent"
+      },
+      "text": {
+        "body": "bg",
+        "title": "bg",
+        "value": "bg"
+      },
+      "textOutline": {
+        "colorRole": "accent",
+        "enabled": false,
+        "thicknessPx": 1
+      }
+    },
+    {
+      "accentRole": "accent",
+      "autoFitFontFamily": "lucida-sans-unicode",
+      "border": {
+        "colorRole": "fg",
+        "mergeAdjacentBorders": true,
+        "visible": true
+      },
+      "borderTokens": {
+        "thick": {
+          "colorRole": "fg",
+          "thicknessPx": 2
+        },
+        "thin": {
+          "colorRole": "fg",
+          "thicknessPx": 1
+        }
+      },
+      "fontRoles": {
+        "header": {
+          "family": "tahoma",
+          "pixelSize": 21,
+          "size": "header",
+          "slope": "roman",
+          "topPaddingPx": -5,
+          "weight": "bold"
+        },
+        "normal": {
+          "family": "arial",
+          "lineSpacingPx": -4,
+          "pixelSize": 16,
+          "size": "normal",
+          "slope": "roman",
+          "topPaddingPx": 0,
+          "weight": "bold"
+        },
+        "normalEmphasis": {
+          "colorRole": "accent",
+          "family": "arial",
+          "lineSpacingPx": -4,
+          "pixelSize": 16,
+          "slope": "roman",
+          "weight": "bold"
+        },
+        "tiny": {
+          "family": "sweet16",
+          "pixelSize": 16,
+          "size": "tiny",
+          "slope": "roman",
+          "weight": "regular"
+        }
+      },
+      "id": "theme-d815117a",
+      "name": "Classic",
+      "surface": {},
+      "text": {
+        "body": "fg",
+        "title": "fg",
+        "value": "fg"
+      },
+      "textOutline": {
+        "colorRole": "bg",
+        "enabled": true,
+        "thicknessPx": 1
+      }
+    },
+    {
+      "accentRole": "accent",
+      "autoFitFontFamily": "arial",
+      "border": {
+        "colorRole": "fg",
+        "mergeAdjacentBorders": true,
+        "visible": true
+      },
+      "borderTokens": {
+        "thick": {
+          "colorRole": "fg",
+          "thicknessPx": 2
+        },
+        "thin": {
+          "colorRole": "fg",
+          "thicknessPx": 1
+        }
+      },
+      "fontRoles": {
+        "header": {
+          "colorRole": "fg",
+          "family": "bahnschrift-bold",
+          "lineSpacingPx": 0,
+          "pixelSize": 18,
+          "size": "header",
+          "slope": "roman",
+          "topPaddingPx": 0,
+          "weight": "bold"
+        },
+        "normal": {
+          "colorRole": "fg",
+          "family": "bahnschrift",
+          "lineSpacingPx": 0,
+          "pixelSize": 16,
+          "size": "normal",
+          "slope": "roman",
+          "topPaddingPx": 0,
+          "weight": "regular"
+        },
+        "normalEmphasis": {
+          "colorRole": "accent",
+          "family": "bahnschrift",
+          "lineSpacingPx": 0,
+          "pixelSize": 16,
+          "size": "normal",
+          "slope": "roman",
+          "topPaddingPx": 0,
+          "weight": "regular"
+        },
+        "tiny": {
+          "colorRole": "fg",
+          "family": "sweet16",
+          "lineSpacingPx": 0,
+          "pixelSize": 8,
+          "size": "tiny",
+          "slope": "roman",
+          "topPaddingPx": 0,
+          "weight": "regular"
+        }
+      },
+      "id": "theme-3d1c7e5d",
+      "name": "Bahn",
+      "surface": {},
+      "text": {
+        "body": "fg",
+        "title": "fg",
+        "value": "fg"
+      },
+      "textOutline": {
+        "colorRole": "bg",
+        "enabled": true,
+        "thicknessPx": 1
+      }
+    },
+    {
+      "accentRole": "accent",
+      "autoFitFontFamily": "arial",
+      "border": {
+        "colorRole": "fg",
+        "mergeAdjacentBorders": true,
+        "visible": true
+      },
+      "borderTokens": {
+        "thick": {
+          "colorRole": "fg",
+          "thicknessPx": 2
+        },
+        "thin": {
+          "colorRole": "fg",
+          "thicknessPx": 1
+        }
+      },
+      "fontRoles": {
+        "header": {
+          "colorRole": "fg",
+          "family": "brush-script-mt",
+          "lineSpacingPx": 0,
+          "pixelSize": 21,
+          "size": "header",
+          "slope": "roman",
+          "topPaddingPx": -8,
+          "weight": "bold"
+        },
+        "normal": {
+          "colorRole": "fg",
+          "family": "brush-script-mt",
+          "lineSpacingPx": 0,
+          "pixelSize": 16,
+          "size": "normal",
+          "slope": "roman",
+          "topPaddingPx": 0,
+          "weight": "regular"
+        },
+        "normalEmphasis": {
+          "colorRole": "accent",
+          "family": "brush-script-mt",
+          "lineSpacingPx": 0,
+          "pixelSize": 16,
+          "size": "normal",
+          "slope": "roman",
+          "topPaddingPx": 0,
+          "weight": "bold"
+        },
+        "tiny": {
+          "colorRole": "fg",
+          "family": "pixelsix10",
+          "lineSpacingPx": 0,
+          "pixelSize": 8,
+          "size": "tiny",
+          "slope": "roman",
+          "topPaddingPx": 0,
+          "weight": "regular"
+        }
+      },
+      "id": "theme-8190829a",
+      "name": "Funky",
+      "surface": {},
+      "text": {
+        "body": "fg",
+        "title": "fg",
+        "value": "fg"
+      },
+      "textOutline": {
+        "colorRole": "bg",
+        "enabled": true,
+        "thicknessPx": 1
+      }
+    }
+  ],
+  "version": 194,
+  "widgetDefinitions": [
+    {
+      "id": "builtin-text",
+      "inputSchema": [],
+      "kind": "primitive",
+      "name": "text",
+      "primitiveType": "text"
+    },
+    {
+      "id": "builtin-number",
+      "inputSchema": [],
+      "kind": "primitive",
+      "name": "number",
+      "primitiveType": "number"
+    },
+    {
+      "id": "builtin-icon",
+      "inputSchema": [],
+      "kind": "primitive",
+      "name": "icon",
+      "primitiveType": "icon"
+    },
+    {
+      "id": "builtin-graph",
+      "inputSchema": [],
+      "kind": "primitive",
+      "name": "graph",
+      "primitiveType": "graph"
+    },
+    {
+      "id": "builtin-line",
+      "inputSchema": [],
+      "kind": "primitive",
+      "name": "line",
+      "primitiveType": "line"
+    },
+    {
+      "id": "builtin-box",
+      "inputSchema": [],
+      "kind": "primitive",
+      "name": "box",
+      "primitiveType": "box"
+    },
+    {
+      "id": "builtin-circle",
+      "inputSchema": [],
+      "kind": "primitive",
+      "name": "circle",
+      "primitiveType": "circle"
+    },
+    {
+      "id": "builtin-date_time_compact",
+      "inputSchema": [],
+      "kind": "primitive",
+      "name": "date time compact",
+      "primitiveType": "date_time_compact"
+    },
+    {
+      "id": "builtin-agenda_list",
+      "inputSchema": [],
+      "kind": "primitive",
+      "name": "agenda list",
+      "primitiveType": "agenda_list"
+    },
+    {
+      "id": "builtin-state_tile",
+      "inputSchema": [],
+      "kind": "primitive",
+      "name": "state tile",
+      "primitiveType": "state_tile"
+    },
+    {
+      "id": "builtin-alert_banner",
+      "inputSchema": [],
+      "kind": "primitive",
+      "name": "alert banner",
+      "primitiveType": "alert_banner"
+    },
+    {
+      "id": "builtin-status_strip",
+      "inputSchema": [],
+      "kind": "primitive",
+      "name": "status strip",
+      "primitiveType": "status_strip"
+    },
+    {
+      "id": "builtin-history_bars",
+      "inputSchema": [],
+      "kind": "primitive",
+      "name": "history bars",
+      "primitiveType": "history_bars"
+    },
+    {
+      "id": "widget-efd4b992",
+      "inputSchema": [
+        {
+          "id": "input-1a1d2a4a",
+          "name": "Temperature Sensor",
+          "previewValue": "21.35",
+          "valueType": "entity"
+        },
+        {
+          "id": "input-eb402e73",
+          "name": "Title",
+          "previewValue": "Bathroom",
+          "valueType": "string"
+        },
+        {
+          "id": "input-82491d75",
+          "name": "Humidity Sensor",
+          "previewValue": "87",
+          "valueType": "entity"
+        }
+      ],
+      "kind": "compound",
+      "name": "Climate",
+      "rootNode": {
+        "axis": "vertical",
+        "children": [
+          {
+            "bindings": {
+              "entity": ""
+            },
+            "height": {
+              "mode": "fit_content"
+            },
+            "id": "node-8386c78e",
+            "primitiveType": "text",
+            "props": {
+              "autoFit": false,
+              "fontRole": "header",
+              "horizontalAlign": "center",
+              "paddingPx": 4,
+              "placeholderText": "Placeholder",
+              "renderEntityState": false,
+              "text": "{{Title}}",
+              "verticalAlign": "top"
+            },
+            "style": {
+              "borderToken": "none",
+              "paddingPx": 0
+            },
+            "type": "primitive_instance",
+            "width": {
+              "mode": "fill"
+            }
+          },
+          {
+            "bindings": {
+              "entity": "{{Temperature Sensor}}"
+            },
+            "height": {
+              "mode": "fill"
+            },
+            "id": "node-b9eaf5e0",
+            "primitiveType": "number",
+            "props": {
+              "autoFit": true,
+              "digits": 1,
+              "fontRole": "normal",
+              "horizontalAlign": "center",
+              "paddingPx": 0,
+              "placeholderText": "AA",
+              "placeholderValue": "188",
+              "renderEntityState": false,
+              "suffix": "ºC",
+              "text": "AA",
+              "verticalAlign": "middle"
+            },
+            "style": {
+              "borderToken": "none",
+              "paddingPx": 4
+            },
+            "type": "primitive_instance",
+            "width": {
+              "mode": "fill"
+            }
+          },
+          {
+            "bindings": {
+              "entity": "{{Humidity Sensor}}"
+            },
+            "height": {
+              "mode": "fill"
+            },
+            "id": "node-1bbf3236",
+            "primitiveType": "number",
+            "props": {
+              "autoFit": true,
+              "digits": 0,
+              "fontRole": "normal",
+              "horizontalAlign": "center",
+              "paddingPx": 0,
+              "placeholderText": "Placeholder",
+              "placeholderValue": "188",
+              "prefix": "",
+              "renderEntityState": false,
+              "suffix": "%",
+              "text": "CC",
+              "verticalAlign": "middle"
+            },
+            "style": {
+              "borderToken": "none",
+              "paddingPx": 4
+            },
+            "type": "primitive_instance",
+            "width": {
+              "mode": "fill"
+            }
+          }
+        ],
+        "height": {
+          "mode": "fill"
+        },
+        "id": "node-f92db22a",
+        "style": {
+          "borderToken": "none",
+          "gapPx": 0,
+          "paddingPx": 0
+        },
+        "type": "stack",
+        "width": {
+          "mode": "fill"
+        }
+      }
+    },
+    {
+      "id": "widget-eb12a506",
+      "inputSchema": [],
+      "kind": "compound",
+      "name": "Test",
+      "rootNode": {
+        "axis": "vertical",
+        "children": [
+          {
+            "children": [
+              {
+                "bindings": {
+                  "entity": ""
+                },
+                "height": {
+                  "mode": "fill"
+                },
+                "id": "node-4d5ab521",
+                "primitiveType": "line",
+                "props": {
+                  "autoFit": true,
+                  "horizontalAlign": "left",
+                  "lineDirection": "diag_up",
+                  "paddingPx": 0,
+                  "placeholderText": "Placeholder",
+                  "renderEntityState": false,
+                  "text": "Text",
+                  "verticalAlign": "top"
+                },
+                "style": {
+                  "borderToken": "none",
+                  "paddingPx": 4
+                },
+                "type": "primitive_instance",
+                "width": {
+                  "mode": "fill"
+                }
+              },
+              {
+                "bindings": {},
+                "height": {
+                  "mode": "fill"
+                },
+                "id": "node-3ff29644",
+                "primitiveType": "line",
+                "props": {
+                  "lineDirection": "diag_down",
+                  "paddingPx": 0
+                },
+                "style": {
+                  "borderToken": "none",
+                  "paddingPx": 4
+                },
+                "type": "primitive_instance",
+                "width": {
+                  "mode": "fill"
+                }
+              },
+              {
+                "bindings": {
+                  "entity": "sensor.attic_climate_temperature"
+                },
+                "height": {
+                  "mode": "fill"
+                },
+                "id": "node-d459b442",
+                "primitiveType": "number",
+                "props": {
+                  "autoFit": true,
+                  "digits": 1,
+                  "horizontalAlign": "center",
+                  "paddingPx": 4,
+                  "placeholderValue": "88.8",
+                  "verticalAlign": "middle"
+                },
+                "style": {
+                  "borderToken": "none",
+                  "paddingPx": 4
+                },
+                "type": "primitive_instance",
+                "width": {
+                  "mode": "fill"
+                }
+              }
+            ],
+            "height": {
+              "mode": "fraction",
+              "value": 0.25
+            },
+            "id": "node-d74c8f11",
+            "style": {
+              "borderToken": "none",
+              "gapPx": 0,
+              "paddingPx": 0
+            },
+            "type": "zstack",
+            "width": {
+              "mode": "fill"
+            }
+          },
+          {
+            "axis": "horizontal",
+            "children": [
+              {
+                "bindings": {
+                  "entity": ""
+                },
+                "height": {
+                  "mode": "fill"
+                },
+                "id": "node-b7d89132",
+                "primitiveType": "text",
+                "props": {
+                  "autoFit": false,
+                  "fontRole": "header",
+                  "horizontalAlign": "center",
+                  "paddingPx": 4,
+                  "placeholderText": "Placeholder",
+                  "renderEntityState": false,
+                  "text": "Text",
+                  "verticalAlign": "top"
+                },
+                "style": {
+                  "borderToken": "none",
+                  "paddingPx": 4
+                },
+                "type": "primitive_instance",
+                "width": {
+                  "mode": "fill"
+                }
+              },
+              {
+                "definitionId": "widget-efd4b992",
+                "height": {
+                  "mode": "fill"
+                },
+                "id": "node-53177351",
+                "inputBindings": {
+                  "input-1a1d2a4a": "sensor.attic_climate_temperature",
+                  "input-82491d75": "sensor.attic_climate_humidity"
+                },
+                "inputValues": {
+                  "input-eb402e73": "Attic"
+                },
+                "style": {
+                  "borderToken": "thin",
+                  "paddingPx": 0
+                },
+                "type": "compound_ref",
+                "width": {
+                  "mode": "fill"
+                }
+              }
+            ],
+            "height": {
+              "mode": "fill"
+            },
+            "id": "node-c0b4496a",
+            "style": {
+              "borderToken": "none",
+              "gapPx": 0,
+              "paddingPx": 0
+            },
+            "type": "stack",
+            "width": {
+              "mode": "fill"
+            }
+          }
+        ],
+        "height": {
+          "mode": "fill"
+        },
+        "id": "node-6d3408af",
+        "style": {
+          "borderToken": "none",
+          "gapPx": 0,
+          "paddingPx": 0
+        },
+        "type": "stack",
+        "width": {
+          "mode": "fill"
+        }
+      }
+    },
+    {
+      "id": "widget-81774834",
+      "inputSchema": [],
+      "kind": "compound",
+      "name": "Calendar",
+      "rootNode": {
+        "axis": "vertical",
+        "children": [
+          {
+            "calendarEntityIds": [
+              "calendar.benthe_de_ruiter_cx",
+              "calendar.dsm_firmenich_2",
+              "calendar.gezamenlijk",
+              "calendar.leonie_marang_gmail_com",
+              "calendar.marit_de_ruiter_cx",
+              "calendar.thomas_de_ruiter_cx",
+              "calendar.webcal_api_socialschools_eu_api_v1_icalfeed_schoolid_689_roletypeid_1_userid_6e4f4194_a6d2_4e40_925f_244572706a9a_hash_l58dyywi7n7twnyvjqrbbzz0sqaz9wa49louixixjly"
+            ],
+            "child": {
+              "axis": "vertical",
+              "children": [
+                {
+                  "axis": "horizontal",
+                  "children": [
+                    {
+                      "bindings": {
+                        "entity": ""
+                      },
+                      "height": {
+                        "mode": "fit_content"
+                      },
+                      "id": "node-3ad8f7cc",
+                      "primitiveType": "text",
+                      "props": {
+                        "autoFit": false,
+                        "fontRole": "header",
+                        "horizontalAlign": "left",
+                        "paddingPx": 0,
+                        "placeholderText": "Placeholder",
+                        "renderEntityState": false,
+                        "text": "{{date |format(\"dddd\") |title}}",
+                        "verticalAlign": "top"
+                      },
+                      "style": {
+                        "borderToken": "none",
+                        "paddingPx": 4
+                      },
+                      "type": "primitive_instance",
+                      "width": {
+                        "mode": "fill"
+                      }
+                    },
+                    {
+                      "bindings": {
+                        "entity": ""
+                      },
+                      "height": {
+                        "mode": "fit_content"
+                      },
+                      "id": "node-51bb7dc6",
+                      "primitiveType": "text",
+                      "props": {
+                        "autoFit": false,
+                        "fontRole": "header",
+                        "horizontalAlign": "right",
+                        "paddingPx": 0,
+                        "placeholderText": "Placeholder",
+                        "renderEntityState": false,
+                        "text": "{{date |format(\"d mmmm\") |title}}",
+                        "verticalAlign": "top"
+                      },
+                      "style": {
+                        "borderToken": "none",
+                        "paddingPx": 4
+                      },
+                      "type": "primitive_instance",
+                      "width": {
+                        "mode": "fit_content"
+                      }
+                    }
+                  ],
+                  "height": {
+                    "mode": "fit_content",
+                    "value": 25
+                  },
+                  "id": "node-9b9635c8",
+                  "style": {
+                    "borderToken": "none",
+                    "gapPx": 0,
+                    "paddingPx": 0
+                  },
+                  "type": "stack",
+                  "width": {
+                    "mode": "fill"
+                  }
+                },
+                {
+                  "axis": "vertical",
+                  "child": {
+                    "axis": "horizontal",
+                    "children": [
+                      {
+                        "condition": "event.allday == true",
+                        "elseChild": {
+                          "axis": "horizontal",
+                          "children": [
+                            {
+                              "bindings": {
+                                "entity": ""
+                              },
+                              "height": {
+                                "mode": "fit_content"
+                              },
+                              "id": "node-207a3137",
+                              "primitiveType": "text",
+                              "props": {
+                                "autoFit": false,
+                                "fontRole": "normal",
+                                "horizontalAlign": "left",
+                                "paddingPx": 0,
+                                "placeholderText": "Placeholder",
+                                "renderEntityState": false,
+                                "text": "{{ event.start | format(\"HH:MM\") }}",
+                                "verticalAlign": "top"
+                              },
+                              "style": {
+                                "borderToken": "none",
+                                "paddingPx": 4,
+                                "themeId": "theme-d815117a"
+                              },
+                              "type": "primitive_instance",
+                              "width": {
+                                "mode": "fixed_px",
+                                "value": 46
+                              }
+                            },
+                            {
+                              "bindings": {
+                                "entity": ""
+                              },
+                              "height": {
+                                "mode": "fit_content"
+                              },
+                              "id": "node-a6328af7",
+                              "primitiveType": "text",
+                              "props": {
+                                "autoFit": false,
+                                "horizontalAlign": "left",
+                                "overflow": "ellipsis",
+                                "paddingPx": 0,
+                                "placeholderText": "Placeholder",
+                                "renderEntityState": false,
+                                "text": "{{ event.summary }}",
+                                "verticalAlign": "top"
+                              },
+                              "style": {
+                                "borderToken": "none",
+                                "paddingPx": 4
+                              },
+                              "type": "primitive_instance",
+                              "width": {
+                                "mode": "fill"
+                              }
+                            }
+                          ],
+                          "height": {
+                            "mode": "fit_content"
+                          },
+                          "id": "node-9fc52d8a",
+                          "style": {
+                            "borderToken": "none",
+                            "gapPx": 0,
+                            "paddingPx": 0
+                          },
+                          "type": "stack",
+                          "width": {
+                            "mode": "fill"
+                          }
+                        },
+                        "height": {
+                          "mode": "fit_content"
+                        },
+                        "id": "node-39b52f8e",
+                        "style": {
+                          "borderToken": "none",
+                          "gapPx": 0,
+                          "paddingPx": 0
+                        },
+                        "thenChild": {
+                          "axis": "horizontal",
+                          "children": [
+                            {
+                              "bindings": {
+                                "entity": ""
+                              },
+                              "height": {
+                                "mode": "fit_content"
+                              },
+                              "id": "node-0a8262a8",
+                              "primitiveType": "text",
+                              "props": {
+                                "autoFit": false,
+                                "fontRole": "normalEmphasis",
+                                "horizontalAlign": "left",
+                                "overflow": "ellipsis",
+                                "paddingPx": 0,
+                                "placeholderText": "Placeholder",
+                                "renderEntityState": false,
+                                "text": "{{ event.summary }}",
+                                "verticalAlign": "top"
+                              },
+                              "style": {
+                                "borderToken": "none",
+                                "paddingPx": 4,
+                                "themeId": "inherit"
+                              },
+                              "type": "primitive_instance",
+                              "width": {
+                                "mode": "fill"
+                              }
+                            }
+                          ],
+                          "height": {
+                            "mode": "fit_content"
+                          },
+                          "id": "node-8b6a8aca",
+                          "style": {
+                            "borderToken": "none",
+                            "gapPx": 0,
+                            "paddingPx": 0
+                          },
+                          "type": "stack",
+                          "width": {
+                            "mode": "fill"
+                          }
+                        },
+                        "type": "if_else",
+                        "width": {
+                          "mode": "fill"
+                        }
+                      }
+                    ],
+                    "height": {
+                      "mode": "fit_content"
+                    },
+                    "id": "node-25196ab2",
+                    "style": {
+                      "borderToken": "none",
+                      "gapPx": 0,
+                      "paddingPx": 0
+                    },
+                    "type": "stack",
+                    "width": {
+                      "mode": "fill"
+                    }
+                  },
+                  "height": {
+                    "mode": "fill"
+                  },
+                  "id": "node-f04284c0",
+                  "indexAlias": "index",
+                  "itemAlias": "event",
+                  "itemsRef": "events |filter($.summary != \"Blocked\") | unique_by('{{ $.start | format(\"HH:MM\") }}--{{ $.summary }}')",
+                  "maxItems": 30,
+                  "style": {
+                    "borderToken": "none",
+                    "gapPx": 0,
+                    "paddingPx": 0
+                  },
+                  "type": "foreach",
+                  "width": {
+                    "mode": "fill"
+                  }
+                }
+              ],
+              "height": {
+                "mode": "fill"
+              },
+              "id": "node-be2cdbf5",
+              "style": {
+                "borderToken": "none",
+                "gapPx": 0,
+                "paddingPx": 0
+              },
+              "type": "stack",
+              "width": {
+                "mode": "fill"
+              }
+            },
+            "dateVariableName": "date",
+            "height": {
+              "mode": "fill"
+            },
+            "id": "node-4a781bc2",
+            "offsetDays": 0,
+            "offsetHours": 0,
+            "queryKind": "calendar_events",
+            "rolloverTime": "22:00",
+            "style": {
+              "borderToken": "none",
+              "gapPx": 0,
+              "paddingPx": 0
+            },
+            "type": "data_query",
+            "variableName": "events",
+            "width": {
+              "mode": "fill"
+            }
+          }
+        ],
+        "height": {
+          "mode": "fill"
+        },
+        "id": "node-87dc9c87",
+        "style": {
+          "borderToken": "none",
+          "gapPx": 0,
+          "paddingPx": 0,
+          "themeId": "inherit"
+        },
+        "type": "stack",
+        "width": {
+          "mode": "fill"
+        }
+      }
+    },
+    {
+      "id": "widget-b870979f",
+      "inputSchema": [],
+      "kind": "compound",
+      "name": "Clock",
+      "rootNode": {
+        "axis": "vertical",
+        "children": [
+          {
+            "bindings": {},
+            "child": {
+              "condition": "minutes_line == \"\"",
+              "elseChild": {
+                "axis": "vertical",
+                "children": [
+                  {
+                    "bindings": {
+                      "entity": ""
+                    },
+                    "height": {
+                      "mode": "fill"
+                    },
+                    "id": "node-09e9fa44",
+                    "primitiveType": "text",
+                    "props": {
+                      "autoFit": true,
+                      "fontRole": "normalEmphasis",
+                      "horizontalAlign": "center",
+                      "overflow": "wrap",
+                      "paddingPx": 0,
+                      "placeholderText": "kwart over",
+                      "renderEntityState": false,
+                      "text": "{{ minutes_line }}",
+                      "verticalAlign": "middle"
+                    },
+                    "style": {
+                      "borderToken": "none",
+                      "paddingPx": 4
+                    },
+                    "type": "primitive_instance",
+                    "width": {
+                      "mode": "fill"
+                    }
+                  },
+                  {
+                    "bindings": {
+                      "entity": ""
+                    },
+                    "height": {
+                      "mode": "fill"
+                    },
+                    "id": "node-29862838",
+                    "primitiveType": "text",
+                    "props": {
+                      "autoFit": true,
+                      "horizontalAlign": "center",
+                      "overflow": "wrap",
+                      "paddingPx": 0,
+                      "placeholderText": "kwart over",
+                      "renderEntityState": false,
+                      "text": "{{ hours_line }}",
+                      "verticalAlign": "middle"
+                    },
+                    "style": {
+                      "borderToken": "none",
+                      "paddingPx": 4
+                    },
+                    "type": "primitive_instance",
+                    "width": {
+                      "mode": "fill"
+                    }
+                  }
+                ],
+                "height": {
+                  "mode": "fill"
+                },
+                "id": "node-a9d9e5b5",
+                "style": {
+                  "borderToken": "none",
+                  "gapPx": 0,
+                  "paddingPx": 0
+                },
+                "type": "stack",
+                "width": {
+                  "mode": "fill"
+                }
+              },
+              "height": {
+                "mode": "fit_content"
+              },
+              "id": "node-47c53031",
+              "style": {
+                "borderToken": "none",
+                "gapPx": 0,
+                "paddingPx": 0
+              },
+              "thenChild": {
+                "axis": "vertical",
+                "children": [
+                  {
+                    "bindings": {
+                      "entity": ""
+                    },
+                    "height": {
+                      "mode": "fill"
+                    },
+                    "id": "node-95b1cd16",
+                    "primitiveType": "text",
+                    "props": {
+                      "autoFit": true,
+                      "horizontalAlign": "center",
+                      "overflow": "wrap",
+                      "paddingPx": 0,
+                      "placeholderText": "kwart over",
+                      "renderEntityState": false,
+                      "text": "{{ hours_line }}",
+                      "verticalAlign": "middle"
+                    },
+                    "style": {
+                      "borderToken": "none",
+                      "paddingPx": 4
+                    },
+                    "type": "primitive_instance",
+                    "width": {
+                      "mode": "fill"
+                    }
+                  }
+                ],
+                "height": {
+                  "mode": "fill"
+                },
+                "id": "node-359aafd6",
+                "style": {
+                  "borderToken": "none",
+                  "gapPx": 0,
+                  "paddingPx": 0
+                },
+                "type": "stack",
+                "width": {
+                  "mode": "fill"
+                }
+              },
+              "type": "if_else",
+              "width": {
+                "mode": "fill"
+              }
+            },
+            "height": {
+              "mode": "fill"
+            },
+            "id": "node-b9699522",
+            "outputMode": "merge_object",
+            "source": "const OFFSET_SECONDS = 60;\n\nconst minutes_map = [\n  \"\",             // 0 → exact hour\n  \"vijf over\",    // 5\n  \"tien over\",    // 10\n  \"kwart over\",   // 15\n  \"tien voor\",    // 20\n  \"vijf voor\",    // 25\n  \"\",             // 30 → handled as \"half\"\n  \"vijf over\",    // 35\n  \"tien over\",    // 40\n  \"kwart voor\",   // 45\n  \"tien voor\",    // 50\n  \"vijf voor\",    // 55\n];\n\nconst hours_text = [\n  \"twaalf\",\n  \"één\",\n  \"twee\",\n  \"drie\",\n  \"vier\",\n  \"vijf\",\n  \"zes\",\n  \"zeven\",\n  \"acht\",\n  \"negen\",\n  \"tien\",\n  \"elf\",\n];\n\nconst now = new Date(Date.now() + OFFSET_SECONDS * 1000);\nconst hours = now.getHours();\nconst minutes = now.getMinutes();\nconst seconds = now.getSeconds();\n\n// nearest 5-minute bucket\nconst index = Math.round((minutes + seconds / 60) / 5) % 12;\n\n// determine hour base\nconst isHalfOrAfter = index >= 4; // from 20 min onward → next hour\nconst hourIndex = (hours + (isHalfOrAfter ? 1 : 0)) % 12;\n\n// build hours_line\nlet hours_line;\nif (index === 6) {\n  // exactly half\n  hours_line = `half ${hours_text[hourIndex]}`;\n} else if (index > 3 && index < 9) {\n  // around half (20–40)\n  hours_line = `half ${hours_text[hourIndex]}`;\n} else {\n  // normal hour reference\n  hours_line = hours_text[hourIndex];\n}\n\n// minutes_line\nlet minutes_line = minutes_map[index];\n\n// special case: exact hour\nif (index === 0) {\n  hours_line = `${hours_text[hours % 12]} uur`;\n  minutes_line = \"\";\n}\n\nreturn {\n  minutes_line,\n  hours_line,\n};\n",
+            "style": {
+              "borderToken": "none",
+              "gapPx": 0,
+              "paddingPx": 0
+            },
+            "type": "script",
+            "width": {
+              "mode": "fill"
+            }
+          }
+        ],
+        "height": {
+          "mode": "fill"
+        },
+        "id": "node-828e12f0",
+        "style": {
+          "borderToken": "none",
+          "gapPx": 0,
+          "paddingPx": 0
+        },
+        "type": "stack",
+        "width": {
+          "mode": "fill"
+        }
+      }
+    }
+  ],
+  "widgets": []
+}

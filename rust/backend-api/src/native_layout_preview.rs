@@ -3623,7 +3623,7 @@ mod tests {
     }
 
     fn demo_project() -> Value {
-        serde_json::from_str(include_str!("../../../data/projects/demo-home.json")).unwrap()
+        serde_json::from_str(include_str!("seed/demo-home.json")).unwrap()
     }
 
     #[test]
