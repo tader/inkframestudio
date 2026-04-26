@@ -13,6 +13,7 @@ use resvg::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use crate::{rgba_to_png, ApiError};
 
@@ -20,6 +21,10 @@ const COLOR_BG: u8 = 0;
 const COLOR_FG: u8 = 1;
 const COLOR_ACCENT: u8 = 2;
 const DEFAULT_ICON_ID: &str = "fa-solid:triangle-exclamation";
+
+fn preview_image_hash(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(Sha256::digest(bytes))
+}
 
 fn normalize_icon_id(icon_id: &str) -> String {
     match icon_id.trim() {
@@ -3383,7 +3388,7 @@ fn render_layout_preview(
             "native-layout:{}:{}:{}",
             layout.id,
             display_type.id,
-            base64::engine::general_purpose::STANDARD.encode(&png_bytes[..png_bytes.len().min(24)])
+            preview_image_hash(&png_bytes)
         ),
         active_screen_id: layout.id.clone(),
         active_overlay_id: popup_layout_id.map(str::to_string),
@@ -3421,7 +3426,7 @@ fn render_empty_display_preview(
         hash: format!(
             "native-empty:{}:{}",
             display_type.id,
-            base64::engine::general_purpose::STANDARD.encode(&png_bytes[..png_bytes.len().min(24)])
+            preview_image_hash(&png_bytes)
         ),
         active_screen_id: String::new(),
         active_overlay_id: None,
@@ -3624,6 +3629,16 @@ mod tests {
 
     fn demo_project() -> Value {
         serde_json::from_str(include_str!("seed/demo-home.json")).unwrap()
+    }
+
+    #[test]
+    fn preview_image_hash_uses_full_image_bytes() {
+        let mut first = vec![0u8; 64];
+        let mut second = first.clone();
+        first[40] = 1;
+        second[40] = 2;
+
+        assert_ne!(preview_image_hash(&first), preview_image_hash(&second));
     }
 
     #[test]
