@@ -24,6 +24,7 @@ Home Assistant add-on:
 - Repository metadata is root `repository.yaml`.
 - Add-on metadata is `addon/config.yaml`.
 - Add-on image is `ghcr.io/tader/inkframestudio`.
+- Runtime user data lives under `/data/inkframe-studio` inside the add-on. `/data` is Supervisor-provided persistent writable storage. `addon/run.sh` migrates older `/config` data once when `/data/inkframe-studio/projects` does not exist.
 - Docker builds use Home Assistant base `3.21` images plus official rustup stable. Do not rely on Alpine `cargo`/`rust` packages; HA base Rust versions lag crates that require newer MSRV. HA base `3.22` is not available for all add-on arch images yet. Keep `RUSTFLAGS="-C target-feature=-crt-static"` so musl links Alpine shared `freetype`/`harfbuzz` instead of looking for static archives.
 - Release image workflow is `.github/workflows/addon-images.yml`.
 - The image workflow is temporarily amd64-only until that build is stable.

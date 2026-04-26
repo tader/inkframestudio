@@ -1,6 +1,6 @@
 name: "InkFrame Studio"
 description: "Ingress-served editor and renderer for tri-color e-paper displays"
-version: "0.2.7"
+version: "0.2.8"
 slug: "inkframe_studio"
 image: "ghcr.io/tader/inkframestudio"
 init: false
@@ -16,7 +16,8 @@ panel_icon: mdi:tablet-dashboard
 panel_title: "InkFrame Studio"
 homeassistant_api: true
 map:
-  - addon_config:rw
+  - type: addon_config
+    read_only: false
 ports:
   8099/tcp: null
 ports_description:
