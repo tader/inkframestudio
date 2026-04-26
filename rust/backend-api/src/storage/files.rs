@@ -33,6 +33,10 @@ pub(crate) fn project_file_path(data_dir: &Path, id: &str) -> PathBuf {
 }
 
 pub(crate) async fn ensure_seeded(state: &AppState) -> Result<(), ApiError> {
+    println!(
+        "[inkframe:storage] ensure_seeded data_dir={}",
+        state.data_dir.display()
+    );
     fs::create_dir_all(projects_dir(&state.data_dir))
         .await
         .map_err(internal_error)?;
@@ -48,28 +52,54 @@ pub(crate) async fn ensure_seeded(state: &AppState) -> Result<(), ApiError> {
         .map_err(internal_error)?
         .is_none()
     {
+        println!(
+            "[inkframe:storage] projects dir empty; seeding demo project into {}",
+            projects_dir(&state.data_dir).display()
+        );
         let seeded: Value = serde_json::from_str(SEEDED_PROJECT_JSON)
             .map_err(|error| ApiError::internal(error.to_string()))?;
         let project_id = string_field(&seeded, "id");
         write_json_file(&project_file_path(&state.data_dir, &project_id), &seeded).await?;
+    } else {
+        println!(
+            "[inkframe:storage] projects dir already has entries: {}",
+            projects_dir(&state.data_dir).display()
+        );
     }
     Ok(())
 }
 
 pub(crate) async fn read_json_file(path: &Path) -> Result<Value, ApiError> {
+    println!("[inkframe:storage] read_json path={}", path.display());
     let content = fs::read_to_string(path)
         .await
         .map_err(|error| match error.kind() {
             std::io::ErrorKind::NotFound => {
+                println!(
+                    "[inkframe:storage] read_json missing path={}",
+                    path.display()
+                );
                 ApiError::not_found(format!("Missing {}", path.display()))
             }
-            _ => internal_error(error),
+            _ => {
+                println!(
+                    "[inkframe:storage] read_json failed path={} error={}",
+                    path.display(),
+                    error
+                );
+                internal_error(error)
+            }
         })?;
     serde_json::from_str(&content).map_err(|error| ApiError::internal(error.to_string()))
 }
 
 pub(crate) async fn write_json_file(path: &Path, value: &Value) -> Result<(), ApiError> {
+    println!("[inkframe:storage] write_json path={}", path.display());
     if let Some(parent) = path.parent() {
+        println!(
+            "[inkframe:storage] ensure parent dir path={}",
+            parent.display()
+        );
         fs::create_dir_all(parent).await.map_err(internal_error)?;
     }
     let temp_path = path.with_extension(format!(
@@ -83,7 +113,23 @@ pub(crate) async fn write_json_file(path: &Path, value: &Value) -> Result<(), Ap
         serde_json::to_vec_pretty(value).map_err(|error| ApiError::internal(error.to_string()))?;
     fs::write(&temp_path, [&bytes[..], b"\n"].concat())
         .await
-        .map_err(internal_error)?;
-    fs::rename(&temp_path, path).await.map_err(internal_error)?;
+        .map_err(|error| {
+            println!(
+                "[inkframe:storage] write temp failed path={} error={}",
+                temp_path.display(),
+                error
+            );
+            internal_error(error)
+        })?;
+    fs::rename(&temp_path, path).await.map_err(|error| {
+        println!(
+            "[inkframe:storage] rename failed from={} to={} error={}",
+            temp_path.display(),
+            path.display(),
+            error
+        );
+        internal_error(error)
+    })?;
+    println!("[inkframe:storage] write_json ok path={}", path.display());
     Ok(())
 }

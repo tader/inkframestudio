@@ -19,7 +19,9 @@ use std::{
 
 use app::AppState;
 use axum::{
+    extract::Request,
     http::{header, HeaderValue, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Json, Response},
     routing::{delete, get, post, put},
     Router,
@@ -584,6 +586,20 @@ async fn embedded_editor_asset(
     axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
 ) -> Response {
     let requested_path = uri.path().trim_start_matches('/');
+    if requested_path.starts_with("api/") {
+        println!(
+            "[inkframe:http] api fallback 404 path={} query={:?}",
+            uri.path(),
+            uri.query()
+        );
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("No API route for {}", uri.path())
+            })),
+        )
+            .into_response();
+    }
     let asset_path = if requested_path.is_empty() {
         "index.html"
     } else {
@@ -607,6 +623,20 @@ async fn embedded_editor_asset(
             HeaderValue::from_static("public, max-age=31536000, immutable"),
         );
     }
+    response
+}
+
+async fn log_request(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    println!("[inkframe:http] request method={} uri={}", method, uri);
+    let response = next.run(req).await;
+    println!(
+        "[inkframe:http] response method={} uri={} status={}",
+        method,
+        uri,
+        response.status()
+    );
     response
 }
 
@@ -686,6 +716,7 @@ fn app(state: AppState) -> Router {
         )
         .fallback(get(embedded_editor_asset))
         .with_state(state)
+        .layer(middleware::from_fn(log_request))
         .layer(TraceLayer::new_for_http())
 }
 
@@ -1344,6 +1375,64 @@ fn internal_error(error: impl std::fmt::Display) -> ApiError {
     ApiError::internal(error.to_string())
 }
 
+async fn log_storage_startup(state: &AppState) {
+    println!(
+        "[inkframe:startup] version={} cwd={:?} data_dir={}",
+        env!("CARGO_PKG_VERSION"),
+        env::current_dir().ok(),
+        state.data_dir.display()
+    );
+    for path in [
+        state.data_dir.clone(),
+        projects_dir(&state.data_dir),
+        fonts_dir(&state.data_dir),
+    ] {
+        println!("[inkframe:startup] ensure_dir path={}", path.display());
+        match fs::create_dir_all(&path).await {
+            Ok(()) => println!("[inkframe:startup] ensure_dir ok path={}", path.display()),
+            Err(error) => println!(
+                "[inkframe:startup] ensure_dir failed path={} error={}",
+                path.display(),
+                error
+            ),
+        }
+        match fs::metadata(&path).await {
+            Ok(metadata) => println!(
+                "[inkframe:startup] metadata path={} is_dir={} readonly={}",
+                path.display(),
+                metadata.is_dir(),
+                metadata.permissions().readonly()
+            ),
+            Err(error) => println!(
+                "[inkframe:startup] metadata failed path={} error={}",
+                path.display(),
+                error
+            ),
+        }
+    }
+    let probe_path = state.data_dir.join(".inkframe-write-test");
+    match fs::write(&probe_path, b"ok\n").await {
+        Ok(()) => {
+            println!(
+                "[inkframe:startup] write_probe ok path={}",
+                probe_path.display()
+            );
+            if let Err(error) = fs::remove_file(&probe_path).await {
+                println!(
+                    "[inkframe:startup] write_probe cleanup failed path={} error={}",
+                    probe_path.display(),
+                    error
+                );
+            }
+        }
+        Err(error) => println!(
+            "[inkframe:startup] write_probe failed path={} error={}",
+            probe_path.display(),
+            error
+        ),
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct HttpLikeError {
     status: Option<StatusCode>,
@@ -1394,6 +1483,7 @@ pub async fn run() {
         publish_hashes: Arc::new(Mutex::new(HashMap::new())),
         assignment_states: Arc::new(Mutex::new(HashMap::new())),
     };
+    log_storage_startup(&state).await;
     ensure_seeded(&state).await.expect("seed default project");
     spawn_assignment_scheduler(state.clone());
     info!("epd-backend-api listening on {}", address);
