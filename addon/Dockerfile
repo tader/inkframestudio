@@ -31,7 +31,7 @@ COPY scripts ./scripts
 COPY packages ./packages
 COPY rust ./rust
 COPY docs ./docs
-RUN npm ci
+RUN npm_config_foreground_scripts=true npm ci
 RUN npm run build
 
 ENV PORT=8099
