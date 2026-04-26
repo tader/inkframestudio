@@ -118,7 +118,7 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-const V2_API_BASE = "/api/v2";
+const V2_API_BASE = "./api/v2";
 
 export function fetchProfiles(): Promise<DisplayProfile[]> {
   return requestJson(`${V2_API_BASE}/display-profiles`);
