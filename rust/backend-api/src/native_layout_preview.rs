@@ -1224,7 +1224,9 @@ fn node_supported(node: &Node) -> bool {
             {
                 return false;
             }
-            bindings.keys().all(|key| key == "entity")
+            bindings.iter().all(|(key, value)| {
+                matches!(key.as_str(), "entity" | "value" | "icon") && binding_supported(value)
+            })
         }
         Node::Spacer { width, height, .. } => {
             matches!(
@@ -1410,6 +1412,19 @@ fn unsupported_node_self_reason(node: &Node) -> Option<String> {
                 "unsupported icon {}",
                 props.icon.as_deref().unwrap_or(DEFAULT_ICON_ID)
             ))
+        }
+        Node::PrimitiveInstance { bindings, .. }
+            if !bindings
+                .keys()
+                .all(|key| matches!(key.as_str(), "entity" | "value" | "icon")) =>
+        {
+            let keys = bindings.keys().cloned().collect::<Vec<_>>().join(", ");
+            Some(format!("unsupported primitive binding keys: {keys}"))
+        }
+        Node::PrimitiveInstance { bindings, .. }
+            if !bindings.values().all(|value| binding_supported(value)) =>
+        {
+            Some("unsupported primitive binding template".into())
         }
         Node::Script(node) if !node.bindings.values().all(|value| binding_supported(value)) => {
             Some(format!(
@@ -4380,6 +4395,30 @@ mod tests {
             ),
             Some(r#"{"icon":"fa-solid:cloud","temperature_2m":16.6}"#.into())
         );
+    }
+
+    #[test]
+    fn primitive_value_binding_supported_natively() {
+        let node: Node = serde_json::from_value(json!({
+            "id": "node-value-text",
+            "type": "primitive_instance",
+            "primitiveType": "text",
+            "bindings": {
+                "entity": "",
+                "value": "weather.current.temperature_2m"
+            },
+            "props": {
+                "text": "",
+                "renderEntityState": false,
+                "autoFit": true
+            },
+            "style": { "borderToken": "none", "paddingPx": 4 },
+            "width": { "mode": "fill" },
+            "height": { "mode": "fill" }
+        }))
+        .unwrap();
+        assert!(node_supported(&node));
+        assert_eq!(unsupported_node_self_reason(&node), None);
     }
 
     #[test]

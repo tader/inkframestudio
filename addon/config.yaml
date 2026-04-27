@@ -1,6 +1,6 @@
 name: "InkFrame Studio"
 description: "Ingress-served editor and renderer for tri-color e-paper displays"
-version: "0.3.5"
+version: "0.3.6"
 slug: "inkframe_studio"
 image: "ghcr.io/tader/inkframestudio"
 init: false
