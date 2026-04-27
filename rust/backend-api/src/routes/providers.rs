@@ -151,6 +151,27 @@ pub(crate) async fn provider_entities(
     Ok(Json(provider.entity_catalog(&state, &instance).await?))
 }
 
+pub(crate) async fn provider_places(
+    State(state): State<AppState>,
+    AxumPath(instance_id): AxumPath<String>,
+    Query(query): Query<ProviderPlacesQuery>,
+) -> ApiResult<Vec<PlaceSearchEntry>> {
+    let settings = read_settings(&state).await?;
+    let instance = find_provider_instance(&settings, &instance_id)
+        .ok_or_else(|| ApiError::not_found(format!("Unknown provider instance {instance_id}")))?;
+    let Some(provider) = source_provider(&instance.provider_id) else {
+        return Ok(Json(Vec::new()));
+    };
+    if !provider.is_configured(&instance) {
+        return Ok(Json(Vec::new()));
+    }
+    Ok(Json(
+        provider
+            .search_places(&state, &instance, query.q.as_deref().unwrap_or_default())
+            .await?,
+    ))
+}
+
 pub(crate) async fn upload_preview_to_provider(
     State(state): State<AppState>,
     AxumPath(instance_id): AxumPath<String>,

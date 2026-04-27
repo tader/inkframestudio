@@ -263,7 +263,7 @@ fn walk_layout_node(node: Option<&Value>, refs: &mut Vec<Value>) {
     }
 }
 
-fn collect_data_query_nodes(project: &Value) -> Vec<Value> {
+pub(crate) fn collect_data_query_nodes(project: &Value) -> Vec<Value> {
     let mut refs = Vec::new();
     if let Some(layouts) = project.get("layoutDefinitions").and_then(Value::as_array) {
         for layout in layouts {
@@ -284,7 +284,7 @@ fn collect_data_query_nodes(project: &Value) -> Vec<Value> {
 #[derive(Debug, Default, Clone, Copy)]
 struct RenderDataRequirements {
     needs_live_entities: bool,
-    needs_meta_calendar_events: bool,
+    needs_data_queries: bool,
 }
 
 fn referenced_compound_root<'a>(project: &'a Value, definition_id: &str) -> Option<&'a Value> {
@@ -335,9 +335,7 @@ fn scan_layout_requirements_node(
             }
         }
         "data_query" => {
-            if node.get("queryKind").and_then(Value::as_str) == Some("calendar_events") {
-                requirements.needs_meta_calendar_events = true;
-            }
+            requirements.needs_data_queries = true;
             scan_layout_requirements_node(
                 project,
                 node.get("child"),
@@ -583,7 +581,7 @@ pub(crate) async fn resolve_project_render_data_value(
     } else {
         serde_json::Map::new()
     };
-    let (meta_queries, meta_warnings) = if requirements.needs_meta_calendar_events {
+    let (meta_queries, meta_warnings) = if requirements.needs_data_queries {
         source_provider_impl
             .resolve_meta_queries(state, &source_instance, project)
             .await

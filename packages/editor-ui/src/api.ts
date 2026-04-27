@@ -5,6 +5,7 @@ import type {
   FontOption,
   ProviderDomain,
   IconDefinition,
+  PlaceSearchEntry,
   ProviderConnectionStatus,
   ProviderDescriptor,
   ProviderInstance,
@@ -204,6 +205,10 @@ export function testProviderInstance(id: string, instance?: Partial<ProviderInst
 
 export function fetchProviderEntities(id: string): Promise<EntityCatalogEntry[]> {
   return requestJson(`${V2_API_BASE}/provider-instances/${id}/entities`);
+}
+
+export function fetchProviderPlaces(id: string, query: string): Promise<PlaceSearchEntry[]> {
+  return requestJson(`${V2_API_BASE}/provider-instances/${id}/places?q=${encodeURIComponent(query)}`);
 }
 
 function providerById(instances: ProviderInstance[], providerId: string): ProviderInstance | undefined {

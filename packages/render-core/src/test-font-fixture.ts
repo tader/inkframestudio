@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { registerUserFonts } from "./bitmap-font.js";
+import { registerUserFonts } from "./text-layout.js";
 
 const FIXTURE_FONT_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../../data/fonts");
 

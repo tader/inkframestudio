@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { inspectLayoutDefinition, renderAssignedDisplay, renderLayoutDefinition } from "./designer-renderer.js";
-import { layoutText } from "./bitmap-font.js";
+import { layoutText } from "./text-layout.js";
 import { normalizeProject } from "./themes.js";
 import { SAMPLE_DATA, SAMPLE_PROJECT } from "./sample-project.js";
 import { registerFixtureFonts } from "./test-font-fixture.js";

@@ -90,6 +90,17 @@ export interface EntityCatalogEntry {
   unit?: string;
 }
 
+export interface PlaceSearchEntry {
+  id: string;
+  name: string;
+  displayName: string;
+  latitude: number;
+  longitude: number;
+  timezone?: string;
+  country?: string;
+  admin1?: string;
+}
+
 export interface ProviderFieldOption {
   value: string;
   label: string;
@@ -98,7 +109,7 @@ export interface ProviderFieldOption {
 export interface ProviderFieldDescriptor {
   key: string;
   label: string;
-  kind: "text" | "password" | "checkbox" | "select";
+  kind: "text" | "password" | "checkbox" | "select" | "textarea";
   required?: boolean;
   secret?: boolean;
   placeholder?: string;
@@ -322,12 +333,20 @@ export interface SpacerNode extends LayoutNodeBase {
 
 export interface DataQueryLayoutNode extends LayoutNodeBase {
   type: "data_query";
-  queryKind: "calendar_events";
+  queryKind: "calendar_events" | "open_meteo_forecast" | "forecast" | (string & {});
   variableName: string;
   dateVariableName?: string;
   calendarEntityIds: string[];
   offsetDays: number;
   rolloverTime?: string;
+  locationId?: string;
+  latitude?: number;
+  longitude?: number;
+  timezone?: string;
+  current?: string[] | string;
+  hourly?: string[] | string;
+  daily?: string[] | string;
+  forecastDays?: number;
   child?: LayoutNode;
 }
 

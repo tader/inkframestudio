@@ -1,4 +1,4 @@
-import { layoutText, supportsFontVariant } from "./bitmap-font.js";
+import { layoutText, supportsFontVariant } from "./text-layout.js";
 import { PixelBuffer, COLOR_ACCENT, COLOR_BG, COLOR_FG } from "./pixel-buffer.js";
 import type { DisplayProfile, FontFamily, FontOption, FontSlope, FontVariantKey, FontWeight, Project } from "./types.js";
 

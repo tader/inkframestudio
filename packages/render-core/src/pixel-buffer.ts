@@ -1,5 +1,5 @@
 import { DEFAULT_FONT_PRESETS } from "./font-presets.js";
-import { layoutText, resolveTextStyle } from "./bitmap-font.js";
+import { layoutText, resolveTextStyle } from "./text-layout.js";
 import { resolveIconDefinition } from "./icons.js";
 import type { FontPresetValues, TextStyle } from "./types.js";
 

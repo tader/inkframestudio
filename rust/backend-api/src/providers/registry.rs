@@ -4,11 +4,11 @@ use serde_json::Value;
 
 use super::{
     display::{openepaperlink_ap, virtual_display},
-    source::home_assistant,
+    source::{home_assistant, open_meteo},
 };
 use crate::{
-    app::AppState, ApiError, DiscoveredDisplayCandidate, EntityCatalogEntry, UploadPreviewRequest,
-    UploadPreviewResponse,
+    app::AppState, ApiError, DiscoveredDisplayCandidate, EntityCatalogEntry, PlaceSearchEntry,
+    UploadPreviewRequest, UploadPreviewResponse,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -25,6 +25,7 @@ pub enum ProviderFieldKind {
     Password,
     Checkbox,
     Select,
+    Textarea,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +103,14 @@ pub(crate) trait SourceProvider: Sync + Send {
         instance: &ProviderInstance,
         project: &Value,
     ) -> Result<(serde_json::Map<String, Value>, Vec<String>), ApiError>;
+    async fn search_places(
+        &self,
+        _state: &AppState,
+        _instance: &ProviderInstance,
+        _query: &str,
+    ) -> Result<Vec<PlaceSearchEntry>, ApiError> {
+        Ok(Vec::new())
+    }
 }
 
 #[async_trait]
@@ -130,6 +139,7 @@ pub(crate) trait DisplayProvider: Sync + Send {
 pub fn built_in_provider_descriptors() -> Vec<ProviderDescriptor> {
     vec![
         home_assistant::PROVIDER.descriptor(),
+        open_meteo::PROVIDER.descriptor(),
         openepaperlink_ap::PROVIDER.descriptor(),
         virtual_display::PROVIDER.descriptor(),
     ]
@@ -145,6 +155,7 @@ pub fn default_provider_instances() -> Vec<ProviderInstance> {
 pub(crate) fn source_provider(id: &str) -> Option<&'static dyn SourceProvider> {
     match id {
         "home-assistant" => Some(&home_assistant::PROVIDER),
+        "open-meteo" => Some(&open_meteo::PROVIDER),
         _ => None,
     }
 }

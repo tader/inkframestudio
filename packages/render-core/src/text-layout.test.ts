@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getGlyph, layoutText, registerUserFonts, resolveTextStyle, scaleForFontSize, setTextLayoutAdapter } from "./bitmap-font.js";
+import { getGlyph, layoutText, registerUserFonts, resolveTextStyle, scaleForFontSize, setTextLayoutAdapter } from "./text-layout.js";
 import { FIXTURE_FONTS, registerFixtureFonts } from "./test-font-fixture.js";
 
 beforeEach(() => {
@@ -11,7 +11,7 @@ afterEach(() => {
   setTextLayoutAdapter(undefined);
 });
 
-describe("bitmap font system", () => {
+describe("text layout system", () => {
   it("treats letters as proportional", () => {
     const wide = getGlyph("W", { size: "normal", weight: "regular" });
     const narrow = getGlyph("I", { size: "normal", weight: "regular" });
@@ -34,7 +34,7 @@ describe("bitmap font system", () => {
   it("distinguishes regular and bold weights", () => {
     const regular = getGlyph("A", { size: "normal", weight: "regular" });
     const bold = getGlyph("A", { size: "normal", weight: "bold" });
-    expect(bold.advance).toBeGreaterThan(regular.advance);
+    expect(bold.pixels.map((row) => row.join("")).join("|")).not.toBe(regular.pixels.map((row) => row.join("")).join("|"));
   });
 
   it("supports tiny, normal and header scale presets", () => {

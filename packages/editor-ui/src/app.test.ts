@@ -10,6 +10,57 @@ async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function clickButton(root: ShadowRoot, label: string): void {
+  const button = Array.from(root.querySelectorAll<HTMLButtonElement>("button")).find((entry) => entry.textContent?.trim() === label);
+  expect(button, `button ${label}`).toBeTruthy();
+  button?.click();
+}
+
+function inputInLabel<T extends HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+  root: ShadowRoot,
+  labelText: string,
+  selector: string
+): T {
+  const label = Array.from(root.querySelectorAll("label")).find((entry) => entry.textContent?.includes(labelText));
+  const input = label?.querySelector<T>(selector);
+  expect(input, `${labelText} ${selector}`).toBeTruthy();
+  return input as T;
+}
+
+function setInputValue(input: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, value: string): void {
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+}
+
+type TestLayoutNode = {
+  id: string;
+  type: string;
+  primitiveType?: string;
+  children?: TestLayoutNode[];
+  thenChild?: TestLayoutNode;
+  elseChild?: TestLayoutNode;
+  width?: Record<string, unknown>;
+  height?: Record<string, unknown>;
+  style?: Record<string, unknown>;
+  bindings?: Record<string, unknown>;
+  props?: Record<string, unknown>;
+};
+
+type TestWidgetDefinition = {
+  id: string;
+  name: string;
+  rootNode?: TestLayoutNode;
+};
+
+type TestEditorElement = HTMLElement & {
+  project: { widgetDefinitions?: TestWidgetDefinition[] };
+  selectedWidgetDefinitionId: string;
+  selectedNodeId: string;
+  selectNode: (nodeId: string) => void;
+  setRootNode: (owner: TestWidgetDefinition, rootNode: TestLayoutNode) => void;
+  requestUpdate: () => void;
+};
+
 describe("epaper editor app", () => {
   const originalFetch = globalThis.fetch;
   const TINY_PNG =
@@ -47,6 +98,21 @@ describe("epaper editor app", () => {
                 { key: "useSupervisorProxy", label: "Use Supervisor proxy", kind: "checkbox", defaultValue: false },
                 { key: "allowInsecureTls", label: "Allow insecure TLS", kind: "checkbox", defaultValue: false },
                 { key: "token", label: "Token", kind: "password", defaultValue: "" }
+              ]
+            },
+            {
+              id: "open-meteo",
+              label: "Open-Meteo",
+              domain: "source",
+              capabilities: ["test_connection", "entity_catalog", "place_search", "resolve_render_data", "generic_data_queries"],
+              configFields: [
+                { key: "defaultLatitude", label: "Default latitude", kind: "text", defaultValue: "" },
+                { key: "defaultLongitude", label: "Default longitude", kind: "text", defaultValue: "" },
+                { key: "timezone", label: "Timezone", kind: "text", defaultValue: "auto" },
+                { key: "currentVariables", label: "Current variables", kind: "text", defaultValue: "temperature_2m,weather_code" },
+                { key: "hourlyVariables", label: "Hourly variables", kind: "text", defaultValue: "temperature_2m,precipitation_probability,weather_code" },
+                { key: "dailyVariables", label: "Daily variables", kind: "text", defaultValue: "temperature_2m_max,temperature_2m_min,weather_code" },
+                { key: "placesJson", label: "Places JSON", kind: "textarea", defaultValue: "[]" }
               ]
             },
             {
@@ -105,6 +171,18 @@ describe("epaper editor app", () => {
             }
           }
         ]), { status: 200 });
+      }
+      if (url.includes("/api/v2/provider-instances/") && url.includes("/places")) {
+        return new Response(JSON.stringify([{
+          id: "den-hoorn",
+          name: "Den Hoorn",
+          displayName: "Den Hoorn, Zuid-Holland, Netherlands",
+          latitude: 52.002,
+          longitude: 4.331,
+          timezone: "Europe/Amsterdam",
+          country: "Netherlands",
+          admin1: "Zuid-Holland"
+        }]), { status: 200 });
       }
       if (url.endsWith("/api/v2/fonts")) {
         return new Response(JSON.stringify([{ id: "user-sans", label: "User Sans", source: "user", importSource: "upload", variants: ["regular", "bold"], allowedPixelSizes: [8, 10, 12] }]), { status: 200 });
@@ -495,6 +573,154 @@ describe("epaper editor app", () => {
     expect(element.shadowRoot.textContent).toContain("New Compound Widget");
   });
 
+  it("configures compound widget inputs and creates text nodes through the UI", async () => {
+    window.location.hash = "#/widgets";
+    const fetchMock = vi.mocked(globalThis.fetch);
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Add compound"))?.click();
+    await flush();
+    await element.updateComplete;
+
+    const appState = element as unknown as HTMLElement & {
+      project: { widgetDefinitions?: Array<{ id: string; name: string; rootNode?: { id: string } }> };
+      selectedWidgetDefinitionId: string;
+      selectedNodeId: string;
+      requestUpdate: () => void;
+    };
+    const selectedWidget = appState.project.widgetDefinitions?.find((entry) => entry.id === appState.selectedWidgetDefinitionId);
+    appState.selectedNodeId = selectedWidget?.rootNode?.id ?? "";
+    appState.requestUpdate();
+    await flush();
+    await element.updateComplete;
+    clickButton(element.shadowRoot, "Create child");
+    await flush();
+    await element.updateComplete;
+    clickButton(element.shadowRoot, "Text");
+    await flush();
+    await element.updateComplete;
+    const widgetWithText = appState.project.widgetDefinitions?.find((entry) => entry.id === appState.selectedWidgetDefinitionId);
+    const textNodeId = (widgetWithText?.rootNode as { children?: Array<{ id: string }> } | undefined)?.children?.[0]?.id ?? "";
+    appState.selectedNodeId = textNodeId;
+    appState.requestUpdate();
+    await flush();
+    await element.updateComplete;
+    setInputValue(inputInLabel<HTMLInputElement>(element.shadowRoot, "Name", "input"), "Weather Snapshot");
+    await flush();
+    await element.updateComplete;
+
+    clickButton(element.shadowRoot, "Add input");
+    await flush();
+    await element.updateComplete;
+
+    const inputDetails = Array.from(element.shadowRoot.querySelectorAll("details")).find((entry) => entry.textContent?.includes("input"));
+    inputDetails?.setAttribute("open", "");
+    setInputValue(inputInLabel<HTMLInputElement>(element.shadowRoot, "Preview value", "input"), "Den Hoorn");
+    await flush();
+    await element.updateComplete;
+
+    fetchMock.mockClear();
+    clickButton(element.shadowRoot, "Save project");
+    await flush();
+    await element.updateComplete;
+
+    const saveCall = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}`) && init?.method === "PUT");
+    expect(saveCall).toBeTruthy();
+    const savedProject = JSON.parse(String(saveCall?.[1]?.body ?? "{}"));
+    const savedWidget = savedProject.widgetDefinitions.find((entry: { name: string }) => entry.name === "Weather Snapshot");
+    expect(savedWidget).toBeTruthy();
+    expect(JSON.stringify(savedWidget)).toContain("Den Hoorn");
+    expect(savedWidget.rootNode.children[0].type).toBe("primitive_instance");
+    expect(savedWidget.rootNode.children[0].primitiveType).toBe("text");
+  });
+
+  it("keeps distinct placeholders in if/else text branches", async () => {
+    window.location.hash = "#/widgets";
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    const appState = element as unknown as TestEditorElement;
+    const selectedWidget = () => appState.project.widgetDefinitions?.find((entry) => entry.id === appState.selectedWidgetDefinitionId);
+    const selectNode = async (nodeId: string) => {
+      appState.selectNode(nodeId);
+      appState.requestUpdate();
+      await flush();
+      await element.updateComplete;
+    };
+    const setPlaceholder = async (value: string) => {
+      const input = inputInLabel<HTMLInputElement>(element.shadowRoot, "Placeholder", "input");
+      setInputValue(input, value);
+      await flush();
+      await element.updateComplete;
+    };
+
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Add compound"))?.click();
+    await flush();
+    await element.updateComplete;
+
+    const widget = selectedWidget();
+    expect(widget?.rootNode?.type).toBe("stack");
+    const textNode = (id: string): TestLayoutNode => ({
+      id,
+      type: "primitive_instance",
+      primitiveType: "text",
+      width: { mode: "fill" },
+      height: { mode: "fill" },
+      style: { paddingPx: 4, borderToken: "none" },
+      bindings: { entity: "" },
+      props: {
+        text: "Text",
+        autoFit: true,
+        placeholderText: "Placeholder",
+        horizontalAlign: "left",
+        verticalAlign: "top",
+        overflow: "wrap",
+        renderEntityState: false,
+        paddingPx: 4
+      }
+    });
+    if (widget?.rootNode) {
+      appState.setRootNode(widget, {
+        ...widget.rootNode,
+        children: [{
+          id: "if-else-under-test",
+          type: "if_else",
+          thenChild: textNode("then-text-under-test"),
+          elseChild: {
+            id: "else-stack-under-test",
+            type: "stack",
+            children: [textNode("else-text-one-under-test"), textNode("else-text-two-under-test")]
+          }
+        }]
+      });
+    }
+    await flush();
+    await element.updateComplete;
+
+    const ifElse = () => selectedWidget()?.rootNode?.children?.[0];
+    await selectNode(ifElse()?.thenChild?.id ?? "");
+    await setPlaceholder("then branch placeholder");
+
+    const elseStack = () => ifElse()?.elseChild;
+    await selectNode(elseStack()?.children?.[0]?.id ?? "");
+    await setPlaceholder("else first placeholder");
+
+    await selectNode(elseStack()?.children?.[1]?.id ?? "");
+    await setPlaceholder("else second placeholder");
+
+    const finalIfElse = ifElse();
+    const thenPlaceholder = finalIfElse?.thenChild?.props?.placeholderText;
+    const elsePlaceholders = finalIfElse?.elseChild?.children?.map((node) => node.props?.placeholderText);
+    expect(thenPlaceholder).toBe("then branch placeholder");
+    expect(elsePlaceholders).toEqual(["else first placeholder", "else second placeholder"]);
+    expect(new Set([thenPlaceholder, ...(elsePlaceholders ?? [])]).size).toBe(3);
+  });
+
   it("shows preview theme selector on widget page", async () => {
     window.location.hash = "#/widgets";
     const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
@@ -583,6 +809,41 @@ describe("epaper editor app", () => {
       heading.textContent?.trim() === "Home Assistant"
     );
     expect(updatedHeadings.length).toBe(2);
+  });
+
+  it("searches and adds an Open-Meteo place to source provider config", async () => {
+    window.location.hash = "#/config";
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    clickButton(element.shadowRoot, "Sources");
+    await flush();
+    await element.updateComplete;
+
+    clickButton(element.shadowRoot, "Add Open-Meteo");
+    await flush();
+    await element.updateComplete;
+
+    const placeSearch = element.shadowRoot.querySelector<HTMLInputElement>('input[placeholder="Search city or postal code"]');
+    expect(placeSearch).toBeTruthy();
+    setInputValue(placeSearch as HTMLInputElement, "Den Hoorn");
+    clickButton(element.shadowRoot, "Search");
+    await flush();
+    await element.updateComplete;
+
+    expect(element.shadowRoot.textContent).toContain("Den Hoorn, Zuid-Holland, Netherlands");
+    clickButton(element.shadowRoot, "Add");
+    await flush();
+    await element.updateComplete;
+
+    const placesJson = inputInLabel<HTMLTextAreaElement>(element.shadowRoot, "Places JSON", "textarea").value;
+    expect(placesJson).toContain('"id": "den-hoorn"');
+    expect(placesJson).toContain('"name": "Den Hoorn"');
+    expect(placesJson).toContain('"latitude": 52.002');
+    expect(placesJson).toContain('"longitude": 4.331');
+    expect(placesJson).toContain('"timezone": "Europe/Amsterdam"');
   });
 
   it("shows display types in config display systems", async () => {

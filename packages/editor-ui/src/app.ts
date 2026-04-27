@@ -1,6 +1,6 @@
 import { LitElement, css, html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import { BUILT_IN_WIDGET_DEFINITIONS, DEFAULT_FONT_PRESETS, DISPLAY_PROFILES, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FillRole, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutNode, type ManagedDisplay, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type ProviderConnectionStatus, type ProviderDescriptor, type ProviderInstance, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
+import { BUILT_IN_WIDGET_DEFINITIONS, DEFAULT_FONT_PRESETS, DISPLAY_PROFILES, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FillRole, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutNode, type ManagedDisplay, type PlaceSearchEntry, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type ProviderConnectionStatus, type ProviderDescriptor, type ProviderInstance, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
 import {
   deleteProviderInstance,
   deleteFont,
@@ -18,6 +18,7 @@ import {
   fetchProject,
   fetchProjects,
   fetchProviderEntities,
+  fetchProviderPlaces,
   fetchScheduleUpdateLogSettings,
   fetchThemePreview,
   importFont,
@@ -859,6 +860,10 @@ function defaultRule(scope: Rule["scope"], layoutId = ""): Rule {
   };
 }
 
+function isLayoutOwner(owner: { id: string; kind?: string; rootNode?: LayoutNode }): owner is LayoutDefinition {
+  return owner.kind === "fullscreen" || owner.kind === "popup";
+}
+
 export class EpPaperEditorApp extends LitElement {
   static properties = {
     projectSummaries: { state: true },
@@ -897,6 +902,8 @@ export class EpPaperEditorApp extends LitElement {
     providerKinds: { state: true },
     providerInstances: { state: true },
     providerStatuses: { state: true },
+    providerPlaceQueries: { state: true },
+    providerPlaceResults: { state: true },
     uploadStatusMessage: { state: true },
     backupStatusMessage: { state: true },
     assignmentScheduleStatuses: { state: true },
@@ -1271,6 +1278,8 @@ export class EpPaperEditorApp extends LitElement {
   declare private providerKinds: ProviderDescriptor[];
   declare private providerInstances: ProviderInstance[];
   declare private providerStatuses: Record<string, ProviderConnectionStatus | null>;
+  declare private providerPlaceQueries: Record<string, string>;
+  declare private providerPlaceResults: Record<string, PlaceSearchEntry[]>;
   declare private uploadStatusMessage: string;
   declare private backupStatusMessage: string;
   declare private assignmentScheduleStatuses: Record<string, AssignmentScheduleStatusResponse>;
@@ -1322,6 +1331,8 @@ export class EpPaperEditorApp extends LitElement {
     this.providerKinds = [];
     this.providerInstances = [];
     this.providerStatuses = {};
+    this.providerPlaceQueries = {};
+    this.providerPlaceResults = {};
     this.uploadStatusMessage = "";
     this.backupStatusMessage = "";
     this.assignmentScheduleStatuses = {};
@@ -2064,7 +2075,7 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private updateRootNode(owner: { id: string; rootNode?: LayoutNode }, updater: (root: LayoutNode) => LayoutNode): void {
-    if ("kind" in owner) {
+    if (isLayoutOwner(owner)) {
       this.updateLayout(owner.id, (layout) => ({
         ...layout,
         rootNode: layout.rootNode ? updater(layout.rootNode) : defaultRootNode("stack")
@@ -2078,7 +2089,7 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private setRootNode(owner: { id: string; rootNode?: LayoutNode }, rootNode: LayoutNode | undefined): void {
-    if ("kind" in owner) {
+    if (isLayoutOwner(owner)) {
       this.updateLayout(owner.id, (layout) => ({ ...layout, rootNode }));
       return;
     }
@@ -2431,6 +2442,72 @@ export class EpPaperEditorApp extends LitElement {
         message: error instanceof Error ? error.message : "Provider test failed"
       }))
     };
+  }
+
+  private async searchProviderPlaces(instanceId: string): Promise<void> {
+    const query = this.providerPlaceQueries[instanceId] ?? "";
+    this.providerPlaceResults = {
+      ...this.providerPlaceResults,
+      [instanceId]: query.trim().length >= 2 ? await fetchProviderPlaces(instanceId, query).catch(() => []) : []
+    };
+  }
+
+  private providerConfiguredPlaces(instance: ProviderInstance): Array<{ id: string; name: string; latitude: number; longitude: number; timezone?: string }> {
+    const raw = String(instance.config.placesJson ?? "[]");
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((entry) => entry && typeof entry === "object") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private addProviderPlace(instance: ProviderInstance, place: PlaceSearchEntry): void {
+    const current = this.providerConfiguredPlaces(instance);
+    const nextId = place.id || place.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const next = [
+      ...current.filter((entry) => entry.id !== nextId),
+      {
+        id: nextId,
+        name: place.name,
+        latitude: place.latitude,
+        longitude: place.longitude,
+        timezone: place.timezone ?? "auto"
+      }
+    ];
+    this.updateProviderInstanceDraft(instance.id, "placesJson", JSON.stringify(next, null, 2));
+  }
+
+  private renderProviderPlaceSearch(instance: ProviderInstance, descriptor: ProviderDescriptor): TemplateResult {
+    if (!descriptor.capabilities?.includes("place_search")) {
+      return html``;
+    }
+    const query = this.providerPlaceQueries[instance.id] ?? "";
+    const results = this.providerPlaceResults[instance.id] ?? [];
+    return html`
+      <div class="section">
+        <h3>Place Search</h3>
+        <div class="row">
+          <input
+            .value=${query}
+            placeholder="Search city or postal code"
+            @input=${(event: Event) => {
+              this.providerPlaceQueries = {
+                ...this.providerPlaceQueries,
+                [instance.id]: (event.target as HTMLInputElement).value
+              };
+            }}
+          />
+          <button @click=${() => void this.searchProviderPlaces(instance.id)}>Search</button>
+        </div>
+        ${results.map((place) => html`
+          <div class="row">
+            <span>${place.displayName} (${place.latitude.toFixed(4)}, ${place.longitude.toFixed(4)})</span>
+            <button @click=${() => this.addProviderPlace(instance, place)}>Add</button>
+          </div>
+        `)}
+      </div>
+    `;
   }
 
   private async deleteProvider(instanceId: string): Promise<void> {
@@ -4310,6 +4387,18 @@ export class EpPaperEditorApp extends LitElement {
         </label>
       `;
     }
+    if (field.kind === "textarea") {
+      return html`
+        <label>
+          ${field.label}
+          <textarea
+            .value=${String(value ?? "")}
+            placeholder=${field.placeholder ?? ""}
+            @input=${(event: Event) => this.updateProviderInstanceDraft(instance.id, field.key, (event.target as HTMLTextAreaElement).value)}
+          ></textarea>
+        </label>
+      `;
+    }
     return html`
       <label>
         ${field.label}
@@ -4452,6 +4541,7 @@ export class EpPaperEditorApp extends LitElement {
           Enabled
         </label>
         ${(descriptor.configFields ?? []).map((field) => this.renderProviderField(instance, descriptor, field.key))}
+        ${this.renderProviderPlaceSearch(instance, descriptor)}
         ${instance.providerId === "virtual" ? this.renderVirtualDisplayDefinitions(instance) : nothing}
         <div class="row">
           <button @click=${() => void this.testProvider(instance.id)}>Test</button>

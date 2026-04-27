@@ -43,8 +43,8 @@ use routes::previews::{device_preview, font_specimens, layout_preview, live_data
 use routes::projects::{get_project, list_projects, save_project};
 use routes::providers::{
     create_provider_instance, delete_provider_instance, discover_displays, list_provider_instances,
-    list_provider_kinds, provider_entities, test_provider_instance, update_provider_instance,
-    upload_preview_to_provider,
+    list_provider_kinds, provider_entities, provider_places, test_provider_instance,
+    update_provider_instance, upload_preview_to_provider,
 };
 use routes::publish::{
     force_assignment_update, get_schedule_update_log_settings, list_assignment_schedules,
@@ -336,6 +336,22 @@ pub(crate) struct EntityCatalogEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub(crate) struct PlaceSearchEntry {
+    id: String,
+    name: String,
+    #[serde(rename = "displayName")]
+    display_name: String,
+    latitude: f64,
+    longitude: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timezone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    country: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    admin1: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub(crate) struct DiscoveredDisplayCandidate {
     id: String,
     name: String,
@@ -546,6 +562,11 @@ struct DiscoverDisplaysQuery {
     provider_instance_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ProviderPlacesQuery {
+    q: Option<String>,
+}
+
 fn project_override_from_body(project_id: &str, body: &Value) -> Option<Value> {
     let project = body.get("project")?.clone();
     if project.get("id").and_then(Value::as_str) == Some(project_id) {
@@ -670,6 +691,10 @@ fn app(state: AppState) -> Router {
         .route(
             "/api/v2/provider-instances/:id/entities",
             get(provider_entities),
+        )
+        .route(
+            "/api/v2/provider-instances/:id/places",
+            get(provider_places),
         )
         .route(
             "/api/v2/provider-instances/:id/upload-preview",
