@@ -27,6 +27,52 @@ struct GeocodingResponse {
     results: Vec<GeocodingPlace>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_alias_uses_provider_defaults() {
+        assert_eq!(
+            variables_from_value(Some(&json!("current")), "temperature_2m,weather_code"),
+            vec!["temperature_2m".to_string(), "weather_code".to_string()]
+        );
+    }
+
+    #[test]
+    fn empty_current_value_uses_provider_defaults() {
+        assert_eq!(
+            variables_from_value(Some(&json!("")), "temperature_2m,weather_code"),
+            vec!["temperature_2m".to_string(), "weather_code".to_string()]
+        );
+        assert_eq!(
+            variables_from_value(Some(&json!([])), "temperature_2m,weather_code"),
+            vec!["temperature_2m".to_string(), "weather_code".to_string()]
+        );
+    }
+
+    #[test]
+    fn current_value_falls_back_to_hourly_row() {
+        let hourly_rows = vec![json!({
+            "time": "2026-04-27T17:00",
+            "temperature_2m": 16.8,
+            "weather_code": 2,
+            "units": {
+                "temperature_2m": "°C",
+                "weather_code": "wmo code"
+            }
+        })];
+        let current = current_value_from_forecast(
+            &json!({ "current": {} }),
+            &hourly_rows,
+            &["temperature_2m".into(), "weather_code".into()],
+        );
+        assert_eq!(current["temperature_2m"], json!(16.8));
+        assert_eq!(current["weather_code"], json!(2));
+        assert_eq!(current["time"], json!("2026-04-27T17:00"));
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct GeocodingPlace {
     id: Option<u64>,
@@ -147,7 +193,7 @@ fn configured_places(instance: &ProviderInstance) -> Vec<ConfigPlace> {
 }
 
 fn variables_from_value(value: Option<&Value>, fallback: &str) -> Vec<String> {
-    match value {
+    let variables = match value {
         Some(Value::Array(items)) => items
             .iter()
             .filter_map(Value::as_str)
@@ -157,7 +203,17 @@ fn variables_from_value(value: Option<&Value>, fallback: &str) -> Vec<String> {
             .collect(),
         Some(Value::String(text)) => split_variables(text),
         _ => split_variables(fallback),
+    };
+    if variables.is_empty()
+        || (variables.len() == 1
+            && matches!(
+                variables[0].as_str(),
+                "current" | "hourly" | "daily" | "default" | "defaults"
+            ))
+    {
+        return split_variables(fallback);
     }
+    variables
 }
 
 fn split_variables(value: &str) -> Vec<String> {
@@ -299,6 +355,51 @@ fn table_to_rows(table: Option<&Value>, units: Option<&Value>) -> Vec<Value> {
             Value::Object(row)
         })
         .collect()
+}
+
+fn current_value_from_forecast(
+    forecast: &Value,
+    hourly_rows: &[Value],
+    current_vars: &[String],
+) -> Value {
+    if let Some(current) = forecast.get("current").and_then(Value::as_object) {
+        if !current.is_empty() {
+            let mut current = current.clone();
+            current.insert(
+                "units".into(),
+                forecast
+                    .get("current_units")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+            );
+            return Value::Object(current);
+        }
+    }
+    if let Some(current_weather) = forecast.get("current_weather").and_then(Value::as_object) {
+        if !current_weather.is_empty() {
+            return Value::Object(current_weather.clone());
+        }
+    }
+    hourly_rows
+        .first()
+        .and_then(Value::as_object)
+        .map(|row| {
+            let mut current = serde_json::Map::new();
+            for variable in current_vars {
+                if let Some(value) = row.get(variable) {
+                    current.insert(variable.clone(), value.clone());
+                }
+            }
+            if let Some(value) = row.get("time") {
+                current.insert("time".into(), value.clone());
+            }
+            if let Some(value) = row.get("units") {
+                current.insert("units".into(), value.clone());
+            }
+            Value::Object(current)
+        })
+        .filter(|value| value.as_object().is_some_and(|object| !object.is_empty()))
+        .unwrap_or_else(|| json!({}))
 }
 
 fn query_location(instance: &ProviderInstance, node: &Value) -> Option<(f64, f64, Option<String>)> {
@@ -506,14 +607,12 @@ impl SourceProvider for OpenMeteoProvider {
             .await
             {
                 Ok(forecast) => {
-                    let current_value = forecast
-                        .get("current")
-                        .cloned()
-                        .unwrap_or_else(|| json!({}));
                     let hourly_rows =
                         table_to_rows(forecast.get("hourly"), forecast.get("hourly_units"));
                     let daily_rows =
                         table_to_rows(forecast.get("daily"), forecast.get("daily_units"));
+                    let current_value =
+                        current_value_from_forecast(&forecast, &hourly_rows, &current);
                     results.insert(
                         id.to_string(),
                         json!({

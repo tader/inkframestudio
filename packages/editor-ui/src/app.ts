@@ -898,6 +898,7 @@ export class EpPaperEditorApp extends LitElement {
     previewHeight: { state: true },
     previewMessage: { state: true },
     widgetPreviewRenderData: { state: true },
+    widgetPreviewDefinitionId: { state: true },
     widgetPreviewDataMessage: { state: true },
     scale: { state: true },
     updateLogImageModal: { state: true },
@@ -1286,6 +1287,7 @@ export class EpPaperEditorApp extends LitElement {
   declare private previewHeight: number;
   declare private previewMessage: string;
   declare private widgetPreviewRenderData: RenderData | null;
+  declare private widgetPreviewDefinitionId: string;
   declare private widgetPreviewDataMessage: string;
   declare private scale: number;
   declare private updateLogImageModal: AssignmentUpdateLogEntry | null;
@@ -1298,6 +1300,7 @@ export class EpPaperEditorApp extends LitElement {
   declare private selectedFontPreviewFamilyId: string;
   private fontSpecimenRequestId = 0;
   private previewRequestId = 0;
+  private previewDebounceTimer: number | undefined;
   declare private confirmDeleteFontId: string;
   declare private previewViewportWidth: number;
   declare private previewViewportHeight: number;
@@ -1343,6 +1346,7 @@ export class EpPaperEditorApp extends LitElement {
     this.previewHeight = 0;
     this.previewMessage = "";
     this.widgetPreviewRenderData = null;
+    this.widgetPreviewDefinitionId = "";
     this.widgetPreviewDataMessage = "";
     this.scale = typeof window !== "undefined" && window.devicePixelRatio >= 1.75 ? 2 : 1;
     this.updateLogImageModal = null;
@@ -1390,6 +1394,10 @@ export class EpPaperEditorApp extends LitElement {
     window.removeEventListener("keydown", this.onWindowKeyDown);
     this.previewResizeObserver?.disconnect();
     this.previewResizeObserver = null;
+    if (this.previewDebounceTimer !== undefined) {
+      window.clearTimeout(this.previewDebounceTimer);
+      this.previewDebounceTimer = undefined;
+    }
   }
 
   private onHashChange = (): void => {
@@ -1499,9 +1507,15 @@ export class EpPaperEditorApp extends LitElement {
     this.selectedDisplayTypeId = this.project.displayTypes?.some((entry) => entry.id === this.selectedDisplayTypeId)
       ? this.selectedDisplayTypeId
       : this.project.displayTypes?.[0]?.id || "";
+    const previousWidgetDefinitionId = this.selectedWidgetDefinitionId;
     this.selectedWidgetDefinitionId = this.project.widgetDefinitions?.some((entry) => entry.id === this.selectedWidgetDefinitionId)
       ? this.selectedWidgetDefinitionId
       : this.project.widgetDefinitions?.find((entry) => entry.kind === "compound")?.id || "";
+    if (this.selectedWidgetDefinitionId !== previousWidgetDefinitionId) {
+      this.widgetPreviewRenderData = null;
+      this.widgetPreviewDefinitionId = "";
+      this.widgetPreviewDataMessage = "";
+    }
     this.selectedLayoutId = this.project.layoutDefinitions?.some((entry) => entry.id === this.selectedLayoutId)
       ? this.selectedLayoutId
       : this.project.layoutDefinitions?.[0]?.id || "";
@@ -1562,10 +1576,20 @@ export class EpPaperEditorApp extends LitElement {
     this.structureDraggedNodeId = "";
     this.structureDropIntent = null;
     this.structureHoveredNodeId = "";
-    void this.refreshPreview();
+    this.schedulePreviewRefresh();
     if (this.activePage === "config") {
       void this.refreshFontSpecimens();
     }
+  }
+
+  private schedulePreviewRefresh(delayMs = 1000): void {
+    if (this.previewDebounceTimer !== undefined) {
+      window.clearTimeout(this.previewDebounceTimer);
+    }
+    this.previewDebounceTimer = window.setTimeout(() => {
+      this.previewDebounceTimer = undefined;
+      void this.refreshPreview();
+    }, delayMs);
   }
 
   private async refreshAssignmentSchedules(): Promise<void> {
@@ -1654,6 +1678,10 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private async refreshPreview(): Promise<void> {
+    if (this.previewDebounceTimer !== undefined) {
+      window.clearTimeout(this.previewDebounceTimer);
+      this.previewDebounceTimer = undefined;
+    }
     const requestId = ++this.previewRequestId;
     const [preview, inspection] = await this.fetchPagePreviewAndInspection().catch(() => [undefined, undefined] as const);
     if (requestId !== this.previewRequestId) {
@@ -1664,6 +1692,7 @@ export class EpPaperEditorApp extends LitElement {
       this.previewHash = "";
       this.previewMessage = "";
       this.widgetPreviewRenderData = null;
+      this.widgetPreviewDefinitionId = "";
       this.widgetPreviewDataMessage = "";
       this.previewWidth = 0;
       this.previewHeight = 0;
@@ -1713,12 +1742,13 @@ export class EpPaperEditorApp extends LitElement {
       const tempProject = this.widgetPreviewProject(definition, displayTypeId);
       const [preview, renderData] = await Promise.all([
         fetchLayoutPreview(this.project.id, tempLayoutId, undefined, tempProject, displayTypeId),
-        fetchLiveData(this.project.id, tempProject).catch((error) => {
+        fetchLiveData(this.project.id, tempProject, tempLayoutId).catch((error) => {
           this.widgetPreviewDataMessage = error instanceof Error ? error.message : "Variable values unavailable.";
           return null;
         })
       ]);
       this.widgetPreviewRenderData = renderData;
+      this.widgetPreviewDefinitionId = definition.id;
       if (renderData) {
         this.widgetPreviewDataMessage = "";
       }
@@ -1833,22 +1863,23 @@ export class EpPaperEditorApp extends LitElement {
   private widgetPreviewVariables(definition: WidgetDefinition): WidgetPreviewVariable[] {
     const variables: WidgetPreviewVariable[] = [];
     const scope: Record<string, unknown> = {};
+    const renderData = this.widgetPreviewDefinitionId === definition.id ? this.widgetPreviewRenderData : null;
     for (const input of definition.inputSchema ?? []) {
       const value = input.previewValue ?? input.defaultValue ?? (input.valueType === "boolean" ? false : input.valueType === "number" ? 0 : "");
       scope[input.id] = value;
       scope[input.name] = value;
       variables.push({ name: input.name, source: `input ${input.id}`, value });
     }
-    this.collectWidgetPreviewVariables(definition.rootNode, scope, variables);
+    this.collectWidgetPreviewVariables(definition.rootNode, scope, variables, renderData);
     return variables;
   }
 
-  private collectWidgetPreviewVariables(node: LayoutNode | undefined, scope: Record<string, unknown>, variables: WidgetPreviewVariable[]): void {
+  private collectWidgetPreviewVariables(node: LayoutNode | undefined, scope: Record<string, unknown>, variables: WidgetPreviewVariable[], renderData: RenderData | null): void {
     if (!node) {
       return;
     }
     if (node.type === "data_query") {
-      const query = this.widgetPreviewRenderData?.metaQueries?.[node.id] ?? this.widgetPreviewRenderData?.queries?.[node.id];
+      const query = renderData?.metaQueries?.[node.id] ?? renderData?.queries?.[node.id];
       const value = this.dataQueryPreviewValue(node.queryKind, query?.items ?? []);
       scope[node.variableName] = value;
       variables.push({ name: node.variableName, source: `${node.queryKind} ${node.id}`, value });
@@ -1858,7 +1889,7 @@ export class EpPaperEditorApp extends LitElement {
         scope[dateName] = dateValue;
         variables.push({ name: dateName, source: `${node.queryKind} ${node.id}`, value: dateValue });
       }
-      this.collectWidgetPreviewVariables(node.child, scope, variables);
+      this.collectWidgetPreviewVariables(node.child, scope, variables, renderData);
       return;
     }
     if (node.type === "foreach") {
@@ -1867,30 +1898,30 @@ export class EpPaperEditorApp extends LitElement {
       const nested = { ...scope, [node.itemAlias]: first ?? null, [node.indexAlias]: 0 };
       variables.push({ name: node.itemAlias, source: `foreach ${node.id}`, value: first ?? null });
       variables.push({ name: node.indexAlias, source: `foreach ${node.id}`, value: 0 });
-      this.collectWidgetPreviewVariables(node.child, nested, variables);
+      this.collectWidgetPreviewVariables(node.child, nested, variables, renderData);
       return;
     }
     if (node.type === "script") {
       for (const key of Object.keys(node.bindings ?? {})) {
         variables.push({ name: key, source: `script ${node.id}`, value: node.bindings?.[key] ?? "" });
       }
-      this.collectWidgetPreviewVariables(node.child, scope, variables);
+      this.collectWidgetPreviewVariables(node.child, scope, variables, renderData);
       return;
     }
     if (node.type === "if_else") {
-      this.collectWidgetPreviewVariables(node.thenChild, scope, variables);
-      this.collectWidgetPreviewVariables(node.elseChild, scope, variables);
+      this.collectWidgetPreviewVariables(node.thenChild, scope, variables, renderData);
+      this.collectWidgetPreviewVariables(node.elseChild, scope, variables, renderData);
       return;
     }
     if (node.type === "stack" || node.type === "zstack") {
       for (const child of node.children ?? []) {
-        this.collectWidgetPreviewVariables(child, scope, variables);
+        this.collectWidgetPreviewVariables(child, scope, variables, renderData);
       }
       return;
     }
     if (node.type === "grid") {
       for (const child of node.children ?? []) {
-        this.collectWidgetPreviewVariables(child.node, scope, variables);
+        this.collectWidgetPreviewVariables(child.node, scope, variables, renderData);
       }
     }
   }
@@ -2158,6 +2189,9 @@ export class EpPaperEditorApp extends LitElement {
       widgetDefinitions: [...(this.project.widgetDefinitions ?? []), definition]
     });
     this.selectedWidgetDefinitionId = definition.id;
+    this.widgetPreviewRenderData = null;
+    this.widgetPreviewDefinitionId = "";
+    this.widgetPreviewDataMessage = "";
   }
 
   private updateWidgetDefinition(id: string, updater: (definition: WidgetDefinition) => WidgetDefinition): void {
@@ -3016,6 +3050,9 @@ export class EpPaperEditorApp extends LitElement {
                 <div class="row">
                   <button class="item-button ${definition.id === this.selectedWidgetDefinitionId ? "active" : ""}" @click=${() => {
                     this.selectedWidgetDefinitionId = definition.id;
+                    this.widgetPreviewRenderData = null;
+                    this.widgetPreviewDefinitionId = "";
+                    this.widgetPreviewDataMessage = "";
                     void this.refreshPreview();
                   }}>${definition.name}</button>
                 </div>

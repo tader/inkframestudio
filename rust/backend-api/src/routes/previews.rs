@@ -34,8 +34,9 @@ pub(crate) async fn live_data_preview(
     Json(body): Json<Value>,
 ) -> ApiResult<Value> {
     let project = load_project_for_request(&state, &project_id, Some(&body)).await?;
+    let layout_id = body.get("layoutId").and_then(Value::as_str);
     Ok(Json(
-        resolve_project_render_data_value(&state, &project, None)
+        resolve_project_render_data_value(&state, &project, layout_id)
             .await?
             .0,
     ))

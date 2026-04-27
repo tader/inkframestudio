@@ -280,13 +280,13 @@ export function forceAssignmentUpdate(
   });
 }
 
-export function fetchLiveData(projectId: string, project?: Project): Promise<RenderData> {
+export function fetchLiveData(projectId: string, project?: Project, layoutId?: string): Promise<RenderData> {
   if (!project) {
     return requestJson(`${V2_API_BASE}/projects/${projectId}/live-data`);
   }
   return requestJson(`${V2_API_BASE}/projects/${projectId}/live-data`, {
     method: "POST",
-    body: JSON.stringify({ project })
+    body: JSON.stringify({ project, layoutId })
   });
 }
 

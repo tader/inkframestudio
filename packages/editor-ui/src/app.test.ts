@@ -840,6 +840,7 @@ describe("epaper editor app", () => {
 
     const appState = element as unknown as TestEditorElement & {
       widgetPreviewRenderData: unknown;
+      widgetPreviewDefinitionId: string;
     };
     Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Add compound"))?.click();
     await flush();
@@ -882,6 +883,7 @@ describe("epaper editor app", () => {
         }
       }
     };
+    appState.widgetPreviewDefinitionId = widget?.id ?? "";
     appState.requestUpdate();
     await flush();
     await element.updateComplete;
@@ -890,6 +892,91 @@ describe("epaper editor app", () => {
     expect(element.shadowRoot.textContent).toContain("weather");
     expect(element.shadowRoot.textContent).toContain("16.6");
     expect(element.shadowRoot.textContent).toContain("cloudy");
+  });
+
+  it("keeps widget preview variables scoped to selected widget", async () => {
+    window.location.hash = "#/widgets";
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    const appState = element as unknown as TestEditorElement & {
+      widgetPreviewRenderData: unknown;
+      widgetPreviewDefinitionId: string;
+    };
+
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Add compound"))?.click();
+    await flush();
+    await element.updateComplete;
+    const firstWidget = appState.project.widgetDefinitions?.find((entry) => entry.id === appState.selectedWidgetDefinitionId);
+    if (firstWidget?.rootNode) {
+      appState.setRootNode(firstWidget, {
+        ...firstWidget.rootNode,
+        children: [{
+          id: "weather-query-under-test",
+          type: "data_query",
+          queryKind: "weather_forecast",
+          variableName: "weather",
+          sourceProviderInstanceId: "open-meteo-default",
+          child: { id: "first-text", type: "primitive_instance", primitiveType: "text", props: { text: "first" } }
+        }]
+      });
+    }
+    appState.widgetPreviewRenderData = {
+      now: "",
+      entities: {},
+      queries: {},
+      metaQueries: {
+        "weather-query-under-test": {
+          kind: "weather_forecast",
+          items: [{ temperature: "16.6" }]
+        }
+      }
+    };
+    appState.widgetPreviewDefinitionId = firstWidget?.id ?? "";
+    expect(appState.widgetPreviewDefinitionId).toBe(firstWidget?.id);
+    appState.requestUpdate();
+    await flush();
+    await element.updateComplete;
+    expect(element.shadowRoot.textContent).toContain("16.6");
+
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Add compound"))?.click();
+    await flush();
+    await element.updateComplete;
+    const secondWidget = appState.project.widgetDefinitions?.find((entry) => entry.id === appState.selectedWidgetDefinitionId);
+    expect(secondWidget?.id).not.toBe(firstWidget?.id);
+    expect(element.shadowRoot.textContent).toContain("Preview Variables");
+    expect(element.shadowRoot.textContent).not.toContain("16.6");
+  });
+
+  it("debounces widget preview refresh after property edits", async () => {
+    window.location.hash = "#/widgets";
+    const fetchMock = vi.mocked(globalThis.fetch);
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Add compound"))?.click();
+    await flush();
+    await element.updateComplete;
+
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockClear();
+      setInputValue(inputInLabel<HTMLInputElement>(element.shadowRoot, "Name", "input"), "Debounced Widget");
+      await element.updateComplete;
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/layout-preview`))).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/layout-preview`))).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/layout-preview`))).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows preview theme selector on widget page", async () => {
