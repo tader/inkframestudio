@@ -9,7 +9,7 @@ use crate::{
     app::AppState,
     list_font_options, load_project_for_request, load_user_font_data,
     native_font_specimens::render_font_specimens_value,
-    native_layout_preview::try_render_layout_preview_value,
+    native_layout_preview::{try_render_layout_preview_value, unsupported_layout_preview_reason},
     native_theme_preview::render_theme_preview_value,
     services::{render_data::resolve_project_render_data_value, scheduler::render_assigned_live},
     ApiError, ApiResult,
@@ -38,9 +38,21 @@ pub(crate) async fn layout_preview(
     let (data, _message) = resolve_project_render_data_value(&state, &project, layout_id).await?;
     let user_fonts = load_user_font_data(&state).await?;
     let Some(native) = try_render_layout_preview_value(&project, &user_fonts, &body, &data)? else {
-        return Err(ApiError::bad_request(
-            "Native renderer does not support requested layout preview",
-        ));
+        let reason = unsupported_layout_preview_reason(&project, &body);
+        let layout_id = body
+            .get("layoutId")
+            .and_then(Value::as_str)
+            .unwrap_or("<missing>");
+        let display_type_id = body
+            .get("displayTypeId")
+            .and_then(Value::as_str)
+            .unwrap_or("<none>");
+        println!(
+            "[inkframe:preview] layout_preview unsupported project_id={project_id} layout_id={layout_id} display_type_id={display_type_id} reason={reason}"
+        );
+        return Err(ApiError::bad_request(format!(
+            "Native renderer does not support requested layout preview: {reason}"
+        )));
     };
     Ok(Json(native))
 }

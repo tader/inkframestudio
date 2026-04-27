@@ -1068,7 +1068,16 @@ fn node_supported(node: &Node) -> bool {
             }) && children.iter().all(|child| node_supported(&child.node))
         }
         Node::DataQuery(node) => {
-            if unsupported_border(&node.style) || node.query_kind != "calendar_events" {
+            if unsupported_border(&node.style)
+                || !matches!(
+                    node.query_kind.as_str(),
+                    "calendar_events"
+                        | "entity_states"
+                        | "weather_forecast"
+                        | "forecast"
+                        | "open_meteo_forecast"
+                )
+            {
                 return false;
             }
             matches!(
@@ -1272,6 +1281,151 @@ fn node_supported_with_project(project: &ProjectView, node: &Node) -> bool {
     }
 }
 
+pub(crate) fn unsupported_layout_preview_reason(project_value: &Value, body: &Value) -> String {
+    let Ok(project) = serde_json::from_value::<ProjectView>(project_value.clone()) else {
+        return "project JSON could not be parsed by native renderer".into();
+    };
+    let Some(layout_id) = body.get("layoutId").and_then(Value::as_str) else {
+        return "layoutId missing".into();
+    };
+    let Some(layout) = project
+        .layout_definitions
+        .iter()
+        .find(|layout| layout.id == layout_id)
+    else {
+        return format!("layout not found: {layout_id}");
+    };
+    let Some(root) = layout.root_node.as_ref() else {
+        return format!("layout {layout_id} has no root node");
+    };
+    unsupported_node_reason(&project, root, "root")
+        .map(|reason| format!("layout {layout_id} unsupported at {reason}"))
+        .unwrap_or_else(|| "layout rejected by native renderer for an unknown reason".into())
+}
+
+fn unsupported_node_reason(project: &ProjectView, node: &Node, path: &str) -> Option<String> {
+    let child_reason = match node {
+        Node::Stack { children, .. } | Node::Zstack { children, .. } => {
+            children.iter().enumerate().find_map(|(index, child)| {
+                unsupported_node_reason(project, child, &format!("{path}.children[{index}]"))
+            })
+        }
+        Node::Grid { children, .. } => children.iter().enumerate().find_map(|(index, child)| {
+            unsupported_node_reason(project, &child.node, &format!("{path}.children[{index}]"))
+        }),
+        Node::CompoundRef(node) => {
+            let Some(definition) = project.widget_definitions.iter().find(|definition| {
+                definition.id == node.definition_id && definition.kind == "compound"
+            }) else {
+                return Some(format!(
+                    "{path}: missing compound definition {}",
+                    node.definition_id
+                ));
+            };
+            let Some(root) = definition.root_node.as_ref() else {
+                return Some(format!(
+                    "{path}: compound {} has no root node",
+                    node.definition_id
+                ));
+            };
+            unsupported_node_reason(
+                project,
+                root,
+                &format!("{path}.compound({})", node.definition_id),
+            )
+        }
+        Node::DataQuery(node) => node
+            .child
+            .as_deref()
+            .and_then(|child| unsupported_node_reason(project, child, &format!("{path}.child"))),
+        Node::ForEach(node) => node
+            .child
+            .as_deref()
+            .and_then(|child| unsupported_node_reason(project, child, &format!("{path}.template"))),
+        Node::Script(node) => node
+            .child
+            .as_deref()
+            .and_then(|child| unsupported_node_reason(project, child, &format!("{path}.child"))),
+        Node::IfElse(node) => node
+            .then_child
+            .as_deref()
+            .and_then(|child| unsupported_node_reason(project, child, &format!("{path}.then")))
+            .or_else(|| {
+                node.else_child.as_deref().and_then(|child| {
+                    unsupported_node_reason(project, child, &format!("{path}.else"))
+                })
+            }),
+        _ => None,
+    };
+    if child_reason.is_some() {
+        return child_reason;
+    }
+    unsupported_node_self_reason(node).map(|reason| format!("{path}: {reason}"))
+}
+
+fn unsupported_node_self_reason(node: &Node) -> Option<String> {
+    if node_supported(node) {
+        return None;
+    }
+    match node {
+        Node::Unsupported => Some("unknown node type".into()),
+        Node::Stack { .. } | Node::Zstack { .. } | Node::Grid { .. } => None,
+        Node::CompoundRef(_) => None,
+        Node::IfElse(_) => None,
+        Node::DataQuery(node) if unsupported_border(&node.style) => Some(format!(
+            "data query {} uses unsupported border style",
+            node.id
+        )),
+        Node::DataQuery(node)
+            if !matches!(
+                node.query_kind.as_str(),
+                "calendar_events"
+                    | "entity_states"
+                    | "weather_forecast"
+                    | "forecast"
+                    | "open_meteo_forecast"
+            ) =>
+        {
+            Some(format!("unsupported data query kind {}", node.query_kind))
+        }
+        Node::DataQuery(node) if node.child.is_none() => {
+            Some(format!("data query {} has no child node", node.id))
+        }
+        Node::DataQuery(_) => None,
+        Node::PrimitiveInstance { primitive_type, .. }
+            if !matches!(primitive_type.as_str(), "text" | "number" | "line" | "icon") =>
+        {
+            Some(format!("unsupported primitive type {primitive_type}"))
+        }
+        Node::PrimitiveInstance {
+            primitive_type,
+            props,
+            ..
+        } if primitive_type == "icon"
+            && font_awesome_svg_path(props.icon.as_deref().unwrap_or(DEFAULT_ICON_ID))
+                .is_none() =>
+        {
+            Some(format!(
+                "unsupported icon {}",
+                props.icon.as_deref().unwrap_or(DEFAULT_ICON_ID)
+            ))
+        }
+        Node::Script(node) if !node.bindings.values().all(|value| binding_supported(value)) => {
+            Some(format!(
+                "script {} has unsupported binding template",
+                node.id
+            ))
+        }
+        Node::Script(node) if node.child.is_none() => {
+            Some(format!("script {} has no child node", node.id))
+        }
+        Node::ForEach(node) if node.child.is_none() => {
+            Some(format!("foreach {} has no template child", node.id))
+        }
+        _ => Some(format!("unsupported node shape: {node:?}")),
+    }
+}
+
 fn simple_identifier(value: &str) -> bool {
     let mut chars = value.chars();
     match chars.next() {
@@ -1407,6 +1561,18 @@ fn stringify_scope_value(value: &Value) -> String {
         Value::Bool(boolean) => boolean.to_string(),
         other => serde_json::to_string(other).unwrap_or_default(),
     }
+}
+
+fn normalize_query_items(query_kind: &str, items: Value) -> Value {
+    if query_kind == "weather_forecast"
+        || query_kind == "forecast"
+        || query_kind == "open_meteo_forecast"
+    {
+        if let Some(first) = items.as_array().and_then(|items| items.first()).cloned() {
+            return first;
+        }
+    }
+    items
 }
 
 fn quantize_number(value: f64, step: f64) -> f64 {
@@ -2486,6 +2652,7 @@ fn measure_node(
                 .and_then(|value| value.get("items"))
                 .cloned()
                 .unwrap_or_else(|| Value::Array(Vec::new()));
+            let items = normalize_query_items(&node.query_kind, items);
             let date = scope
                 .get("metaQueries")
                 .and_then(|value| value.get(&node.id))
@@ -2495,12 +2662,14 @@ fn measure_node(
                 .unwrap_or(Value::String(String::new()));
             if let Some(object) = nested_scope.as_object_mut() {
                 object.insert(node.variable_name.clone(), items);
-                object.insert(
-                    node.date_variable_name
-                        .clone()
-                        .unwrap_or_else(|| "date".into()),
-                    date,
-                );
+                if node.query_kind == "calendar_events" {
+                    object.insert(
+                        node.date_variable_name
+                            .clone()
+                            .unwrap_or_else(|| "date".into()),
+                        date,
+                    );
+                }
             }
             node.child
                 .as_deref()
@@ -3059,6 +3228,7 @@ fn render_node(
                 .and_then(|value| value.get("items"))
                 .cloned()
                 .unwrap_or_else(|| Value::Array(Vec::new()));
+            let items = normalize_query_items(&node.query_kind, items);
             let date = scope
                 .get("metaQueries")
                 .and_then(|value| value.get(&node.id))
@@ -3068,12 +3238,14 @@ fn render_node(
                 .unwrap_or(Value::String(String::new()));
             if let Some(object) = nested_scope.as_object_mut() {
                 object.insert(node.variable_name.clone(), items);
-                object.insert(
-                    node.date_variable_name
-                        .clone()
-                        .unwrap_or_else(|| "date".into()),
-                    date,
-                );
+                if node.query_kind == "calendar_events" {
+                    object.insert(
+                        node.date_variable_name
+                            .clone()
+                            .unwrap_or_else(|| "date".into()),
+                        date,
+                    );
+                }
             }
             if let Some(child) = node.child.as_deref() {
                 render_node(canvas, project, &nested_scope, child, frame, user_fonts)?;
@@ -3697,6 +3869,76 @@ mod tests {
                 "now": "2026-04-24T22:00:00+02:00"
             }),
             "layout-climate-native",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(rendered.is_some());
+        assert!(rendered.unwrap().hash.starts_with("native-layout:"));
+    }
+
+    #[test]
+    fn render_layout_preview_handles_weather_data_query() {
+        let project_value = json!({
+            "id": "demo",
+            "name": "Demo",
+            "locale": "en-US",
+            "fontPresets": { "tiny": 8, "normal": 12, "header": 24 },
+            "themes": [{
+                "id": "classic-outline",
+                "text": { "title": "fg", "body": "fg", "value": "fg" }
+            }],
+            "displayTypes": [{
+                "id": "tri296x128-red",
+                "width": 296,
+                "height": 128,
+                "palette": { "bg": "#ffffff", "fg": "#000000", "accent": "#ff0000" }
+            }],
+            "layoutDefinitions": [{
+                "id": "layout-weather",
+                "displayTypeId": "tri296x128-red",
+                "rootNode": {
+                    "id": "query-weather",
+                    "type": "data_query",
+                    "queryKind": "weather_forecast",
+                    "variableName": "weather",
+                    "sourceProviderInstanceId": "open-meteo-default",
+                    "width": { "mode": "fill" },
+                    "height": { "mode": "fill" },
+                    "style": { "borderToken": "none", "paddingPx": 0 },
+                    "child": {
+                        "id": "weather-text",
+                        "type": "primitive_instance",
+                        "primitiveType": "text",
+                        "width": { "mode": "fill" },
+                        "height": { "mode": "fill" },
+                        "style": { "borderToken": "none", "paddingPx": 4 },
+                        "bindings": {},
+                        "props": {
+                            "text": "{{weather.temperature}}",
+                            "autoFit": true,
+                            "horizontalAlign": "left",
+                            "verticalAlign": "top",
+                            "overflow": "wrap"
+                        }
+                    }
+                }
+            }]
+        });
+        let rendered = render_layout_preview(
+            &project_value,
+            &json!({}),
+            &json!({
+                "metaQueries": {
+                    "query-weather": {
+                        "items": [{ "temperature": "16.6" }]
+                    }
+                },
+                "now": "2026-04-24T22:00:00+02:00"
+            }),
+            "layout-weather",
             None,
             None,
             None,

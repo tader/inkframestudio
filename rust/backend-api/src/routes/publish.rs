@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use crate::{
     app::AppState,
     load_project_for_request, load_user_font_data,
-    native_layout_preview::try_render_layout_preview_value,
+    native_layout_preview::{try_render_layout_preview_value, unsupported_layout_preview_reason},
     read_settings,
     services::{
         render_data::resolve_project_render_data_value,
@@ -115,7 +115,17 @@ pub(crate) async fn publish_project(
         &data,
     )?
     .ok_or_else(|| {
-        ApiError::bad_request("Native renderer does not support requested publish render")
+        let reason = unsupported_layout_preview_reason(&project, &render_body);
+        let layout_id = render_body
+            .get("layoutId")
+            .and_then(Value::as_str)
+            .unwrap_or("<missing>");
+        println!(
+            "[inkframe:publish] render unsupported project_id={project_id} layout_id={layout_id} reason={reason}"
+        );
+        ApiError::bad_request(format!(
+            "Native renderer does not support requested publish render: {reason}"
+        ))
     })?;
     let hash = rendered
         .get("hash")
