@@ -333,10 +333,12 @@ export interface SpacerNode extends LayoutNodeBase {
 
 export interface DataQueryLayoutNode extends LayoutNodeBase {
   type: "data_query";
-  queryKind: "calendar_events" | "open_meteo_forecast" | "forecast" | (string & {});
+  queryKind: "calendar_events" | "entity_states" | "weather_forecast" | "open_meteo_forecast" | "forecast" | (string & {});
+  sourceProviderInstanceId?: string;
   variableName: string;
   dateVariableName?: string;
   calendarEntityIds: string[];
+  entityIds?: string[];
   offsetDays: number;
   rolloverTime?: string;
   locationId?: string;

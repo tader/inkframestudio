@@ -8,7 +8,10 @@ use crate::providers::registry::{
 };
 use crate::{
     app::AppState,
-    services::{http_cache::cached_get_json, render_data::collect_data_query_nodes},
+    services::{
+        http_cache::cached_get_json,
+        render_data::{collect_data_query_nodes, data_query_source_matches},
+    },
     ApiError, EntityCatalogEntry, PlaceSearchEntry,
 };
 
@@ -86,6 +89,7 @@ pub fn descriptor() -> ProviderDescriptor {
             "place_search".into(),
             "resolve_render_data".into(),
             "generic_data_queries".into(),
+            "weather_forecast".into(),
         ],
         config_fields: vec![
             field("defaultLatitude", "Default latitude", "52.0000", json!("")),
@@ -461,8 +465,11 @@ impl SourceProvider for OpenMeteoProvider {
         for node in collect_data_query_nodes(project) {
             if !matches!(
                 node.get("queryKind").and_then(Value::as_str),
-                Some("open_meteo_forecast" | "forecast")
+                Some("weather_forecast" | "open_meteo_forecast" | "forecast")
             ) {
+                continue;
+            }
+            if !data_query_source_matches(&node, &instance.id) {
                 continue;
             }
             let id = node.get("id").and_then(Value::as_str).unwrap_or_default();
@@ -521,7 +528,7 @@ impl SourceProvider for OpenMeteoProvider {
                                 "raw": forecast
                             }],
                             "meta": {
-                                "queryKind": "open_meteo_forecast",
+                                "queryKind": "weather_forecast",
                                 "variableName": node.get("variableName").and_then(Value::as_str).unwrap_or("weather"),
                                 "latitude": latitude,
                                 "longitude": longitude,

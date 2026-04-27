@@ -29,7 +29,7 @@ API calls are cached for 10 minutes per URL. This cache is generic and used by t
 
 ## Query Forecast Data
 
-Forecasts are queried through the generic `data_query` layout node. The Open-Meteo implementation uses `queryKind: "open_meteo_forecast"`.
+Forecasts are queried through the generic `data_query` layout node. The Open-Meteo implementation uses `queryKind: "weather_forecast"`.
 
 Minimal query:
 
@@ -37,7 +37,7 @@ Minimal query:
 {
   "type": "data_query",
   "id": "weather-now",
-  "queryKind": "open_meteo_forecast",
+  "queryKind": "weather_forecast",
   "variableName": "weather",
   "locationId": "den-hoorn",
   "current": ["temperature_2m", "weather_code"],
@@ -75,7 +75,7 @@ You can also bypass configured places and pass coordinates directly:
 {
   "type": "data_query",
   "id": "weather-now",
-  "queryKind": "open_meteo_forecast",
+  "queryKind": "weather_forecast",
   "variableName": "weather",
   "latitude": 52.002,
   "longitude": 4.331,

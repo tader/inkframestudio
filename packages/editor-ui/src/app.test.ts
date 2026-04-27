@@ -32,9 +32,18 @@ function setInputValue(input: HTMLInputElement | HTMLSelectElement | HTMLTextAre
   input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
 }
 
+function setSelectValue(select: HTMLSelectElement, value: string): void {
+  select.value = value;
+  select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+}
+
 type TestLayoutNode = {
   id: string;
   type: string;
+  queryKind?: string;
+  sourceProviderInstanceId?: string;
+  entityIds?: string[];
+  forecastDays?: number;
   primitiveType?: string;
   children?: TestLayoutNode[];
   thenChild?: TestLayoutNode;
@@ -58,6 +67,7 @@ type TestEditorElement = HTMLElement & {
   selectedNodeId: string;
   selectNode: (nodeId: string) => void;
   setRootNode: (owner: TestWidgetDefinition, rootNode: TestLayoutNode) => void;
+  createChildNode: (owner: TestWidgetDefinition, parentId: string, kind: string) => void;
   requestUpdate: () => void;
 };
 
@@ -91,7 +101,7 @@ describe("epaper editor app", () => {
               id: "home-assistant",
               label: "Home Assistant",
               domain: "source",
-              capabilities: ["test_connection", "entity_catalog"],
+              capabilities: ["test_connection", "entity_catalog", "entity_states", "calendar_events", "meta_calendar_events"],
               configFields: [
                 { key: "mode", label: "Mode", kind: "select", options: [{ value: "custom", label: "Custom host" }, { value: "supervisor", label: "Use local HA" }], defaultValue: "custom" },
                 { key: "host", label: "Host", kind: "text", defaultValue: "" },
@@ -104,7 +114,7 @@ describe("epaper editor app", () => {
               id: "open-meteo",
               label: "Open-Meteo",
               domain: "source",
-              capabilities: ["test_connection", "entity_catalog", "place_search", "resolve_render_data", "generic_data_queries"],
+              capabilities: ["test_connection", "entity_catalog", "place_search", "resolve_render_data", "generic_data_queries", "weather_forecast"],
               configFields: [
                 { key: "defaultLatitude", label: "Default latitude", kind: "text", defaultValue: "" },
                 { key: "defaultLongitude", label: "Default longitude", kind: "text", defaultValue: "" },
@@ -157,6 +167,21 @@ describe("epaper editor app", () => {
             config: {
               url: "http://192.168.1.170",
               defaultTestDisplayMac: "00000219BC483B18"
+            }
+          },
+          {
+            id: "open-meteo-default",
+            providerId: "open-meteo",
+            name: "Open-Meteo",
+            enabled: true,
+            config: {
+              defaultLatitude: "",
+              defaultLongitude: "",
+              timezone: "auto",
+              currentVariables: "temperature_2m,weather_code",
+              hourlyVariables: "temperature_2m,precipitation_probability,weather_code",
+              dailyVariables: "temperature_2m_max,temperature_2m_min,weather_code",
+              placesJson: "[]"
             }
           },
           {
@@ -215,7 +240,10 @@ describe("epaper editor app", () => {
       }
       if (url.endsWith("/api/v2/provider-instances/home-assistant-default/entities")) {
         return new Response(
-          JSON.stringify([{ entityId: "sensor.temp", friendlyName: "Temp", domain: "sensor", unit: "C" }]),
+          JSON.stringify([
+            { entityId: "calendar.family", friendlyName: "Family Calendar", domain: "calendar" },
+            { entityId: "sensor.temp", friendlyName: "Temp", domain: "sensor", unit: "C" }
+          ]),
           { status: 200 }
         );
       }
@@ -719,6 +747,73 @@ describe("epaper editor app", () => {
     expect(thenPlaceholder).toBe("then branch placeholder");
     expect(elsePlaceholders).toEqual(["else first placeholder", "else second placeholder"]);
     expect(new Set([thenPlaceholder, ...(elsePlaceholders ?? [])]).size).toBe(3);
+  });
+
+  it("adapts data query controls for calendar, entity, and weather sources", async () => {
+    window.location.hash = "#/widgets";
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    const appState = element as unknown as TestEditorElement;
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Add compound"))?.click();
+    await flush();
+    await element.updateComplete;
+
+    const widget = appState.project.widgetDefinitions?.find((entry) => entry.id === appState.selectedWidgetDefinitionId);
+    expect(widget?.rootNode?.type).toBe("stack");
+    appState.createChildNode(widget as TestWidgetDefinition, widget?.rootNode?.id ?? "", "data_query");
+    await flush();
+    await element.updateComplete;
+
+    const dataQuery = () => appState.project.widgetDefinitions
+      ?.find((entry) => entry.id === appState.selectedWidgetDefinitionId)
+      ?.rootNode?.children?.find((node) => node.type === "data_query");
+
+    expect(inputInLabel<HTMLSelectElement>(element.shadowRoot, "Query type", "select").value).toBe("calendar_events");
+    expect(inputInLabel<HTMLSelectElement>(element.shadowRoot, "Source", "select").textContent).toContain("Home Assistant");
+    expect(element.shadowRoot.textContent).toContain("Calendar entities");
+    expect(element.shadowRoot.textContent).toContain("Family Calendar");
+    expect(element.shadowRoot.textContent).not.toContain("Forecast days");
+
+    setSelectValue(inputInLabel<HTMLSelectElement>(element.shadowRoot, "Query type", "select"), "entity_states");
+    await flush();
+    await element.updateComplete;
+
+    expect(dataQuery()?.queryKind).toBe("entity_states");
+    expect(dataQuery()?.sourceProviderInstanceId).toBe("home-assistant-default");
+    expect(element.shadowRoot.textContent).toContain("Entities");
+    expect(element.shadowRoot.textContent).toContain("Temp");
+    expect(element.shadowRoot.textContent).not.toContain("Calendar entities");
+    expect(element.shadowRoot.textContent).not.toContain("Forecast days");
+
+    const entitySelect = inputInLabel<HTMLSelectElement>(element.shadowRoot, "Entities", "select");
+    Array.from(entitySelect.options).forEach((option) => {
+      option.selected = option.value === "sensor.temp";
+    });
+    entitySelect.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    await flush();
+    await element.updateComplete;
+    expect(dataQuery()?.entityIds).toEqual(["sensor.temp"]);
+
+    setSelectValue(inputInLabel<HTMLSelectElement>(element.shadowRoot, "Query type", "select"), "weather_forecast");
+    await flush();
+    await element.updateComplete;
+
+    expect(dataQuery()?.queryKind).toBe("weather_forecast");
+    expect(dataQuery()?.sourceProviderInstanceId).toBe("open-meteo-default");
+    expect(inputInLabel<HTMLSelectElement>(element.shadowRoot, "Source", "select").textContent).toContain("Open-Meteo");
+    expect(element.shadowRoot.textContent).toContain("Location id");
+    expect(element.shadowRoot.textContent).toContain("Current variables");
+    expect(element.shadowRoot.textContent).toContain("Forecast days");
+    expect(element.shadowRoot.textContent).not.toContain("Calendar entities");
+    expect(element.shadowRoot.textContent).not.toContain("Entities");
+
+    setInputValue(inputInLabel<HTMLInputElement>(element.shadowRoot, "Forecast days", "input"), "3");
+    await flush();
+    await element.updateComplete;
+    expect(dataQuery()?.forecastDays).toBe(3);
   });
 
   it("shows preview theme selector on widget page", async () => {

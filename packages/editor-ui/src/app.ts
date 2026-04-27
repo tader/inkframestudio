@@ -190,9 +190,11 @@ function defaultDataQueryNode(): LayoutNode {
     id: nextId("node"),
     type: "data_query",
     queryKind: "calendar_events",
+    sourceProviderInstanceId: "",
     variableName: "events",
     dateVariableName: "date",
     calendarEntityIds: [],
+    entityIds: [],
     offsetDays: 0,
     width: defaultSizeSpec("fill"),
     height: defaultSizeSpec("fill"),
@@ -2306,6 +2308,38 @@ export class EpPaperEditorApp extends LitElement {
     }));
   }
 
+  private updateDataQueryKind(owner: { id: string; rootNode?: LayoutNode }, nodeId: string, queryKind: string): void {
+    this.updateRootNode(owner, (root) => updateNode(root, nodeId, (current) => {
+      if (current.type !== "data_query") {
+        return current;
+      }
+      const provider = this.sourceProviderOptionsForQuery(queryKind)[0];
+      return {
+        ...current,
+        queryKind: queryKind as typeof current.queryKind,
+        sourceProviderInstanceId: provider?.id ?? "",
+        variableName:
+          queryKind === "calendar_events"
+            ? "events"
+            : queryKind === "entity_states"
+              ? "states"
+              : queryKind === "weather_forecast"
+                ? "weather"
+                : current.variableName,
+        dateVariableName: queryKind === "calendar_events" ? (current.dateVariableName ?? "date") : current.dateVariableName,
+        calendarEntityIds: queryKind === "calendar_events" ? current.calendarEntityIds : [],
+        entityIds: queryKind === "entity_states" ? (current.entityIds ?? []) : [],
+        offsetDays: queryKind === "calendar_events" ? current.offsetDays : 0
+      };
+    }));
+  }
+
+  private updateDataQuerySource(owner: { id: string; rootNode?: LayoutNode }, nodeId: string, sourceProviderInstanceId: string): void {
+    this.updateRootNode(owner, (root) => updateNode(root, nodeId, (current) => (
+      current.type === "data_query" ? { ...current, sourceProviderInstanceId } : current
+    )));
+  }
+
   private removeScriptBinding(owner: { id: string; rootNode?: LayoutNode }, nodeId: string, bindingKey: string): void {
     this.updateRootNode(owner, (root) => updateNode(root, nodeId, (current) => {
       if (current.type !== "script") {
@@ -2364,6 +2398,22 @@ export class EpPaperEditorApp extends LitElement {
 
   private sourceProviderOptions(): ProviderInstance[] {
     return this.providerInstancesByDomain("source").filter((instance) => instance.enabled);
+  }
+
+  private sourceProviderOptionsForQuery(queryKind: string): ProviderInstance[] {
+    const accepts = (capabilities: string[]): boolean => {
+      if (queryKind === "calendar_events") {
+        return capabilities.includes("calendar_events") || capabilities.includes("meta_calendar_events");
+      }
+      if (queryKind === "entity_states") {
+        return capabilities.includes("entity_states") || capabilities.includes("entity_catalog");
+      }
+      if (queryKind === "weather_forecast" || queryKind === "forecast" || queryKind === "open_meteo_forecast") {
+        return capabilities.includes("weather_forecast") || capabilities.includes("generic_data_queries");
+      }
+      return capabilities.includes("generic_data_queries") || capabilities.includes("resolve_render_data");
+    };
+    return this.sourceProviderOptions().filter((instance) => accepts(this.providerDescriptor(instance.providerId)?.capabilities ?? []));
   }
 
   private createProviderDraft(providerId: string): void {
@@ -3583,42 +3633,95 @@ export class EpPaperEditorApp extends LitElement {
             `
           : nothing}
         ${node.type === "data_query"
-          ? html`
+          ? (() => {
+              const queryKind = String(node.queryKind ?? "calendar_events");
+              const sourceOptions = this.sourceProviderOptionsForQuery(queryKind);
+              const selectedSourceId = node.sourceProviderInstanceId || sourceOptions[0]?.id || "";
+              return html`
               <label>
-                Query kind
-                <input .value=${node.queryKind} disabled />
+                Query type
+                <select .value=${queryKind} @change=${(event: Event) => this.updateDataQueryKind(owner, node.id, (event.target as HTMLSelectElement).value)}>
+                  <option value="calendar_events">Calendar events</option>
+                  <option value="entity_states">Entity states</option>
+                  <option value="weather_forecast">Weather forecast</option>
+                </select>
+              </label>
+              <label>
+                Source
+                <select .value=${selectedSourceId} @change=${(event: Event) => this.updateDataQuerySource(owner, node.id, (event.target as HTMLSelectElement).value)}>
+                  <option value="">Default source</option>
+                  ${sourceOptions.map((instance) => html`<option value=${instance.id}>${instance.name}</option>`)}
+                </select>
               </label>
               <label>
                 Variable name
                 <input .value=${node.variableName} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), variableName: (event.target as HTMLInputElement).value } )))} />
               </label>
-              <label>
-                Date variable name
-                <input .value=${node.dateVariableName ?? "date"} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), dateVariableName: (event.target as HTMLInputElement).value } )))} />
-              </label>
-              <label>
-                Offset days from local midnight
-                <input type="number" .value=${String(node.offsetDays ?? 0)} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), offsetDays: Number((event.target as HTMLInputElement).value) } )))} />
-              </label>
-              <label>
-                Rollover time
-                <input placeholder="23:00" .value=${node.rolloverTime ?? ""} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), rolloverTime: (event.target as HTMLInputElement).value || undefined } )))} />
-              </label>
-              <label>
-                Calendar entities
-                <select
-                  multiple
-                  size="6"
-                  @change=${(event: Event) => {
-                    const selected = Array.from((event.target as HTMLSelectElement).selectedOptions).map((option) => option.value);
-                    this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), calendarEntityIds: selected } )));
-                  }}
-                >
-                  ${this.entityCatalog
-                    .filter((entry) => entry.domain === "calendar")
-                    .map((entry) => html`<option value=${entry.entityId} ?selected=${node.calendarEntityIds.includes(entry.entityId)}>${entry.friendlyName}</option>`)}
-                </select>
-              </label>
+              ${queryKind === "calendar_events" ? html`
+                <label>
+                  Date variable name
+                  <input .value=${node.dateVariableName ?? "date"} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), dateVariableName: (event.target as HTMLInputElement).value } )))} />
+                </label>
+                <label>
+                  Offset days from local midnight
+                  <input type="number" .value=${String(node.offsetDays ?? 0)} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), offsetDays: Number((event.target as HTMLInputElement).value) } )))} />
+                </label>
+                <label>
+                  Rollover time
+                  <input placeholder="23:00" .value=${node.rolloverTime ?? ""} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), rolloverTime: (event.target as HTMLInputElement).value || undefined } )))} />
+                </label>
+                <label>
+                  Calendar entities
+                  <select
+                    multiple
+                    size="6"
+                    @change=${(event: Event) => {
+                      const selected = Array.from((event.target as HTMLSelectElement).selectedOptions).map((option) => option.value);
+                      this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), calendarEntityIds: selected } )));
+                    }}
+                  >
+                    ${this.entityCatalog
+                      .filter((entry) => entry.domain === "calendar")
+                      .map((entry) => html`<option value=${entry.entityId} ?selected=${node.calendarEntityIds.includes(entry.entityId)}>${entry.friendlyName}</option>`)}
+                  </select>
+                </label>
+              ` : nothing}
+              ${queryKind === "entity_states" ? html`
+                <label>
+                  Entities
+                  <select
+                    multiple
+                    size="8"
+                    @change=${(event: Event) => {
+                      const selected = Array.from((event.target as HTMLSelectElement).selectedOptions).map((option) => option.value);
+                      this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), entityIds: selected } )));
+                    }}
+                  >
+                    ${this.entityCatalog
+                      .filter((entry) => entry.domain !== "calendar")
+                      .map((entry) => html`<option value=${entry.entityId} ?selected=${(node.entityIds ?? []).includes(entry.entityId)}>${entry.friendlyName}</option>`)}
+                  </select>
+                </label>
+              ` : nothing}
+              ${queryKind === "weather_forecast" ? html`
+                <label>Location id <input .value=${node.locationId ?? ""} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), locationId: (event.target as HTMLInputElement).value || undefined } )))} /></label>
+                <label>Latitude <input type="number" step="0.0001" .value=${node.latitude === undefined ? "" : String(node.latitude)} @input=${(event: Event) => {
+                  const value = (event.target as HTMLInputElement).value.trim();
+                  this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), latitude: value ? Number(value) : undefined } )));
+                }} /></label>
+                <label>Longitude <input type="number" step="0.0001" .value=${node.longitude === undefined ? "" : String(node.longitude)} @input=${(event: Event) => {
+                  const value = (event.target as HTMLInputElement).value.trim();
+                  this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), longitude: value ? Number(value) : undefined } )));
+                }} /></label>
+                <label>Timezone <input .value=${node.timezone ?? "auto"} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), timezone: (event.target as HTMLInputElement).value || undefined } )))} /></label>
+                <label>Current variables <input .value=${Array.isArray(node.current) ? node.current.join(",") : String(node.current ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), current: (event.target as HTMLInputElement).value } )))} /></label>
+                <label>Hourly variables <input .value=${Array.isArray(node.hourly) ? node.hourly.join(",") : String(node.hourly ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), hourly: (event.target as HTMLInputElement).value } )))} /></label>
+                <label>Daily variables <input .value=${Array.isArray(node.daily) ? node.daily.join(",") : String(node.daily ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), daily: (event.target as HTMLInputElement).value } )))} /></label>
+                <label>Forecast days <input type="number" min="1" .value=${node.forecastDays === undefined ? "" : String(node.forecastDays)} @input=${(event: Event) => {
+                  const value = (event.target as HTMLInputElement).value.trim();
+                  this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), forecastDays: value ? Number(value) : undefined } )));
+                }} /></label>
+              ` : nothing}
               <div class="row">
                 <button @click=${() => this.setMetaChildNode(owner, node.id, emptyStackRoot())}>${node.child ? "Replace" : "Add"} child stack</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultFilterNode())}>${node.child ? "Replace" : "Add"} filter</button>
@@ -3627,7 +3730,8 @@ export class EpPaperEditorApp extends LitElement {
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultForEachNode())}>${node.child ? "Replace" : "Add"} foreach</button>
               </div>
               ${node.child ? nothing : html`<div class="muted">No child subtree.</div>`}
-            `
+            `;
+            })()
           : nothing}
         ${node.type === "filter"
           ? html`

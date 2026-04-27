@@ -6,10 +6,13 @@ use crate::providers::registry::{
     ProviderFieldOption, ProviderInstance, SourceProvider,
 };
 use crate::{
-    app::AppState, fetch_home_assistant_config, fetch_home_assistant_states,
-    has_configured_home_assistant, home_assistant_settings_from_instance,
-    normalize_home_assistant_mode, services::render_data::resolve_meta_queries, ApiError,
-    EntityCatalogEntry,
+    app::AppState,
+    fetch_home_assistant_config, fetch_home_assistant_states, has_configured_home_assistant,
+    home_assistant_settings_from_instance, normalize_home_assistant_mode,
+    services::render_data::{
+        collect_data_query_nodes, data_query_source_matches, resolve_meta_queries,
+    },
+    ApiError, EntityCatalogEntry,
 };
 
 pub static PROVIDER: HomeAssistantProvider = HomeAssistantProvider;
@@ -24,6 +27,8 @@ pub fn descriptor() -> ProviderDescriptor {
         capabilities: vec![
             "test_connection".into(),
             "entity_catalog".into(),
+            "entity_states".into(),
+            "calendar_events".into(),
             "resolve_render_data".into(),
             "meta_calendar_events".into(),
         ],
@@ -217,11 +222,69 @@ impl SourceProvider for HomeAssistantProvider {
         instance: &ProviderInstance,
         project: &serde_json::Value,
     ) -> Result<(serde_json::Map<String, serde_json::Value>, Vec<String>), ApiError> {
-        Ok(resolve_meta_queries(
-            &state.http,
-            &home_assistant_settings_from_instance(instance),
-            project,
-        )
-        .await)
+        let settings = home_assistant_settings_from_instance(instance);
+        let (mut results, mut warnings) =
+            resolve_meta_queries(&state.http, &settings, project, Some(&instance.id)).await;
+        let entity_query_nodes = collect_data_query_nodes(project)
+            .into_iter()
+            .filter(|node| {
+                node.get("queryKind").and_then(serde_json::Value::as_str) == Some("entity_states")
+                    && data_query_source_matches(node, &instance.id)
+            })
+            .collect::<Vec<_>>();
+        if !entity_query_nodes.is_empty() {
+            match fetch_home_assistant_states(&state.http, &settings).await {
+                Ok(states) => {
+                    for node in entity_query_nodes {
+                        let id = node
+                            .get("id")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default();
+                        if id.is_empty() {
+                            continue;
+                        }
+                        let selected = node
+                            .get("entityIds")
+                            .and_then(serde_json::Value::as_array)
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .filter_map(serde_json::Value::as_str)
+                                    .collect::<std::collections::BTreeSet<_>>()
+                            })
+                            .unwrap_or_default();
+                        let items = states
+                            .iter()
+                            .filter(|entry| {
+                                selected.is_empty() || selected.contains(entry.entity_id.as_str())
+                            })
+                            .map(|entry| {
+                                json!({
+                                    "entityId": entry.entity_id,
+                                    "state": entry.state,
+                                    "attributes": entry.attributes,
+                                    "lastChanged": entry.last_changed
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        results.insert(
+                            id.to_string(),
+                            json!({
+                                "kind": "entity_states",
+                                "items": items,
+                                "meta": {
+                                    "queryKind": "entity_states",
+                                    "variableName": node.get("variableName").and_then(serde_json::Value::as_str).unwrap_or("states")
+                                }
+                            }),
+                        );
+                    }
+                }
+                Err(error) => {
+                    warnings.push(format!("Entity states query failed. {}", error.message))
+                }
+            }
+        }
+        Ok((results, warnings))
     }
 }

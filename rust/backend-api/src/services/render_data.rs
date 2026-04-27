@@ -281,6 +281,15 @@ pub(crate) fn collect_data_query_nodes(project: &Value) -> Vec<Value> {
     refs
 }
 
+pub(crate) fn data_query_source_matches(node: &Value, provider_instance_id: &str) -> bool {
+    node.get("sourceProviderInstanceId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value == provider_instance_id)
+        .unwrap_or(true)
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 struct RenderDataRequirements {
     needs_live_entities: bool,
@@ -434,12 +443,18 @@ pub(crate) async fn resolve_meta_queries(
     client: &reqwest::Client,
     settings: &HomeAssistantSettingsStored,
     project: &Value,
+    provider_instance_id: Option<&str>,
 ) -> (serde_json::Map<String, Value>, Vec<String>) {
     let mut results = serde_json::Map::new();
     let mut warnings = Vec::new();
     for node in collect_data_query_nodes(project) {
         if node.get("queryKind").and_then(Value::as_str) != Some("calendar_events") {
             continue;
+        }
+        if let Some(provider_instance_id) = provider_instance_id {
+            if !data_query_source_matches(&node, provider_instance_id) {
+                continue;
+            }
         }
         let id = node.get("id").and_then(Value::as_str).unwrap_or_default();
         if id.is_empty() {
@@ -582,10 +597,46 @@ pub(crate) async fn resolve_project_render_data_value(
         serde_json::Map::new()
     };
     let (meta_queries, meta_warnings) = if requirements.needs_data_queries {
-        source_provider_impl
-            .resolve_meta_queries(state, &source_instance, project)
-            .await
-            .unwrap_or_default()
+        let referenced_sources = collect_data_query_nodes(project)
+            .into_iter()
+            .filter_map(|node| {
+                node.get("sourceProviderInstanceId")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string)
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut query_sources = Vec::new();
+        query_sources.push(source_instance.clone());
+        for source_id in referenced_sources {
+            if query_sources
+                .iter()
+                .any(|instance| instance.id == source_id)
+            {
+                continue;
+            }
+            if let Some(instance) = find_provider_instance(&settings_document, &source_id) {
+                query_sources.push(instance);
+            }
+        }
+        let mut merged = serde_json::Map::new();
+        let mut warnings = Vec::new();
+        for instance in query_sources {
+            let Some(provider) = source_provider(&instance.provider_id) else {
+                continue;
+            };
+            if !instance.enabled || !provider.is_configured(&instance) {
+                continue;
+            }
+            let (items, provider_warnings) = provider
+                .resolve_meta_queries(state, &instance, project)
+                .await
+                .unwrap_or_default();
+            merged.extend(items);
+            warnings.extend(provider_warnings);
+        }
+        (merged, warnings)
     } else {
         (serde_json::Map::new(), Vec::new())
     };
