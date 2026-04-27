@@ -1263,6 +1263,7 @@ pub(crate) async fn upload_image_to_access_point(
     jpeg: Vec<u8>,
     filename: String,
 ) -> Result<(), ApiError> {
+    send_tag_command_to_access_point(client, settings, mac, "clear").await?;
     let form = Form::new()
         .text("mac", mac.to_string())
         .text("contentmode", "25")
@@ -1287,6 +1288,37 @@ pub(crate) async fn upload_image_to_access_point(
         let details = response.text().await.unwrap_or_default();
         return Err(ApiError::bad_request(format!(
             "OpenEPaperLink upload failed with {}{}",
+            status.as_u16(),
+            if details.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", details.chars().take(160).collect::<String>())
+            }
+        )));
+    }
+    Ok(())
+}
+
+async fn send_tag_command_to_access_point(
+    client: &reqwest::Client,
+    settings: &OpenEpaperLinkAccessPointSettings,
+    mac: &str,
+    command: &str,
+) -> Result<(), ApiError> {
+    let response = client
+        .post(format!("{}/tag_cmd", settings.url.trim_end_matches('/')))
+        .form(&[
+            ("mac", mac.to_ascii_uppercase()),
+            ("cmd", command.to_string()),
+        ])
+        .send()
+        .await
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let status = response.status();
+    if !status.is_success() {
+        let details = response.text().await.unwrap_or_default();
+        return Err(ApiError::bad_request(format!(
+            "OpenEPaperLink tag command {command} failed with {}{}",
             status.as_u16(),
             if details.is_empty() {
                 String::new()
@@ -1558,5 +1590,63 @@ mod tests {
         assert_eq!(integer_field(&saved, "version"), current_version + 1);
 
         let _ = fs::remove_dir_all(temp_dir).await;
+    }
+
+    #[tokio::test]
+    async fn upload_clears_pending_tag_operations_before_image_upload() {
+        use axum::{
+            body::Bytes,
+            extract::{Form as AxumForm, State as AxumState},
+        };
+        use std::collections::HashMap as StdHashMap;
+
+        async fn tag_cmd(
+            AxumState(events): AxumState<Arc<Mutex<Vec<String>>>>,
+            AxumForm(form): AxumForm<StdHashMap<String, String>>,
+        ) -> StatusCode {
+            events.lock().unwrap().push(format!(
+                "clear:{}:{}",
+                form.get("mac").cloned().unwrap_or_default(),
+                form.get("cmd").cloned().unwrap_or_default()
+            ));
+            StatusCode::OK
+        }
+
+        async fn image_upload(
+            AxumState(events): AxumState<Arc<Mutex<Vec<String>>>>,
+            _body: Bytes,
+        ) -> StatusCode {
+            events.lock().unwrap().push("upload".into());
+            StatusCode::OK
+        }
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route("/tag_cmd", post(tag_cmd))
+            .route("/imgupload", post(image_upload))
+            .with_state(events.clone());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        upload_image_to_access_point(
+            &reqwest::Client::new(),
+            &OpenEpaperLinkAccessPointSettings {
+                url: format!("http://{address}"),
+                default_test_display_mac: None,
+            },
+            "00ab12",
+            vec![1, 2, 3],
+            "00ab12.jpg".into(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["clear:00AB12:clear", "upload"]
+        );
     }
 }
