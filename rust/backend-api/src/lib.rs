@@ -39,7 +39,9 @@ use reqwest::header::{ACCEPT, AUTHORIZATION};
 use reqwest::multipart::{Form, Part};
 use routes::backup::{export_backup, restore_backup};
 use routes::fonts::{delete_font, import_font, list_fonts, rescan_fonts, update_font_metadata};
-use routes::previews::{device_preview, font_specimens, layout_preview, live_data, theme_preview};
+use routes::previews::{
+    device_preview, font_specimens, layout_preview, live_data, live_data_preview, theme_preview,
+};
 use routes::projects::{get_project, list_projects, save_project};
 use routes::providers::{
     create_provider_instance, delete_provider_instance, discover_displays, list_provider_instances,
@@ -709,7 +711,10 @@ fn app(state: AppState) -> Router {
         )
         .route("/api/v2/projects", get(list_projects))
         .route("/api/v2/projects/:id", get(get_project).put(save_project))
-        .route("/api/v2/projects/:id/live-data", get(live_data))
+        .route(
+            "/api/v2/projects/:id/live-data",
+            get(live_data).post(live_data_preview),
+        )
         .route("/api/v2/projects/:id/layout-preview", post(layout_preview))
         .route("/api/v2/projects/:id/device-preview", post(device_preview))
         .route("/api/v2/projects/:id/font-specimens", post(font_specimens))

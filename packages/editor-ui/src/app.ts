@@ -1,6 +1,6 @@
 import { LitElement, css, html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import { BUILT_IN_WIDGET_DEFINITIONS, DEFAULT_FONT_PRESETS, DISPLAY_PROFILES, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FillRole, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutNode, type ManagedDisplay, type PlaceSearchEntry, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type ProviderConnectionStatus, type ProviderDescriptor, type ProviderInstance, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
+import { BUILT_IN_WIDGET_DEFINITIONS, DEFAULT_FONT_PRESETS, DISPLAY_PROFILES, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FillRole, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutNode, type ManagedDisplay, type PlaceSearchEntry, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type ProviderConnectionStatus, type ProviderDescriptor, type ProviderInstance, type RenderData, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
 import {
   deleteProviderInstance,
   deleteFont,
@@ -15,6 +15,7 @@ import {
   fetchFonts,
   fetchIcons,
   fetchLayoutPreview,
+  fetchLiveData,
   fetchProject,
   fetchProjects,
   fetchProviderEntities,
@@ -84,6 +85,12 @@ type FontSpecimenFamilyView = FontSpecimenResponse["families"][number] & {
       >;
     }
   >;
+};
+
+type WidgetPreviewVariable = {
+  name: string;
+  source: string;
+  value: unknown;
 };
 
 type NodeCreateKind =
@@ -890,6 +897,8 @@ export class EpPaperEditorApp extends LitElement {
     previewWidth: { state: true },
     previewHeight: { state: true },
     previewMessage: { state: true },
+    widgetPreviewRenderData: { state: true },
+    widgetPreviewDataMessage: { state: true },
     scale: { state: true },
     updateLogImageModal: { state: true },
     updateLogImageScale: { state: true },
@@ -1146,6 +1155,20 @@ export class EpPaperEditorApp extends LitElement {
       cursor: pointer;
       font-weight: 600;
     }
+    .variable-list {
+      display: grid;
+      gap: 6px;
+    }
+    .variable-value {
+      max-height: 220px;
+      overflow: auto;
+      border: 1px solid #111;
+      padding: 6px;
+      background: #fff;
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
     .muted {
       color: #555;
       font-size: 12px;
@@ -1262,6 +1285,8 @@ export class EpPaperEditorApp extends LitElement {
   declare private previewWidth: number;
   declare private previewHeight: number;
   declare private previewMessage: string;
+  declare private widgetPreviewRenderData: RenderData | null;
+  declare private widgetPreviewDataMessage: string;
   declare private scale: number;
   declare private updateLogImageModal: AssignmentUpdateLogEntry | null;
   declare private updateLogImageScale: number;
@@ -1317,6 +1342,8 @@ export class EpPaperEditorApp extends LitElement {
     this.previewWidth = 0;
     this.previewHeight = 0;
     this.previewMessage = "";
+    this.widgetPreviewRenderData = null;
+    this.widgetPreviewDataMessage = "";
     this.scale = typeof window !== "undefined" && window.devicePixelRatio >= 1.75 ? 2 : 1;
     this.updateLogImageModal = null;
     this.updateLogImageScale = 2;
@@ -1636,6 +1663,8 @@ export class EpPaperEditorApp extends LitElement {
       this.previewPngBase64 = "";
       this.previewHash = "";
       this.previewMessage = "";
+      this.widgetPreviewRenderData = null;
+      this.widgetPreviewDataMessage = "";
       this.previewWidth = 0;
       this.previewHeight = 0;
       this.structureHoveredNodeId = "";
@@ -1682,7 +1711,18 @@ export class EpPaperEditorApp extends LitElement {
       }
       const tempLayoutId = "__widget-preview-layout";
       const tempProject = this.widgetPreviewProject(definition, displayTypeId);
-      return [await fetchLayoutPreview(this.project.id, tempLayoutId, undefined, tempProject, displayTypeId), undefined] as const;
+      const [preview, renderData] = await Promise.all([
+        fetchLayoutPreview(this.project.id, tempLayoutId, undefined, tempProject, displayTypeId),
+        fetchLiveData(this.project.id, tempProject).catch((error) => {
+          this.widgetPreviewDataMessage = error instanceof Error ? error.message : "Variable values unavailable.";
+          return null;
+        })
+      ]);
+      this.widgetPreviewRenderData = renderData;
+      if (renderData) {
+        this.widgetPreviewDataMessage = "";
+      }
+      return [preview, undefined] as const;
     }
     return [await this.fetchPagePreview(), undefined] as const;
   }
@@ -1788,6 +1828,124 @@ export class EpPaperEditorApp extends LitElement {
         }
       ]
     });
+  }
+
+  private widgetPreviewVariables(definition: WidgetDefinition): WidgetPreviewVariable[] {
+    const variables: WidgetPreviewVariable[] = [];
+    const scope: Record<string, unknown> = {};
+    for (const input of definition.inputSchema ?? []) {
+      const value = input.previewValue ?? input.defaultValue ?? (input.valueType === "boolean" ? false : input.valueType === "number" ? 0 : "");
+      scope[input.id] = value;
+      scope[input.name] = value;
+      variables.push({ name: input.name, source: `input ${input.id}`, value });
+    }
+    this.collectWidgetPreviewVariables(definition.rootNode, scope, variables);
+    return variables;
+  }
+
+  private collectWidgetPreviewVariables(node: LayoutNode | undefined, scope: Record<string, unknown>, variables: WidgetPreviewVariable[]): void {
+    if (!node) {
+      return;
+    }
+    if (node.type === "data_query") {
+      const query = this.widgetPreviewRenderData?.metaQueries?.[node.id] ?? this.widgetPreviewRenderData?.queries?.[node.id];
+      const value = this.dataQueryPreviewValue(node.queryKind, query?.items ?? []);
+      scope[node.variableName] = value;
+      variables.push({ name: node.variableName, source: `${node.queryKind} ${node.id}`, value });
+      if (node.queryKind === "calendar_events") {
+        const dateName = node.dateVariableName ?? "date";
+        const dateValue = query?.meta?.date ?? "";
+        scope[dateName] = dateValue;
+        variables.push({ name: dateName, source: `${node.queryKind} ${node.id}`, value: dateValue });
+      }
+      this.collectWidgetPreviewVariables(node.child, scope, variables);
+      return;
+    }
+    if (node.type === "foreach") {
+      const items = this.valueAtPath(scope, node.itemsRef);
+      const first = Array.isArray(items) ? items[0] : undefined;
+      const nested = { ...scope, [node.itemAlias]: first ?? null, [node.indexAlias]: 0 };
+      variables.push({ name: node.itemAlias, source: `foreach ${node.id}`, value: first ?? null });
+      variables.push({ name: node.indexAlias, source: `foreach ${node.id}`, value: 0 });
+      this.collectWidgetPreviewVariables(node.child, nested, variables);
+      return;
+    }
+    if (node.type === "script") {
+      for (const key of Object.keys(node.bindings ?? {})) {
+        variables.push({ name: key, source: `script ${node.id}`, value: node.bindings?.[key] ?? "" });
+      }
+      this.collectWidgetPreviewVariables(node.child, scope, variables);
+      return;
+    }
+    if (node.type === "if_else") {
+      this.collectWidgetPreviewVariables(node.thenChild, scope, variables);
+      this.collectWidgetPreviewVariables(node.elseChild, scope, variables);
+      return;
+    }
+    if (node.type === "stack" || node.type === "zstack") {
+      for (const child of node.children ?? []) {
+        this.collectWidgetPreviewVariables(child, scope, variables);
+      }
+      return;
+    }
+    if (node.type === "grid") {
+      for (const child of node.children ?? []) {
+        this.collectWidgetPreviewVariables(child.node, scope, variables);
+      }
+    }
+  }
+
+  private dataQueryPreviewValue(queryKind: string, items: Array<Record<string, unknown>>): unknown {
+    if (queryKind === "weather_forecast" || queryKind === "forecast" || queryKind === "open_meteo_forecast") {
+      return items[0] ?? null;
+    }
+    return items;
+  }
+
+  private valueAtPath(scope: Record<string, unknown>, path: string): unknown {
+    let current: unknown = scope;
+    for (const segment of path.split(".")) {
+      if (!segment) {
+        continue;
+      }
+      if (!current || typeof current !== "object") {
+        return undefined;
+      }
+      current = (current as Record<string, unknown>)[segment];
+    }
+    return current;
+  }
+
+  private renderWidgetPreviewVariables(definition: WidgetDefinition): TemplateResult {
+    const variables = this.widgetPreviewVariables(definition);
+    return html`
+      <div class="section">
+        <h3>Preview Variables</h3>
+        ${this.widgetPreviewDataMessage ? html`<div class="muted">${this.widgetPreviewDataMessage}</div>` : nothing}
+        ${variables.length
+          ? html`
+              <div class="variable-list">
+                ${variables.map((variable) => html`
+                  <details>
+                    <summary><code>${variable.name}</code> <span class="muted">${variable.source}</span></summary>
+                    <pre class="variable-value">${this.formatPreviewVariableValue(variable.value)}</pre>
+                  </details>
+                `)}
+              </div>
+            `
+          : html`<div class="muted">No variables for this widget.</div>`}
+      </div>
+    `;
+  }
+
+  private formatPreviewVariableValue(value: unknown): string {
+    if (value === undefined) {
+      return "undefined";
+    }
+    if (typeof value === "string") {
+      return value;
+    }
+    return JSON.stringify(value, null, 2) ?? String(value);
   }
 
   private async fetchPagePreview(): Promise<PreviewResponse | undefined> {
@@ -4787,6 +4945,7 @@ export class EpPaperEditorApp extends LitElement {
                     </div>
                     ${this.renderStructurePreviewStage()}
                   </div>
+                  ${this.renderWidgetPreviewVariables(definition)}
                   ${definition.rootNode
                     ? this.selectedEditorNode
                       ? this.renderNodeEditor(this.selectedEditorNode, definition, parentIdForNode(definition.rootNode, this.selectedEditorNode.id))

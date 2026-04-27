@@ -1239,6 +1239,7 @@ fn node_supported(node: &Node) -> bool {
     }
 }
 
+#[cfg(test)]
 fn node_supported_with_project(project: &ProjectView, node: &Node) -> bool {
     if !node_supported(node) {
         return false;
@@ -1464,7 +1465,11 @@ fn template_supported(value: &str) -> bool {
         }
         for filter in segments {
             let trimmed = filter.trim();
-            if trimmed == "title" || trimmed == "downcase" || trimmed == "upcase" {
+            if trimmed == "title"
+                || trimmed == "downcase"
+                || trimmed == "upcase"
+                || trimmed == "to_json"
+            {
                 continue;
             }
             if let Some(args) = trimmed
@@ -1866,6 +1871,9 @@ fn apply_template_filter(value: Value, filter_expression: &str, locale: &str) ->
     }
     if trimmed == "upcase" {
         return Value::String(stringify_scope_value(&value).to_uppercase());
+    }
+    if trimmed == "to_json" {
+        return Value::String(serde_json::to_string(&value).unwrap_or_else(|_| "null".into()));
     }
     if let Some(args) = trimmed
         .strip_prefix("format(")
@@ -2943,6 +2951,42 @@ fn draw_line(canvas: &mut IndexedCanvas, mut x0: i32, mut y0: i32, x1: i32, y1: 
     }
 }
 
+fn draw_error_placeholder(canvas: &mut IndexedCanvas, frame: Rect) {
+    let frame = Rect {
+        x: frame.x,
+        y: frame.y,
+        w: frame.w.max(1),
+        h: frame.h.max(1),
+    };
+    let x0 = frame.x;
+    let y0 = frame.y;
+    let x1 = frame.x + frame.w - 1;
+    let y1 = frame.y + frame.h - 1;
+    draw_line(canvas, x0, y0, x1, y0, COLOR_ACCENT);
+    draw_line(canvas, x1, y0, x1, y1, COLOR_ACCENT);
+    draw_line(canvas, x1, y1, x0, y1, COLOR_ACCENT);
+    draw_line(canvas, x0, y1, x0, y0, COLOR_ACCENT);
+    draw_line(canvas, x0, y0, x1, y1, COLOR_ACCENT);
+    draw_line(canvas, x0, y1, x1, y0, COLOR_ACCENT);
+    if frame.w > 6 && frame.h > 6 {
+        draw_line(canvas, x0 + 1, y0 + 1, x1 - 1, y1 - 1, COLOR_FG);
+        draw_line(canvas, x0 + 1, y1 - 1, x1 - 1, y0 + 1, COLOR_FG);
+    }
+}
+
+fn render_child_or_placeholder(
+    canvas: &mut IndexedCanvas,
+    project: &ProjectView,
+    scope: &Value,
+    node: &Node,
+    frame: Rect,
+    user_fonts: &HashMap<String, RuntimeFontFamilyData>,
+) {
+    if render_node(canvas, project, scope, node, frame, user_fonts).is_err() {
+        draw_error_placeholder(canvas, frame);
+    }
+}
+
 fn child_rects(
     axis: &str,
     children: &[Node],
@@ -3107,6 +3151,10 @@ fn render_node(
     frame: Rect,
     user_fonts: &HashMap<String, RuntimeFontFamilyData>,
 ) -> Result<(), ApiError> {
+    if let Some(_reason) = unsupported_node_self_reason(node) {
+        draw_error_placeholder(canvas, frame);
+        return Ok(());
+    }
     match node {
         Node::Stack {
             axis,
@@ -3150,7 +3198,14 @@ fn render_node(
                 }
             }
             for (child, child_frame) in children.iter().zip(rects.iter()) {
-                render_node(canvas, project, scope, child, *child_frame, user_fonts)?;
+                render_child_or_placeholder(
+                    canvas,
+                    project,
+                    scope,
+                    child,
+                    *child_frame,
+                    user_fonts,
+                );
             }
             Ok(())
         }
@@ -3171,7 +3226,7 @@ fn render_node(
                 h: (frame.h - padding * 2).max(1),
             };
             for child in children {
-                render_node(canvas, project, scope, child, inner, user_fonts)?;
+                render_child_or_placeholder(canvas, project, scope, child, inner, user_fonts);
             }
             Ok(())
         }
@@ -3216,7 +3271,14 @@ fn render_node(
                     w: col_offsets[end_col] - col_offsets[column - 1],
                     h: row_offsets[end_row] - row_offsets[row - 1],
                 };
-                render_node(canvas, project, scope, &child.node, child_frame, user_fonts)?;
+                render_child_or_placeholder(
+                    canvas,
+                    project,
+                    scope,
+                    &child.node,
+                    child_frame,
+                    user_fonts,
+                );
             }
             Ok(())
         }
@@ -3248,7 +3310,14 @@ fn render_node(
                 }
             }
             if let Some(child) = node.child.as_deref() {
-                render_node(canvas, project, &nested_scope, child, frame, user_fonts)?;
+                render_child_or_placeholder(
+                    canvas,
+                    project,
+                    &nested_scope,
+                    child,
+                    frame,
+                    user_fonts,
+                );
             }
             Ok(())
         }
@@ -3295,7 +3364,9 @@ fn render_node(
                     &node.item_alias,
                     &node.index_alias,
                 );
-                let measured = measure_node(project, &item_scope, template, user_fonts)?
+                let measured = measure_node(project, &item_scope, template, user_fonts)
+                    .ok()
+                    .flatten()
                     .unwrap_or((inner.w, inner.h));
                 let main = shared_main
                     .unwrap_or(if horizontal { measured.0 } else { measured.1 })
@@ -3321,14 +3392,14 @@ fn render_node(
                         h: main.min(inner.h.max(1)),
                     }
                 };
-                render_node(
+                render_child_or_placeholder(
                     canvas,
                     project,
                     &item_scope,
                     template,
                     child_frame,
                     user_fonts,
-                )?;
+                );
                 cursor += main + gap;
             }
             Ok(())
@@ -3337,13 +3408,16 @@ fn render_node(
             let Some(definition) = project.widget_definitions.iter().find(|definition| {
                 definition.id == node.definition_id && definition.kind == "compound"
             }) else {
+                draw_error_placeholder(canvas, frame);
                 return Ok(());
             };
             let Some(root) = definition.root_node.as_ref() else {
+                draw_error_placeholder(canvas, frame);
                 return Ok(());
             };
             let mut nested_scope = scope.clone();
             let Some(scope_object) = nested_scope.as_object_mut() else {
+                draw_error_placeholder(canvas, frame);
                 return Ok(());
             };
             for input in &definition.input_schema {
@@ -3374,7 +3448,8 @@ fn render_node(
                 scope_object.insert(key.clone(), value.clone());
                 scope_object.insert(alias.clone(), value);
             }
-            render_node(canvas, project, &nested_scope, root, frame, user_fonts)
+            render_child_or_placeholder(canvas, project, &nested_scope, root, frame, user_fonts);
+            Ok(())
         }
         Node::Script(script) => {
             let globals = globals_value(project, scope, frame);
@@ -3395,25 +3470,39 @@ fn render_node(
                     })
                     .collect(),
             );
-            let derived = run_js_json(&script.source, scope, &bindings, &globals)?;
+            let Ok(derived) = run_js_json(&script.source, scope, &bindings, &globals) else {
+                draw_error_placeholder(canvas, frame);
+                return Ok(());
+            };
             let merged_scope = if derived.is_object() {
                 merge_scope(scope, &derived)
             } else {
                 scope.clone()
             };
             if let Some(child) = script.child.as_deref() {
-                render_node(canvas, project, &merged_scope, child, frame, user_fonts)?;
+                render_child_or_placeholder(
+                    canvas,
+                    project,
+                    &merged_scope,
+                    child,
+                    frame,
+                    user_fonts,
+                );
             }
             Ok(())
         }
         Node::IfElse(node) => {
-            let child = if evaluate_js_bool(&node.condition, scope)? {
+            let Ok(condition_matches) = evaluate_js_bool(&node.condition, scope) else {
+                draw_error_placeholder(canvas, frame);
+                return Ok(());
+            };
+            let child = if condition_matches {
                 node.then_child.as_deref()
             } else {
                 node.else_child.as_deref()
             };
             if let Some(child) = child {
-                render_node(canvas, project, scope, child, frame, user_fonts)?;
+                render_child_or_placeholder(canvas, project, scope, child, frame, user_fonts);
             }
             Ok(())
         }
@@ -3421,7 +3510,10 @@ fn render_node(
             render_primitive(canvas, project, scope, node, frame, user_fonts)
         }
         Node::Spacer { .. } => Ok(()),
-        Node::Unsupported => Ok(()),
+        Node::Unsupported => {
+            draw_error_placeholder(canvas, frame);
+            Ok(())
+        }
     }
 }
 
@@ -3449,9 +3541,12 @@ fn render_layout_preview(
         None => return Ok(None),
     };
     let root = match &layout.root_node {
-        Some(root) if node_supported_with_project(&project, root) => root,
+        Some(root) => root,
         _ => return Ok(None),
     };
+    let mut script_warnings = unsupported_node_reason(&project, root, "root")
+        .map(|reason| vec![format!("Native preview rendered placeholder: {reason}")])
+        .unwrap_or_default();
     project.active_theme_id = default_theme_id
         .filter(|theme_id| *theme_id != "inherit")
         .map(str::to_string)
@@ -3467,7 +3562,14 @@ fn render_layout_preview(
             .find(|layout| layout.id == popup_layout_id)
         {
             Some(layout) => match &layout.root_node {
-                Some(root) if node_supported_with_project(&project, root) => Some((layout, root)),
+                Some(root) => {
+                    if let Some(reason) = unsupported_node_reason(&project, root, "popup") {
+                        script_warnings.push(format!(
+                            "Native popup preview rendered placeholder: {reason}"
+                        ));
+                    }
+                    Some((layout, root))
+                }
                 _ => return Ok(None),
             },
             None => return Ok(None),
@@ -3514,7 +3616,15 @@ fn render_layout_preview(
     )
     .is_err()
     {
-        return Ok(None);
+        draw_error_placeholder(
+            &mut canvas,
+            Rect {
+                x: 0,
+                y: 0,
+                w: display_type.width as i32,
+                h: display_type.height as i32,
+            },
+        );
     }
     if let Some((popup_layout, popup_root)) = popup {
         if render_node(
@@ -3532,7 +3642,15 @@ fn render_layout_preview(
         )
         .is_err()
         {
-            return Ok(None);
+            draw_error_placeholder(
+                &mut canvas,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    w: display_type.width as i32,
+                    h: display_type.height as i32,
+                },
+            );
         }
         let _ = popup_layout;
     }
@@ -3565,7 +3683,11 @@ fn render_layout_preview(
         active_screen_id: layout.id.clone(),
         active_overlay_id: popup_layout_id.map(str::to_string),
         data_source_message,
-        script_warnings: None,
+        script_warnings: if script_warnings.is_empty() {
+            None
+        } else {
+            Some(script_warnings)
+        },
         png_bytes,
     }))
 }
@@ -3950,6 +4072,57 @@ mod tests {
     }
 
     #[test]
+    fn render_layout_preview_draws_placeholder_for_unsupported_node() {
+        let project_value = json!({
+            "id": "demo",
+            "name": "Demo",
+            "locale": "en-US",
+            "fontPresets": { "tiny": 8, "normal": 12, "header": 24 },
+            "themes": [{
+                "id": "classic-outline",
+                "text": { "title": "fg", "body": "fg", "value": "fg" }
+            }],
+            "displayTypes": [{
+                "id": "tri296x128-red",
+                "width": 296,
+                "height": 128,
+                "palette": { "bg": "#ffffff", "fg": "#000000", "accent": "#ff0000" }
+            }],
+            "layoutDefinitions": [{
+                "id": "layout-unsupported",
+                "displayTypeId": "tri296x128-red",
+                "rootNode": {
+                    "id": "unsupported-primitive",
+                    "type": "primitive_instance",
+                    "primitiveType": "graph",
+                    "width": { "mode": "fill" },
+                    "height": { "mode": "fill" },
+                    "style": { "borderToken": "none", "paddingPx": 0 },
+                    "props": {}
+                }
+            }]
+        });
+        let rendered = render_layout_preview(
+            &project_value,
+            &json!({}),
+            &json!({ "entities": {}, "now": "2026-04-24T22:00:00+02:00" }),
+            "layout-unsupported",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(rendered.hash.starts_with("native-layout:"));
+        assert!(rendered
+            .script_warnings
+            .unwrap_or_default()
+            .iter()
+            .any(|warning| warning.contains("rendered placeholder")));
+    }
+
+    #[test]
     fn assigned_preview_ignores_mismatched_default_layout_size() {
         let project_value = json!({
             "id": "demo",
@@ -4122,6 +4295,20 @@ mod tests {
         assert_eq!(
             format_scope_value(&value, "d mmmm", "nl-NL"),
             Value::String("25 april".into())
+        );
+    }
+
+    #[test]
+    fn template_to_json_filter_serializes_objects() {
+        let rendered = render_template(
+            "{{ weather |to_json }}",
+            &json!({ "weather": { "temperature": "16.6", "condition": "cloudy" } }),
+            "en-US",
+        )
+        .unwrap();
+        assert_eq!(
+            rendered,
+            "{\"condition\":\"cloudy\",\"temperature\":\"16.6\"}"
         );
     }
 

@@ -28,6 +28,19 @@ pub(crate) async fn live_data(
     ))
 }
 
+pub(crate) async fn live_data_preview(
+    State(state): State<AppState>,
+    AxumPath(project_id): AxumPath<String>,
+    Json(body): Json<Value>,
+) -> ApiResult<Value> {
+    let project = load_project_for_request(&state, &project_id, Some(&body)).await?;
+    Ok(Json(
+        resolve_project_render_data_value(&state, &project, None)
+            .await?
+            .0,
+    ))
+}
+
 pub(crate) async fn layout_preview(
     State(state): State<AppState>,
     AxumPath(project_id): AxumPath<String>,

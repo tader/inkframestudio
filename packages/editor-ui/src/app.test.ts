@@ -41,11 +41,13 @@ type TestLayoutNode = {
   id: string;
   type: string;
   queryKind?: string;
+  variableName?: string;
   sourceProviderInstanceId?: string;
   entityIds?: string[];
   forecastDays?: number;
   primitiveType?: string;
   children?: TestLayoutNode[];
+  child?: TestLayoutNode;
   thenChild?: TestLayoutNode;
   elseChild?: TestLayoutNode;
   width?: Record<string, unknown>;
@@ -268,6 +270,19 @@ describe("epaper editor app", () => {
       }
       if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}`) && !init?.method) {
         return new Response(JSON.stringify(SAMPLE_PROJECT), { status: 200 });
+      }
+      if (url.endsWith(`/api/v2/projects/${SAMPLE_PROJECT.id}/live-data`)) {
+        return new Response(JSON.stringify({
+          now: "2026-04-27T12:00:00+02:00",
+          entities: {},
+          queries: {},
+          metaQueries: {
+            "weather-query-under-test": {
+              kind: "weather_forecast",
+              items: [{ temperature: "16.6", condition: "cloudy" }]
+            }
+          }
+        }), { status: 200 });
       }
       if (url.includes(`/api/v2/projects/${SAMPLE_PROJECT.id}/displays/discover`)) {
         return new Response(JSON.stringify([
@@ -814,6 +829,67 @@ describe("epaper editor app", () => {
     await flush();
     await element.updateComplete;
     expect(dataQuery()?.forecastDays).toBe(3);
+  });
+
+  it("shows widget preview variables with resolved values", async () => {
+    window.location.hash = "#/widgets";
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    const appState = element as unknown as TestEditorElement & {
+      widgetPreviewRenderData: unknown;
+    };
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Add compound"))?.click();
+    await flush();
+    await element.updateComplete;
+
+    const widget = appState.project.widgetDefinitions?.find((entry) => entry.id === appState.selectedWidgetDefinitionId);
+    if (widget?.rootNode) {
+      appState.setRootNode(widget, {
+        ...widget.rootNode,
+        children: [{
+          id: "weather-query-under-test",
+          type: "data_query",
+          queryKind: "weather_forecast",
+          variableName: "weather",
+          sourceProviderInstanceId: "open-meteo-default",
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          style: { borderToken: "none" },
+          child: {
+            id: "weather-text-under-test",
+            type: "primitive_instance",
+            primitiveType: "text",
+            width: { mode: "fill" },
+            height: { mode: "fill" },
+            style: { borderToken: "none" },
+            bindings: { entity: "" },
+            props: { text: "{{weather |to_json}}", autoFit: true, renderEntityState: false }
+          }
+        }]
+      });
+    }
+    appState.widgetPreviewRenderData = {
+      now: "2026-04-27T12:00:00+02:00",
+      entities: {},
+      queries: {},
+      metaQueries: {
+        "weather-query-under-test": {
+          kind: "weather_forecast",
+          items: [{ temperature: "16.6", condition: "cloudy" }]
+        }
+      }
+    };
+    appState.requestUpdate();
+    await flush();
+    await element.updateComplete;
+
+    expect(element.shadowRoot.textContent).toContain("Preview Variables");
+    expect(element.shadowRoot.textContent).toContain("weather");
+    expect(element.shadowRoot.textContent).toContain("16.6");
+    expect(element.shadowRoot.textContent).toContain("cloudy");
   });
 
   it("shows preview theme selector on widget page", async () => {
