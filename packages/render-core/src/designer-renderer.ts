@@ -1274,6 +1274,31 @@ function resolveEntityState(entityRef: string | undefined, data: RenderData, inp
   return "unknown";
 }
 
+function resolveBindingValue(binding: string | undefined, inputContext: ScopeContext, locale = "en-US"): string | undefined {
+  const raw = String(binding ?? "").trim();
+  if (!raw) {
+    return undefined;
+  }
+  if (raw.includes("{{") || raw.includes("${")) {
+    return applyInputTemplate(raw, inputContext, locale);
+  }
+  const direct = resolveScopePath(inputContext, raw);
+  if (direct !== undefined) {
+    return stringifyScopeValue(direct);
+  }
+  if (raw.includes("|")) {
+    const resolved = evaluateScopeValueExpression(raw, inputContext, templateOptions(inputContext, locale));
+    if (resolved !== undefined && resolved !== null) {
+      return stringifyScopeValue(resolved);
+    }
+  }
+  return raw;
+}
+
+function resolveWidgetValue(valueRef: string | undefined, entityRef: string | undefined, data: RenderData, inputContext: ScopeContext, locale = "en-US"): string {
+  return resolveBindingValue(valueRef, inputContext, locale) ?? resolveEntityState(entityRef, data, inputContext, locale);
+}
+
 function applyInputTemplate(template: string, inputContext: ScopeContext, locale = "en-US"): string {
   return applyScopeTemplate(template, inputContext, templateOptions(inputContext, locale));
 }
@@ -1419,8 +1444,8 @@ function drawPrimitiveNode(
 
   if (node.primitiveType === "text") {
     const rawText = node.props?.renderEntityState
-      ? resolveEntityState(node.bindings?.entity, data, inputContext, project.locale)
-      : String(node.props?.text ?? resolveEntityState(node.bindings?.entity, data, inputContext, project.locale));
+      ? resolveWidgetValue(node.bindings?.value, node.bindings?.entity, data, inputContext, project.locale)
+      : String(resolveBindingValue(node.bindings?.value, inputContext, project.locale) ?? node.props?.text ?? resolveEntityState(node.bindings?.entity, data, inputContext, project.locale));
     const text = applyInputTemplate(rawText, inputContext, project.locale);
     const placeholder = applyInputTemplate(String(node.props?.placeholderText ?? ""), inputContext, project.locale);
     const overflow = textOverflowMode(node);
@@ -1457,7 +1482,7 @@ function drawPrimitiveNode(
   }
 
   if (node.primitiveType === "number") {
-    const raw = applyInputTemplate(resolveEntityState(node.bindings?.entity, data, inputContext, project.locale), inputContext, project.locale);
+    const raw = applyInputTemplate(resolveWidgetValue(node.bindings?.value, node.bindings?.entity, data, inputContext, project.locale), inputContext, project.locale);
     const prefix = applyInputTemplate(String(node.props?.prefix ?? ""), inputContext, project.locale);
     const suffix = applyInputTemplate(String(node.props?.suffix ?? ""), inputContext, project.locale);
     const quantizeStep = typeof node.props?.quantizeStep === "number" ? Number(node.props.quantizeStep) : 0;
@@ -1508,7 +1533,8 @@ function drawPrimitiveNode(
       iconHeight,
       (node.props?.verticalAlign ?? "middle") as "top" | "middle" | "bottom"
     );
-    buffer.drawIcon(String(node.props?.icon ?? defaultIconId()), x, y, scale, roleToColor(theme.text.body), toClipRect(visibleInnerFrame));
+    const iconId = resolveBindingValue(node.bindings?.value ?? node.bindings?.icon, inputContext, project.locale) || String(node.props?.icon ?? defaultIconId());
+    buffer.drawIcon(iconId, x, y, scale, roleToColor(theme.text.body), toClipRect(visibleInnerFrame));
     return;
   }
 

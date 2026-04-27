@@ -161,7 +161,7 @@ function defaultPrimitiveNode(kind: PrimitiveWidgetKind): PrimitiveInstanceNode 
     width: defaultSizeSpec("fill"),
     height: defaultSizeSpec("fill"),
     style: { paddingPx: 4, borderToken: "none" },
-    bindings: kind === "graph" ? { query: "" } : kind === "text" || kind === "number" ? { entity: "" } : {},
+    bindings: kind === "graph" ? { query: "" } : kind === "text" || kind === "number" ? { entity: "", value: "" } : kind === "icon" ? { value: "" } : {},
     props:
       kind === "text"
         ? { text: "Text", autoFit: true, placeholderText: "Placeholder", horizontalAlign: "left", verticalAlign: "top", overflow: "wrap", renderEntityState: false, paddingPx: 4 }
@@ -3572,6 +3572,10 @@ export class EpPaperEditorApp extends LitElement {
               , entityInputOptions)}
             </label>
             <label>
+              Value variable
+              <input placeholder="weather.current.temperature_2m" .value=${String(node.bindings?.value ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), bindings: { ...(current as PrimitiveInstanceNode).bindings, value: (event.target as HTMLInputElement).value } })))} />
+            </label>
+            <label>
               <input type="checkbox" ?disabled=${autoFitDisabled} .checked=${Boolean(node.props?.autoFit)} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, autoFit: (event.target as HTMLInputElement).checked } })))} />
               Auto fit
             </label>
@@ -3607,6 +3611,10 @@ export class EpPaperEditorApp extends LitElement {
               ${this.renderEntitySelector(String(node.bindings?.entity ?? ""), (value) =>
                 this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), bindings: { ...(current as PrimitiveInstanceNode).bindings, entity: value } })))
               , entityInputOptions)}
+            </label>
+            <label>
+              Value variable
+              <input placeholder="weather.current.temperature_2m" .value=${String(node.bindings?.value ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), bindings: { ...(current as PrimitiveInstanceNode).bindings, value: (event.target as HTMLInputElement).value } })))} />
             </label>
             <label>
               Decimals
@@ -3664,6 +3672,10 @@ export class EpPaperEditorApp extends LitElement {
               }}>
                 ${iconOptions.map((icon) => html`<option value=${icon.id}>${icon.pack ? `${icon.pack} · ` : ""}${icon.label} (${icon.id})</option>`)}
               </select>
+            </label>
+            <label>
+              Icon variable
+              <input placeholder="weather.current.icon" .value=${String(node.bindings?.value ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), bindings: { ...(current as PrimitiveInstanceNode).bindings, value: (event.target as HTMLInputElement).value } })))} />
             </label>
             ${this.renderContentAlignmentControls(node, owner, { horizontal: "center", vertical: "middle" })}
           `;

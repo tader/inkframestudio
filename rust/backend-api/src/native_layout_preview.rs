@@ -2259,6 +2259,29 @@ fn bound_entity_text(data: &Value, rendered_binding: &str) -> String {
     }
 }
 
+fn binding_scope_value(scope: &Value, binding: Option<&String>, locale: &str) -> Option<Value> {
+    let raw = binding?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.contains("{{") {
+        return render_template(raw, scope, locale).map(Value::String);
+    }
+    if raw.contains('|') {
+        let resolved = resolve_scope_or_literal_expression(raw, scope, locale);
+        return if resolved.is_null() {
+            None
+        } else {
+            Some(resolved)
+        };
+    }
+    scope_value(scope, raw).or_else(|| Some(Value::String(raw.to_string())))
+}
+
+fn binding_scope_text(scope: &Value, binding: Option<&String>, locale: &str) -> Option<String> {
+    binding_scope_value(scope, binding, locale).map(|value| stringify_scope_value(&value))
+}
+
 fn draw_text_run(canvas: &mut IndexedCanvas, run: &TextLayoutRun, x: i32, y: i32, color: u8) {
     for glyph in &run.glyphs {
         for (gy, row) in glyph.pixels.iter().enumerate() {
@@ -2323,19 +2346,25 @@ fn primitive_render_spec(
                     .unwrap_or(theme.text.body)
             };
         let text = if props.render_entity_state.unwrap_or(false) {
-            bindings
-                .get("entity")
-                .map(|entity_id| {
-                    render_template(entity_id, scope, &project.locale)
-                        .unwrap_or_else(|| entity_id.clone())
+            binding_scope_text(scope, bindings.get("value"), &project.locale)
+                .or_else(|| {
+                    bindings
+                        .get("entity")
+                        .map(|entity_id| {
+                            render_template(entity_id, scope, &project.locale)
+                                .unwrap_or_else(|| entity_id.clone())
+                        })
+                        .map(|entity_id| bound_entity_text(scope, &entity_id))
                 })
-                .map(|entity_id| bound_entity_text(scope, &entity_id))
                 .unwrap_or_default()
         } else {
-            props
-                .text
-                .as_deref()
-                .and_then(|value| render_template(value, scope, &project.locale))
+            binding_scope_text(scope, bindings.get("value"), &project.locale)
+                .or_else(|| {
+                    props
+                        .text
+                        .as_deref()
+                        .and_then(|value| render_template(value, scope, &project.locale))
+                })
                 .unwrap_or_default()
         };
         PrimitiveTextSpec {
@@ -2378,13 +2407,16 @@ fn primitive_render_spec(
                     .and_then(|style| style.color_role)
                     .unwrap_or(theme.text.value)
             };
-        let value = bindings
-            .get("entity")
-            .map(|entity_id| {
-                render_template(entity_id, scope, &project.locale)
-                    .unwrap_or_else(|| entity_id.clone())
+        let value = binding_scope_text(scope, bindings.get("value"), &project.locale)
+            .or_else(|| {
+                bindings
+                    .get("entity")
+                    .map(|entity_id| {
+                        render_template(entity_id, scope, &project.locale)
+                            .unwrap_or_else(|| entity_id.clone())
+                    })
+                    .map(|entity_id| bound_entity_text(scope, &entity_id))
             })
-            .map(|entity_id| bound_entity_text(scope, &entity_id))
             .unwrap_or_default();
         let quantize_step = props.quantize_step.unwrap_or(0.0);
         let digits = props.digits.map(|value| value.max(0));
@@ -2744,6 +2776,7 @@ fn render_primitive(
     let Node::PrimitiveInstance {
         primitive_type,
         props,
+        bindings,
         style,
         ..
     } = node
@@ -2802,9 +2835,14 @@ fn render_primitive(
             w: (frame.w - padding * 2).max(1),
             h: (frame.h - padding * 2).max(1),
         };
+        let icon_id = binding_scope_text(scope, bindings.get("value"), &project.locale)
+            .or_else(|| binding_scope_text(scope, bindings.get("icon"), &project.locale))
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| props.icon.clone())
+            .unwrap_or_else(|| DEFAULT_ICON_ID.to_string());
         draw_icon(
             canvas,
-            props.icon.as_deref().unwrap_or(DEFAULT_ICON_ID),
+            &icon_id,
             inner,
             role_color(theme.text.body),
             props.horizontal_align.as_deref().unwrap_or("center"),
@@ -4309,6 +4347,38 @@ mod tests {
         assert_eq!(
             rendered,
             "{\"condition\":\"cloudy\",\"temperature\":\"16.6\"}"
+        );
+    }
+
+    #[test]
+    fn widget_value_binding_resolves_scope_paths_and_filters() {
+        let scope = json!({
+            "weather": {
+                "current": {
+                    "temperature_2m": 16.6,
+                    "icon": "fa-solid:cloud"
+                }
+            }
+        });
+        assert_eq!(
+            binding_scope_text(
+                &scope,
+                Some(&"weather.current.temperature_2m".to_string()),
+                "en-US"
+            ),
+            Some("16.6".into())
+        );
+        assert_eq!(
+            binding_scope_text(&scope, Some(&"weather.current.icon".to_string()), "en-US"),
+            Some("fa-solid:cloud".into())
+        );
+        assert_eq!(
+            binding_scope_text(
+                &scope,
+                Some(&"weather.current | to_json".to_string()),
+                "en-US"
+            ),
+            Some(r#"{"icon":"fa-solid:cloud","temperature_2m":16.6}"#.into())
         );
     }
 

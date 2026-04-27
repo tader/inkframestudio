@@ -764,6 +764,64 @@ describe("epaper editor app", () => {
     expect(new Set([thenPlaceholder, ...(elsePlaceholders ?? [])]).size).toBe(3);
   });
 
+  it("stores variable bindings for value-backed primitive widgets", async () => {
+    window.location.hash = "#/widgets";
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    const appState = element as unknown as TestEditorElement;
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Add compound"))?.click();
+    await flush();
+    await element.updateComplete;
+
+    const widget = appState.project.widgetDefinitions?.find((entry) => entry.id === appState.selectedWidgetDefinitionId);
+    expect(widget?.rootNode?.type).toBe("stack");
+    appState.setRootNode(widget as TestWidgetDefinition, {
+      id: "variable-bindings-root",
+      type: "stack",
+      children: [
+        {
+          id: "number-variable-node",
+          type: "primitive_instance",
+          primitiveType: "number",
+          bindings: { entity: "", value: "" },
+          props: { digits: 1 }
+        },
+        {
+          id: "icon-variable-node",
+          type: "primitive_instance",
+          primitiveType: "icon",
+          bindings: { value: "" },
+          props: { icon: "fa-solid:triangle-exclamation" }
+        }
+      ]
+    });
+    await flush();
+    await element.updateComplete;
+
+    appState.selectNode("number-variable-node");
+    appState.requestUpdate();
+    await flush();
+    await element.updateComplete;
+    setInputValue(inputInLabel<HTMLInputElement>(element.shadowRoot, "Value variable", "input"), "weather.current.temperature_2m");
+    await flush();
+    await element.updateComplete;
+
+    appState.selectNode("icon-variable-node");
+    appState.requestUpdate();
+    await flush();
+    await element.updateComplete;
+    setInputValue(inputInLabel<HTMLInputElement>(element.shadowRoot, "Icon variable", "input"), "weather.current.icon");
+    await flush();
+    await element.updateComplete;
+
+    const root = appState.project.widgetDefinitions?.find((entry) => entry.id === appState.selectedWidgetDefinitionId)?.rootNode;
+    expect(root?.children?.[0]?.bindings?.value).toBe("weather.current.temperature_2m");
+    expect(root?.children?.[1]?.bindings?.value).toBe("weather.current.icon");
+  });
+
   it("adapts data query controls for calendar, entity, and weather sources", async () => {
     window.location.hash = "#/widgets";
     const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
