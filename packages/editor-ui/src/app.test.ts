@@ -121,9 +121,9 @@ describe("epaper editor app", () => {
                 { key: "defaultLatitude", label: "Default latitude", kind: "text", defaultValue: "" },
                 { key: "defaultLongitude", label: "Default longitude", kind: "text", defaultValue: "" },
                 { key: "timezone", label: "Timezone", kind: "text", defaultValue: "auto" },
-                { key: "currentVariables", label: "Current variables", kind: "text", defaultValue: "temperature_2m,weather_code" },
-                { key: "hourlyVariables", label: "Hourly variables", kind: "text", defaultValue: "temperature_2m,precipitation_probability,weather_code" },
-                { key: "dailyVariables", label: "Daily variables", kind: "text", defaultValue: "temperature_2m_max,temperature_2m_min,weather_code" },
+                { key: "currentVariables", label: "Current variables", kind: "text", defaultValue: "temperature_2m,weather_code,wind_speed_10m,wind_direction_10m,precipitation,rain" },
+                { key: "hourlyVariables", label: "Hourly variables", kind: "text", defaultValue: "temperature_2m,weather_code,precipitation_probability,precipitation,rain,wind_speed_10m,wind_direction_10m" },
+                { key: "dailyVariables", label: "Daily variables", kind: "text", defaultValue: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,rain_sum,precipitation_probability_max" },
                 { key: "placesJson", label: "Places JSON", kind: "textarea", defaultValue: "[]" }
               ]
             },
@@ -180,9 +180,9 @@ describe("epaper editor app", () => {
               defaultLatitude: "",
               defaultLongitude: "",
               timezone: "auto",
-              currentVariables: "temperature_2m,weather_code",
-              hourlyVariables: "temperature_2m,precipitation_probability,weather_code",
-              dailyVariables: "temperature_2m_max,temperature_2m_min,weather_code",
+              currentVariables: "temperature_2m,weather_code,wind_speed_10m,wind_direction_10m,precipitation,rain",
+              hourlyVariables: "temperature_2m,weather_code,precipitation_probability,precipitation,rain,wind_speed_10m,wind_direction_10m",
+              dailyVariables: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,rain_sum,precipitation_probability_max",
               placesJson: "[]"
             }
           },

@@ -20,6 +20,24 @@ pub static PROVIDER: OpenMeteoProvider = OpenMeteoProvider;
 pub struct OpenMeteoProvider;
 
 const CACHE_TTL_MS: u64 = 10 * 60 * 1000;
+const DEFAULT_CURRENT_VARIABLES: &str =
+    "temperature_2m,weather_code,wind_speed_10m,wind_direction_10m,precipitation,rain";
+const DEFAULT_HOURLY_VARIABLES: &str =
+    "temperature_2m,weather_code,precipitation_probability,precipitation,rain,wind_speed_10m,wind_direction_10m";
+const DEFAULT_DAILY_VARIABLES: &str =
+    "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,rain_sum,precipitation_probability_max";
+const REQUIRED_CURRENT_VARIABLES: &[&str] = &[
+    "wind_speed_10m",
+    "wind_direction_10m",
+    "precipitation",
+    "rain",
+];
+const REQUIRED_HOURLY_VARIABLES: &[&str] = &["precipitation_probability", "precipitation", "rain"];
+const REQUIRED_DAILY_VARIABLES: &[&str] = &[
+    "precipitation_sum",
+    "rain_sum",
+    "precipitation_probability_max",
+];
 
 #[derive(Debug, Deserialize)]
 struct GeocodingResponse {
@@ -34,20 +52,27 @@ mod tests {
     #[test]
     fn current_alias_uses_provider_defaults() {
         assert_eq!(
-            variables_from_value(Some(&json!("current")), "temperature_2m,weather_code"),
-            vec!["temperature_2m".to_string(), "weather_code".to_string()]
+            variables_from_value(Some(&json!("current")), DEFAULT_CURRENT_VARIABLES),
+            vec![
+                "temperature_2m".to_string(),
+                "weather_code".to_string(),
+                "wind_speed_10m".to_string(),
+                "wind_direction_10m".to_string(),
+                "precipitation".to_string(),
+                "rain".to_string()
+            ]
         );
     }
 
     #[test]
     fn empty_current_value_uses_provider_defaults() {
         assert_eq!(
-            variables_from_value(Some(&json!("")), "temperature_2m,weather_code"),
-            vec!["temperature_2m".to_string(), "weather_code".to_string()]
+            variables_from_value(Some(&json!("")), DEFAULT_CURRENT_VARIABLES),
+            split_variables(DEFAULT_CURRENT_VARIABLES)
         );
         assert_eq!(
-            variables_from_value(Some(&json!([])), "temperature_2m,weather_code"),
-            vec!["temperature_2m".to_string(), "weather_code".to_string()]
+            variables_from_value(Some(&json!([])), DEFAULT_CURRENT_VARIABLES),
+            split_variables(DEFAULT_CURRENT_VARIABLES)
         );
     }
 
@@ -70,6 +95,66 @@ mod tests {
         assert_eq!(current["temperature_2m"], json!(16.8));
         assert_eq!(current["weather_code"], json!(2));
         assert_eq!(current["time"], json!("2026-04-27T17:00"));
+    }
+
+    #[test]
+    fn required_weather_variables_are_added_to_legacy_config() {
+        let vars = ensure_variables(
+            split_variables("temperature_2m,weather_code"),
+            REQUIRED_CURRENT_VARIABLES,
+        );
+        assert!(vars.contains(&"wind_speed_10m".to_string()));
+        assert!(vars.contains(&"wind_direction_10m".to_string()));
+        assert!(vars.contains(&"precipitation".to_string()));
+        assert!(vars.contains(&"rain".to_string()));
+    }
+
+    #[test]
+    fn current_value_includes_hourly_rain_chance_when_available() {
+        let hourly_rows = vec![
+            json!({
+                "time": "2026-04-27T09:00",
+                "precipitation_probability": 10,
+                "rain": 0,
+                "units": {
+                    "precipitation_probability": "%",
+                    "rain": "mm"
+                }
+            }),
+            json!({
+                "time": "2026-04-27T17:00",
+                "precipitation_probability": 70,
+                "rain": 1.2,
+                "units": {
+                    "precipitation_probability": "%",
+                    "rain": "mm"
+                }
+            }),
+        ];
+        let current = current_value_from_forecast(
+            &json!({
+                "current": {
+                    "time": "2026-04-27T17:00",
+                    "temperature_2m": 16.8,
+                    "wind_speed_10m": 14.2,
+                    "wind_direction_10m": 220,
+                    "precipitation": 1.2
+                },
+                "current_units": {
+                    "temperature_2m": "°C",
+                    "wind_speed_10m": "km/h",
+                    "wind_direction_10m": "°",
+                    "precipitation": "mm"
+                }
+            }),
+            &hourly_rows,
+            &split_variables(DEFAULT_CURRENT_VARIABLES),
+        );
+        assert_eq!(current["wind_speed_10m"], json!(14.2));
+        assert_eq!(current["wind_direction_10m"], json!(220));
+        assert_eq!(current["precipitation"], json!(1.2));
+        assert_eq!(current["precipitation_probability"], json!(70));
+        assert_eq!(current["units"]["precipitation_probability"], json!("%"));
     }
 }
 
@@ -144,20 +229,20 @@ pub fn descriptor() -> ProviderDescriptor {
             field(
                 "currentVariables",
                 "Current variables",
-                "temperature_2m,weather_code",
-                json!("temperature_2m,weather_code"),
+                DEFAULT_CURRENT_VARIABLES,
+                json!(DEFAULT_CURRENT_VARIABLES),
             ),
             field(
                 "hourlyVariables",
                 "Hourly variables",
-                "temperature_2m,weather_code,precipitation_probability",
-                json!("temperature_2m,weather_code,precipitation_probability"),
+                DEFAULT_HOURLY_VARIABLES,
+                json!(DEFAULT_HOURLY_VARIABLES),
             ),
             field(
                 "dailyVariables",
                 "Daily variables",
-                "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum",
-                json!("weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum"),
+                DEFAULT_DAILY_VARIABLES,
+                json!(DEFAULT_DAILY_VARIABLES),
             ),
             textarea_field(
                 "placesJson",
@@ -223,6 +308,15 @@ fn split_variables(value: &str) -> Vec<String> {
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .collect()
+}
+
+fn ensure_variables(mut variables: Vec<String>, required: &[&str]) -> Vec<String> {
+    for variable in required {
+        if !variables.iter().any(|value| value == variable) {
+            variables.push((*variable).to_string());
+        }
+    }
+    variables
 }
 
 fn place_entry(place: &GeocodingPlace) -> PlaceSearchEntry {
@@ -357,6 +451,27 @@ fn table_to_rows(table: Option<&Value>, units: Option<&Value>) -> Vec<Value> {
         .collect()
 }
 
+fn hourly_row_for_current<'a>(
+    hourly_rows: &'a [Value],
+    current: Option<&serde_json::Map<String, Value>>,
+) -> Option<&'a Value> {
+    let current_hour = current
+        .and_then(|value| value.get("time"))
+        .and_then(Value::as_str)
+        .and_then(|time| time.get(..13));
+    if let Some(current_hour) = current_hour {
+        if let Some(row) = hourly_rows.iter().find(|row| {
+            row.get("time")
+                .and_then(Value::as_str)
+                .and_then(|time| time.get(..13))
+                == Some(current_hour)
+        }) {
+            return Some(row);
+        }
+    }
+    hourly_rows.first()
+}
+
 fn current_value_from_forecast(
     forecast: &Value,
     hourly_rows: &[Value],
@@ -365,13 +480,44 @@ fn current_value_from_forecast(
     if let Some(current) = forecast.get("current").and_then(Value::as_object) {
         if !current.is_empty() {
             let mut current = current.clone();
-            current.insert(
-                "units".into(),
-                forecast
-                    .get("current_units")
-                    .cloned()
-                    .unwrap_or_else(|| json!({})),
-            );
+            let mut units = forecast
+                .get("current_units")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            if let Some(first_hourly) =
+                hourly_row_for_current(hourly_rows, Some(&current)).and_then(Value::as_object)
+            {
+                for variable in [
+                    "precipitation_probability",
+                    "precipitation",
+                    "rain",
+                    "wind_speed_10m",
+                    "wind_direction_10m",
+                ] {
+                    if !current.contains_key(variable) {
+                        if let Some(value) = first_hourly.get(variable) {
+                            current.insert(variable.into(), value.clone());
+                        }
+                    }
+                }
+                if let Some(hourly_units) = first_hourly.get("units").and_then(Value::as_object) {
+                    for variable in [
+                        "precipitation_probability",
+                        "precipitation",
+                        "rain",
+                        "wind_speed_10m",
+                        "wind_direction_10m",
+                    ] {
+                        if !units.contains_key(variable) {
+                            if let Some(value) = hourly_units.get(variable) {
+                                units.insert(variable.into(), value.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            current.insert("units".into(), Value::Object(units));
             return Value::Object(current);
         }
     }
@@ -381,7 +527,13 @@ fn current_value_from_forecast(
         }
     }
     hourly_rows
-        .first()
+        .iter()
+        .find(|row| {
+            row.get("time")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+        })
+        .or_else(|| hourly_rows.first())
         .and_then(Value::as_object)
         .map(|row| {
             let mut current = serde_json::Map::new();
@@ -455,14 +607,18 @@ impl SourceProvider for OpenMeteoProvider {
                 "message": "Open-Meteo ready. Add a default latitude/longitude or places for live data."
             }));
         };
-        let current = split_variables(&config_string(instance, "currentVariables"));
+        let current = ensure_variables(
+            split_variables(&config_string(instance, "currentVariables")),
+            REQUIRED_CURRENT_VARIABLES,
+        );
+        let hourly = ensure_variables(Vec::new(), REQUIRED_HOURLY_VARIABLES);
         let forecast = fetch_forecast(
             state,
             latitude,
             longitude,
             timezone.as_deref().unwrap_or("auto"),
             &current,
-            &[],
+            &hourly,
             &[],
             Some(1),
         )
@@ -508,7 +664,11 @@ impl SourceProvider for OpenMeteoProvider {
         instance: &ProviderInstance,
     ) -> Result<serde_json::Map<String, Value>, ApiError> {
         let mut entities = serde_json::Map::new();
-        let current_vars = split_variables(&config_string(instance, "currentVariables"));
+        let current_vars = ensure_variables(
+            split_variables(&config_string(instance, "currentVariables")),
+            REQUIRED_CURRENT_VARIABLES,
+        );
+        let hourly_vars = ensure_variables(Vec::new(), REQUIRED_HOURLY_VARIABLES);
         for place in configured_places(instance) {
             let id = place.id.clone().unwrap_or_else(|| slug(&place.name));
             let forecast = fetch_forecast(
@@ -517,7 +677,7 @@ impl SourceProvider for OpenMeteoProvider {
                 place.longitude,
                 place.timezone.as_deref().unwrap_or("auto"),
                 &current_vars,
-                &[],
+                &hourly_vars,
                 &[],
                 Some(1),
             )
@@ -581,17 +741,26 @@ impl SourceProvider for OpenMeteoProvider {
                 warnings.push(format!("Open-Meteo query {id} has no latitude/longitude."));
                 continue;
             };
-            let current = variables_from_value(
-                node.get("current"),
-                &config_string(instance, "currentVariables"),
+            let current = ensure_variables(
+                variables_from_value(
+                    node.get("current"),
+                    &config_string(instance, "currentVariables"),
+                ),
+                REQUIRED_CURRENT_VARIABLES,
             );
-            let hourly = variables_from_value(
-                node.get("hourly"),
-                &config_string(instance, "hourlyVariables"),
+            let hourly = ensure_variables(
+                variables_from_value(
+                    node.get("hourly"),
+                    &config_string(instance, "hourlyVariables"),
+                ),
+                REQUIRED_HOURLY_VARIABLES,
             );
-            let daily = variables_from_value(
-                node.get("daily"),
-                &config_string(instance, "dailyVariables"),
+            let daily = ensure_variables(
+                variables_from_value(
+                    node.get("daily"),
+                    &config_string(instance, "dailyVariables"),
+                ),
+                REQUIRED_DAILY_VARIABLES,
             );
             let forecast_days = node.get("forecastDays").and_then(Value::as_u64);
             match fetch_forecast(

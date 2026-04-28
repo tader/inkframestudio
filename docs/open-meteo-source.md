@@ -40,7 +40,9 @@ Minimal query:
   "queryKind": "weather_forecast",
   "variableName": "weather",
   "locationId": "den-hoorn",
-  "current": ["temperature_2m", "weather_code"],
+  "current": ["temperature_2m", "weather_code", "wind_speed_10m", "wind_direction_10m", "precipitation", "rain"],
+  "hourly": ["precipitation_probability", "precipitation", "rain"],
+  "daily": ["precipitation_sum", "rain_sum", "precipitation_probability_max"],
   "forecastDays": 1,
   "child": {
     "type": "script",
@@ -69,6 +71,17 @@ weather[0].daily
 weather[0].raw
 ```
 
+The provider always adds a compact weather set even when older provider config still lists fewer fields:
+
+- `current.wind_speed_10m`: current wind speed.
+- `current.wind_direction_10m`: current wind direction in degrees.
+- `current.precipitation`: current total precipitation amount for the preceding interval.
+- `current.rain`: current rain amount for the preceding interval.
+- `current.precipitation_probability`: current rain/precipitation chance, copied from the first hourly forecast row when available.
+- `hourly[].precipitation_probability`: forecast chance of precipitation.
+- `hourly[].precipitation` and `hourly[].rain`: forecast precipitation/rain amount.
+- `daily[].precipitation_sum`, `daily[].rain_sum`, and `daily[].precipitation_probability_max`: daily totals/chance.
+
 You can also bypass configured places and pass coordinates directly:
 
 ```json
@@ -80,7 +93,8 @@ You can also bypass configured places and pass coordinates directly:
   "latitude": 52.002,
   "longitude": 4.331,
   "timezone": "auto",
-  "current": "temperature_2m,weather_code"
+  "current": "temperature_2m,weather_code,wind_speed_10m,wind_direction_10m,precipitation,rain",
+  "hourly": "precipitation_probability,precipitation,rain"
 }
 ```
 
@@ -117,6 +131,9 @@ const icon =
 return {
   place: "Den Hoorn",
   temp: Math.round(Number(current.temperature_2m ?? 0)),
+  wind: Math.round(Number(current.wind_speed_10m ?? 0)),
+  rainChance: Math.round(Number(current.precipitation_probability ?? 0)),
+  rain: Number(current.rain ?? current.precipitation ?? 0).toFixed(1),
   icon
 };
 ```
