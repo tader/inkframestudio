@@ -12,17 +12,8 @@ export const BUILT_IN_PRIMITIVE_KINDS: PrimitiveWidgetKind[] = [
   "text",
   "number",
   "icon",
-  "graph",
   "bar_chart",
-  "line",
-  "box",
-  "circle",
-  "date_time_compact",
-  "agenda_list",
-  "state_tile",
-  "alert_banner",
-  "status_strip",
-  "history_bars"
+  "line"
 ];
 
 export const BUILT_IN_WIDGET_DEFINITIONS: WidgetDefinition[] = BUILT_IN_PRIMITIVE_KINDS.map((kind) => ({

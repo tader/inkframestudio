@@ -72,7 +72,7 @@ describe("designer renderer", () => {
         name: "Padded",
         width: 40,
         height: 24,
-        rotation: 0,
+        rotation: 0 as const,
         contentPadding: { top: 5, right: 6, bottom: 7, left: 8 },
         gridUnitPx: 8,
         palette: { bg: "#ffffff", fg: "#111111", accent: "#d7261b" }
@@ -90,9 +90,9 @@ describe("designer renderer", () => {
           height: { mode: "fill" },
           style: { paddingPx: 0, gapPx: 0, borderToken: "none" },
           children: [{
-            id: "box",
+            id: "line",
             type: "primitive_instance",
-            primitiveType: "box",
+            primitiveType: "line",
             width: { mode: "fill" },
             height: { mode: "fill" },
             props: { paddingPx: 0, borderToken: "none" }
@@ -110,10 +110,10 @@ describe("designer renderer", () => {
     const rendered = renderLayoutDefinition(project, layout, SAMPLE_DATA, undefined, "soft-fill");
     expect(rendered.pixels[1 * rendered.width + 1]).toBe(2);
     expect(rendered.pixels[4 * rendered.width + 8]).toBe(2);
-    expect(rendered.pixels[5 * rendered.width + 8]).toBe(1);
+    expect(rendered.pixels[11 * rendered.width + 8]).toBe(1);
   });
 
-  it("renders composition layouts with zstack text over graph", () => {
+  it("renders composition layouts with zstack text over bar chart", () => {
     const normalized = normalizeProject(SAMPLE_PROJECT);
     const project: Project = normalizeProject({
       ...normalized,
@@ -131,10 +131,10 @@ describe("designer renderer", () => {
             height: { mode: "fill" },
             children: [
               {
-                id: "graph",
+                id: "bar-chart",
                 type: "primitive_instance",
-                primitiveType: "graph",
-                bindings: { query: "garage-temp-history" },
+                primitiveType: "bar_chart",
+                bindings: { value: "missing_chart" },
                 width: { mode: "fill" },
                 height: { mode: "fill" },
                 props: {}
@@ -168,7 +168,7 @@ describe("designer renderer", () => {
         name: "Chart",
         width: 40,
         height: 20,
-        rotation: 0,
+        rotation: 0 as const,
         contentPadding: { top: 0, right: 0, bottom: 0, left: 0 },
         gridUnitPx: 8,
         palette: { bg: "#ffffff", fg: "#111111", accent: "#d7261b" }
@@ -209,6 +209,73 @@ describe("designer renderer", () => {
     expect(regionPixels(rendered, 13, 0, 1, 20).filter((pixel) => pixel !== 0).length).toBeGreaterThan(
       regionPixels(rendered, 26, 0, 1, 20).filter((pixel) => pixel !== 0).length
     );
+  });
+
+  it("renders bar chart data from JSON and expressions", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const base = {
+      ...normalized,
+      displayTypes: [{
+        id: "chart-display",
+        name: "Chart",
+        width: 40,
+        height: 20,
+        rotation: 0 as const,
+        contentPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+        gridUnitPx: 8,
+        palette: { bg: "#ffffff", fg: "#111111", accent: "#d7261b" }
+      }]
+    };
+    const jsonProject: Project = normalizeProject({
+      ...base,
+      layoutDefinitions: [{
+        id: "layout-bar-json",
+        name: "Bar JSON",
+        kind: "fullscreen",
+        displayTypeId: "chart-display",
+        rootNode: {
+          id: "bars",
+          type: "primitive_instance",
+          primitiveType: "bar_chart",
+          bindings: { value: "[1, 3, 2]" },
+          props: { minValue: 0, maxValue: 3, baselineValue: 0, barGapPx: 1, colorRole: "accent" },
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          style: { paddingPx: 0 }
+        }
+      }]
+    });
+    const expressionProject: Project = normalizeProject({
+      ...base,
+      layoutDefinitions: [{
+        id: "layout-bar-expression",
+        name: "Bar Expression",
+        kind: "fullscreen",
+        displayTypeId: "chart-display",
+        rootNode: {
+          id: "script",
+          type: "script",
+          source: "return { chart: [{ value: 1 }, { value: 3 }, { value: 2 }] };",
+          outputMode: "merge_object",
+          bindings: {},
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          child: {
+            id: "bars",
+            type: "primitive_instance",
+            primitiveType: "bar_chart",
+            bindings: { value: "chart.map(item => item.value)" },
+            props: { minValue: 0, maxValue: 3, baselineValue: 0, barGapPx: 1, colorRole: "accent" },
+            width: { mode: "fill" },
+            height: { mode: "fill" },
+            style: { paddingPx: 0 }
+          }
+        }
+      }]
+    });
+
+    expect(pixelBounds(renderLayoutDefinition(jsonProject, jsonProject.layoutDefinitions![0]!, SAMPLE_DATA), 0, 0, 40, 20)).toBeTruthy();
+    expect(pixelBounds(renderLayoutDefinition(expressionProject, expressionProject.layoutDefinitions![0]!, SAMPLE_DATA), 0, 0, 40, 20)).toBeTruthy();
   });
 
   it("renders assigned display from migrated virtual device", () => {
@@ -266,7 +333,7 @@ describe("designer renderer", () => {
         width: { mode: "fill" as const },
         height: { mode: "fill" as const },
         children: [
-          { id: "graph", type: "primitive_instance" as const, primitiveType: "graph", width: { mode: "fill" as const }, height: { mode: "fill" as const } },
+          { id: "bar-chart", type: "primitive_instance" as const, primitiveType: "bar_chart", width: { mode: "fill" as const }, height: { mode: "fill" as const } },
           { id: "number", type: "primitive_instance" as const, primitiveType: "number", width: { mode: "fill" as const }, height: { mode: "fill" as const } }
         ]
       }
@@ -1509,13 +1576,13 @@ describe("designer renderer", () => {
     expect(rendered.pixels[9 * rendered.width + 8]).toBe(1);
   });
 
-  it("supports halftone graph fills", () => {
+  it("supports halftone bar chart fills", () => {
     const normalized = normalizeProject(SAMPLE_PROJECT);
     const project: Project = normalizeProject({
       ...normalized,
       layoutDefinitions: [{
-        id: "layout-graph-halftone",
-        name: "Graph Halftone",
+        id: "layout-bar-chart-halftone",
+        name: "Bar Chart Halftone",
         kind: "fullscreen",
         displayTypeId: normalized.displayTypes?.[0]?.id ?? "tri296x128-red",
         rootNode: {
@@ -1525,47 +1592,33 @@ describe("designer renderer", () => {
           width: { mode: "fill" },
           height: { mode: "fill" },
           children: [{
-            id: "graph",
-            type: "primitive_instance",
-            primitiveType: "graph",
+            id: "script",
+            type: "script",
+            source: "return { bars: [0, 10] };",
+            outputMode: "merge_object",
+            bindings: {},
             width: { mode: "fixed_px", value: 20 },
             height: { mode: "fixed_px", value: 12 },
-            bindings: { query: "bars" },
-            props: { colorRole: "light-accent", paddingPx: 0, borderToken: "none" }
+            style: { paddingPx: 0, borderToken: "none" },
+            child: {
+              id: "bar-chart",
+              type: "primitive_instance",
+              primitiveType: "bar_chart",
+              width: { mode: "fill" },
+              height: { mode: "fill" },
+              bindings: { value: "bars" },
+              props: { colorRole: "light-accent", paddingPx: 0, borderToken: "none" }
+            }
           }]
         }
       }]
     });
 
-    const inspection = inspectLayoutDefinition(project, project.layoutDefinitions?.[0]!, {
-      ...SAMPLE_DATA,
-      queries: {
-        ...SAMPLE_DATA.queries,
-        bars: {
-          kind: "history_range",
-          points: [
-            { timestamp: "2026-04-17T09:00:00.000Z", value: 0 },
-            { timestamp: "2026-04-17T10:00:00.000Z", value: 10 }
-          ]
-        }
-      }
-    });
-    const graphFrame = inspection.root?.children[0]?.frame;
-    const rendered = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, {
-      ...SAMPLE_DATA,
-      queries: {
-        ...SAMPLE_DATA.queries,
-        bars: {
-          kind: "history_range",
-          points: [
-            { timestamp: "2026-04-17T09:00:00.000Z", value: 0 },
-            { timestamp: "2026-04-17T10:00:00.000Z", value: 10 }
-          ]
-        }
-      }
-    });
-    const first = rendered.pixels[(graphFrame!.y + graphFrame!.h - 1) * rendered.width + (graphFrame!.x + 10)];
-    const second = rendered.pixels[(graphFrame!.y + graphFrame!.h - 1) * rendered.width + (graphFrame!.x + 11)];
+    const inspection = inspectLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const chartFrame = inspection.root?.children[0]?.children[0]?.frame;
+    const rendered = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const first = rendered.pixels[(chartFrame!.y + chartFrame!.h - 1) * rendered.width + (chartFrame!.x + 10)];
+    const second = rendered.pixels[(chartFrame!.y + chartFrame!.h - 1) * rendered.width + (chartFrame!.x + 11)];
     expect([first, second].sort()).toEqual([0, 2]);
   });
 

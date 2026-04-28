@@ -36,17 +36,8 @@ export type PrimitiveWidgetKind =
   | "text"
   | "number"
   | "icon"
-  | "graph"
   | "bar_chart"
-  | "line"
-  | "box"
-  | "circle"
-  | "date_time_compact"
-  | "agenda_list"
-  | "state_tile"
-  | "alert_banner"
-  | "status_strip"
-  | "history_bars";
+  | "line";
 
 export interface FontPresetValues {
   tiny: number;
@@ -565,19 +556,11 @@ export interface WidgetInstance {
     | "text"
     | "number"
     | "icon"
-    | "graph"
+    | "bar_chart"
     | "static_text"
-    | "box"
     | "line"
-    | "circle"
-    | "state_tile"
     | "big_value"
     | "numeric_state"
-    | "agenda_list"
-    | "alert_banner"
-    | "date_time_compact"
-    | "status_strip"
-    | "history_bars"
     | "placeholder";
   frame: Frame;
   screenId?: string;

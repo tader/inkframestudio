@@ -84,13 +84,13 @@ describe("tree model", () => {
       children: []
     };
     const next = insertNode(root, "grid-root", {
-      id: "graph",
+      id: "bar-chart",
       type: "primitive_instance",
-      primitiveType: "graph"
+      primitiveType: "bar_chart"
     });
     expect(next.type).toBe("grid");
     if (next.type === "grid") {
-      expect(next.children[0]?.node.id).toBe("graph");
+      expect(next.children[0]?.node.id).toBe("bar-chart");
       expect(next.children[0]?.placement).toEqual({ row: 0, column: 0 });
     }
   });

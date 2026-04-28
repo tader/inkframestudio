@@ -1702,10 +1702,13 @@ fn unsupported_node_self_reason(node: &Node) -> Option<String> {
                 props.icon.as_deref().unwrap_or(DEFAULT_ICON_ID)
             ))
         }
-        Node::PrimitiveInstance { bindings, .. }
-            if !bindings
-                .keys()
-                .all(|key| matches!(key.as_str(), "entity" | "value" | "icon")) =>
+        Node::PrimitiveInstance {
+            primitive_type,
+            bindings,
+            ..
+    } if !bindings
+        .keys()
+        .all(|key| matches!(key.as_str(), "entity" | "value" | "icon")) =>
         {
             let keys = bindings.keys().cloned().collect::<Vec<_>>().join(", ");
             Some(format!("unsupported primitive binding keys: {keys}"))
@@ -2194,6 +2197,13 @@ fn resolve_scope_or_literal_expression(expression: &str, scope: &Value, locale: 
     if trimmed.is_empty() {
         return Value::Null;
     }
+    if (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        || (trimmed.starts_with('{') && trimmed.ends_with('}'))
+    {
+        if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+            return value;
+        }
+    }
     if (trimmed.starts_with('"') && trimmed.ends_with('"'))
         || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
     {
@@ -2219,6 +2229,11 @@ fn resolve_scope_or_literal_expression(expression: &str, scope: &Value, locale: 
     let mut current = scope_value(scope, base).unwrap_or(Value::Null);
     for segment in segments.into_iter().skip(1) {
         current = apply_template_filter(current, &segment, locale);
+    }
+    if current.is_null() && !trimmed.contains('|') {
+        if let Ok(value) = evaluate_js_value(trimmed, scope) {
+            return value;
+        }
     }
     current
 }
@@ -2430,6 +2445,24 @@ fn evaluate_js_bool(expression: &str, scope: &Value) -> Result<bool, ApiError> {
         .eval(Source::from_bytes(source.as_bytes()))
         .map_err(|error| ApiError::internal(error.to_string()))?;
     Ok(value.to_boolean())
+}
+
+fn evaluate_js_value(expression: &str, scope: &Value) -> Result<Value, ApiError> {
+    let mut context = BoaContext::default();
+    let scope_json =
+        serde_json::to_string(scope).map_err(|error| ApiError::internal(error.to_string()))?;
+    let source = format!(
+        "(function(){{ const scope = {scope_json}; {decls} return JSON.stringify({expression}); }})()",
+        decls = scope_declarations(scope)
+    );
+    let value = context
+        .eval(Source::from_bytes(source.as_bytes()))
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    let text = value
+        .to_string(&mut context)
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .to_std_string_escaped();
+    serde_json::from_str(&text).map_err(|error| ApiError::internal(error.to_string()))
 }
 
 fn text_run(
@@ -4853,6 +4886,71 @@ mod tests {
             .filter(|x| image.get_pixel(*x, 0).0[0..3] == [0, 0, 0])
             .count();
         assert_eq!(black_pixels, 32);
+    }
+
+    #[test]
+    fn bar_chart_rejects_query_binding() {
+        let project_value = json!({
+            "id": "demo",
+            "name": "Demo",
+            "locale": "en-US",
+            "fontPresets": { "tiny": 8, "normal": 12, "header": 24 },
+            "themes": [{
+                "id": "classic-outline",
+                "text": { "title": "fg", "body": "fg", "value": "fg" }
+            }],
+            "displayTypes": [{
+                "id": "tiny",
+                "width": 32,
+                "height": 16,
+                "palette": { "bg": "#ffffff", "fg": "#000000", "accent": "#ff0000" }
+            }],
+            "layoutDefinitions": [{
+                "id": "layout-bar-chart",
+                "displayTypeId": "tiny",
+                "rootNode": {
+                    "id": "script",
+                    "type": "script",
+                    "source": "return { chart: [1, 2, 3] };",
+                    "outputMode": "merge_object",
+                    "bindings": {},
+                    "width": { "mode": "fill" },
+                    "height": { "mode": "fill" },
+                    "style": { "borderToken": "none", "paddingPx": 0 },
+                    "child": {
+                        "id": "bars",
+                        "type": "primitive_instance",
+                        "primitiveType": "bar_chart",
+                        "width": { "mode": "fill" },
+                        "height": { "mode": "fill" },
+                        "style": { "borderToken": "none", "paddingPx": 0 },
+                        "bindings": { "value": "chart", "query": "" },
+                        "props": { "valueKey": "value" }
+                    }
+                }
+            }]
+        });
+        let rendered = render_layout_preview(
+            &project_value,
+            &json!({}),
+            &json!({ "now": "2026-04-24T22:00:00+02:00" }),
+            "layout-bar-chart",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(rendered
+            .script_warnings
+            .unwrap_or_default()
+            .iter()
+            .any(|warning| warning.contains("rendered placeholder")));
+        let reason =
+            unsupported_layout_preview_reason(&project_value, &json!({ "layoutId": "layout-bar-chart" }));
+        assert!(reason.contains("unsupported primitive binding keys"));
+        assert!(reason.contains("query"));
     }
 
     #[test]

@@ -739,7 +739,7 @@ function fitContentWidth(
     return 1 + chrome;
   }
 
-  return buffer.measureText(node.primitiveType.toUpperCase(), bodyStyle).width + chrome;
+    return buffer.measureText(String(node.primitiveType).toUpperCase(), bodyStyle).width + chrome;
 }
 
 function fitContentHeight(
@@ -877,7 +877,7 @@ function fitContentHeight(
     return 1 + chrome;
   }
 
-  return adjustedTextBlockHeight(buffer.measureText(node.primitiveType.toUpperCase(), bodyStyle).lineHeight, Math.round(Number(bodyStyle.topPaddingPx ?? 0))) + chrome;
+    return adjustedTextBlockHeight(buffer.measureText(String(node.primitiveType).toUpperCase(), bodyStyle).lineHeight, Math.round(Number(bodyStyle.topPaddingPx ?? 0))) + chrome;
 }
 
 function renderedTextBlockHeight(
@@ -1098,33 +1098,6 @@ function drawLine(
     if (e2 <= dx) {
       error += dx;
       y += sy;
-    }
-  }
-}
-
-function drawCircle(
-  buffer: PixelBuffer,
-  frame: PixelFrame,
-  color: number,
-  filled: boolean,
-  clip?: PixelFrame
-): void {
-  const rx = Math.max(1, Math.floor(frame.w / 2));
-  const ry = Math.max(1, Math.floor(frame.h / 2));
-  const cx = frame.x + Math.floor(frame.w / 2);
-  const cy = frame.y + Math.floor(frame.h / 2);
-  for (let y = frame.y; y < frame.y + frame.h; y += 1) {
-    for (let x = frame.x; x < frame.x + frame.w; x += 1) {
-      const normX = (x - cx) / rx;
-      const normY = (y - cy) / ry;
-      const value = normX * normX + normY * normY;
-      if (filled) {
-        if (value <= 1) {
-          buffer.setPixel(x, y, color, clip ? toClipRect(clip) : undefined);
-        }
-      } else if (value <= 1 && value >= 0.82) {
-        buffer.setPixel(x, y, color, clip ? toClipRect(clip) : undefined);
-      }
     }
   }
 }
@@ -1563,22 +1536,6 @@ function scriptNodeScope(node: ScriptLayoutNode, inputContext: ScopeContext, loc
     : inputContext;
 }
 
-function drawGraph(buffer: PixelBuffer, frame: PixelFrame, data: RenderData, queryId: string | undefined, paint: PixelPaint): void {
-  const points = data.queries[queryId ?? ""]?.points ?? [];
-  if (!points.length) {
-    return;
-  }
-  const values = points.map((point) => point.value);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const spread = Math.max(1, max - min);
-  const barWidth = Math.max(1, Math.floor(frame.w / points.length));
-  points.forEach((point, index) => {
-    const height = Math.max(1, Math.round(((point.value - min) / spread) * Math.max(1, frame.h - 1)));
-    buffer.drawPaintRect(frame.x + index * barWidth, frame.y + frame.h - height, Math.max(1, barWidth - 1), height, paint);
-  });
-}
-
 function resolveBindingRaw(binding: string | undefined, inputContext: ScopeContext, locale = "en-US"): ScopeContext[string] | undefined {
   const raw = String(binding ?? "").trim();
   if (!raw) {
@@ -1591,11 +1548,23 @@ function resolveBindingRaw(binding: string | undefined, inputContext: ScopeConte
   if (direct !== undefined) {
     return direct;
   }
-  if (raw.includes("|")) {
-    const resolved = evaluateScopeValueExpression(raw, inputContext, templateOptions(inputContext, locale));
-    if (resolved !== undefined && resolved !== null) {
-      return resolved as ScopeContext[string];
+  if ((raw.startsWith("[") && raw.endsWith("]")) || (raw.startsWith("{") && raw.endsWith("}"))) {
+    try {
+      return JSON.parse(raw) as ScopeContext[string];
+    } catch {
+      // Fall through to expression evaluation.
     }
+  }
+  const resolved = evaluateScopeValueExpression(raw, inputContext, templateOptions(inputContext, locale));
+  if (resolved !== undefined && resolved !== null) {
+    return resolved as ScopeContext[string];
+  }
+  try {
+    const names = Object.keys(inputContext).filter((key) => /^[A-Za-z_$][\w$]*$/.test(key));
+    const values = names.map((key) => inputContext[key]);
+    return Function(...names, `return (${raw});`)(...values) as ScopeContext[string];
+  } catch {
+    // Invalid expressions simply render no chart data.
   }
   return undefined;
 }
@@ -1817,11 +1786,6 @@ function drawPrimitiveNode(
     return;
   }
 
-  if (node.primitiveType === "graph") {
-    drawGraph(buffer, visibleInnerFrame, data, node.bindings?.query, fillRoleToPaint(node.props?.colorRole ?? theme.accentRole) ?? { kind: "solid", color: roleToColor(theme.accentRole) });
-    return;
-  }
-
   if (node.primitiveType === "bar_chart") {
     drawBarChart(buffer, visibleInnerFrame, barChartValues(node, inputContext, project.locale ?? "en-US"), node, theme, visibleInnerFrame);
     return;
@@ -1841,19 +1805,9 @@ function drawPrimitiveNode(
     return;
   }
 
-  if (node.primitiveType === "box") {
-    buffer.drawRect(innerFrame.x, innerFrame.y, innerFrame.w, innerFrame.h, roleToColor(theme.text.body), false, toClipRect(visibleInnerFrame));
-    return;
-  }
-
-  if (node.primitiveType === "circle") {
-    drawCircle(buffer, innerFrame, roleToColor(theme.text.body), Boolean(node.props?.filled), visibleInnerFrame);
-    return;
-  }
-
   drawGlyphOutlinedText(
     buffer,
-    node.primitiveType.toUpperCase(),
+    String(node.primitiveType).toUpperCase(),
     innerFrame,
     bodyStyle,
     roleToColor(theme.text.body),

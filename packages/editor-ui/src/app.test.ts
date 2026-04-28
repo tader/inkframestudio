@@ -27,6 +27,11 @@ function inputInLabel<T extends HTMLInputElement | HTMLSelectElement | HTMLTextA
   return input as T;
 }
 
+function inspectorLabelTexts(root: ShadowRoot): string[] {
+  const panel = root.querySelector(".inspector-panel");
+  return Array.from(panel?.querySelectorAll("label") ?? []).map((label) => label.textContent?.replace(/\s+/g, " ").trim() ?? "");
+}
+
 function setInputValue(input: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement, value: string): void {
   input.value = value;
   input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
@@ -46,6 +51,8 @@ type TestLayoutNode = {
   entityIds?: string[];
   forecastDays?: number;
   primitiveType?: string;
+  source?: string;
+  outputMode?: string;
   children?: TestLayoutNode[];
   child?: TestLayoutNode;
   thenChild?: TestLayoutNode;
@@ -929,6 +936,9 @@ describe("epaper editor app", () => {
       ?.rootNode?.children?.find((node) => node.type === "data_query");
 
     expect(inputInLabel<HTMLSelectElement>(element.shadowRoot, "Query type", "select").value).toBe("calendar_events");
+    expect(inspectorLabelTexts(element.shadowRoot).some((text) => text.startsWith("Width "))).toBe(false);
+    expect(inspectorLabelTexts(element.shadowRoot).some((text) => text.startsWith("Height "))).toBe(false);
+    expect(inspectorLabelTexts(element.shadowRoot).some((text) => text.startsWith("Theme override"))).toBe(false);
     expect(inputInLabel<HTMLSelectElement>(element.shadowRoot, "Source", "select").textContent).toContain("Home Assistant");
     expect(element.shadowRoot.textContent).toContain("Calendar entities");
     expect(element.shadowRoot.textContent).toContain("Family Calendar");
@@ -1034,6 +1044,56 @@ describe("epaper editor app", () => {
     expect(element.shadowRoot.textContent).toContain("weather");
     expect(element.shadowRoot.textContent).toContain("16.6");
     expect(element.shadowRoot.textContent).toContain("cloudy");
+  });
+
+  it("shows script output variables in scope for selected child widgets", async () => {
+    window.location.hash = "#/widgets";
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    const appState = element as unknown as TestEditorElement & {
+      widgetPreviewRenderData: unknown;
+      widgetPreviewDefinitionId: string;
+    };
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Add compound"))?.click();
+    await flush();
+    await element.updateComplete;
+
+    const widget = appState.project.widgetDefinitions?.find((entry) => entry.id === appState.selectedWidgetDefinitionId);
+    if (widget?.rootNode) {
+      appState.setRootNode(widget, {
+        ...widget.rootNode,
+        children: [{
+          id: "script-under-test",
+          type: "script",
+          source: "return { chart: [1, 2, 3], headline: 'Done' };",
+          outputMode: "merge_object",
+          bindings: {},
+          child: {
+            id: "bar-child-under-test",
+            type: "primitive_instance",
+            primitiveType: "bar_chart",
+            bindings: { value: "chart" },
+            props: { valueKey: "value" }
+          }
+        }]
+      });
+    }
+    appState.selectNode("bar-child-under-test");
+    appState.widgetPreviewRenderData = { now: "", entities: {}, queries: {}, metaQueries: {} };
+    appState.widgetPreviewDefinitionId = widget?.id ?? "";
+    appState.requestUpdate();
+    await flush();
+    await element.updateComplete;
+
+    expect(element.shadowRoot.textContent).toContain("chart");
+    expect(element.shadowRoot.textContent).toContain("1");
+    expect(element.shadowRoot.textContent).toContain("2");
+    expect(element.shadowRoot.textContent).toContain("3");
+    expect(element.shadowRoot.textContent).toContain("headline");
+    expect(element.shadowRoot.textContent).toContain("Done");
   });
 
   it("keeps widget preview variables scoped to selected widget", async () => {

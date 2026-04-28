@@ -161,7 +161,7 @@ function defaultPrimitiveNode(kind: PrimitiveWidgetKind): PrimitiveInstanceNode 
     width: defaultSizeSpec("fill"),
     height: defaultSizeSpec("fill"),
     style: { paddingPx: 4, borderToken: "none" },
-    bindings: kind === "graph" ? { query: "" } : kind === "bar_chart" || kind === "text" || kind === "number" ? { entity: "", value: "" } : kind === "icon" ? { value: "" } : {},
+    bindings: kind === "bar_chart" || kind === "text" || kind === "number" ? { entity: "", value: "" } : kind === "icon" ? { value: "" } : {},
     props:
       kind === "text"
         ? { text: "Text", autoFit: true, placeholderText: "Placeholder", horizontalAlign: "left", verticalAlign: "top", overflow: "wrap", renderEntityState: false, paddingPx: 4 }
@@ -171,11 +171,9 @@ function defaultPrimitiveNode(kind: PrimitiveWidgetKind): PrimitiveInstanceNode 
             ? { icon: DEFAULT_ICON_ID }
             : kind === "bar_chart"
               ? { valueKey: "value", labelKey: "label", minValue: undefined, maxValue: undefined, baselineValue: 0, barGapPx: 1, barOrientation: "vertical", colorRole: "accent" }
-            : kind === "line"
+              : kind === "line"
               ? { lineDirection: "horizontal" }
-              : kind === "circle"
-                ? { filled: false }
-                : {}
+              : {}
   };
 }
 
@@ -360,7 +358,7 @@ function defaultRootNode(kind: "stack" | "grid" | "zstack" = "stack"): LayoutNod
     return {
       id: nextId("node"),
       type: "zstack",
-      children: [defaultPrimitiveNode("graph"), defaultPrimitiveNode("number")],
+      children: [defaultPrimitiveNode("bar_chart"), defaultPrimitiveNode("number")],
       width: defaultSizeSpec("fill"),
       height: defaultSizeSpec("fill"),
       style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
@@ -487,6 +485,15 @@ function defaultVirtualDisplayDefinition(displayTypeId: string, index = 1): Virt
     name: `Virtual Display ${index}`,
     displayTypeId
   };
+}
+
+function isMetaWidgetNode(node: LayoutNode): boolean {
+  return node.type === "data_query" ||
+    node.type === "filter" ||
+    node.type === "unique" ||
+    node.type === "foreach" ||
+    node.type === "script" ||
+    node.type === "if_else";
 }
 
 function updateNode(node: LayoutNode, nodeId: string, updater: (current: LayoutNode) => LayoutNode): LayoutNode {
@@ -1940,10 +1947,16 @@ export class EpPaperEditorApp extends LitElement {
       return;
     }
     if (node.type === "script") {
-      for (const key of Object.keys(node.bindings ?? {})) {
-        variables.push({ name: key, source: `script ${node.id}`, value: node.bindings?.[key] ?? "" });
+      const bindingValues = this.previewScriptBindings(node, scope);
+      for (const [key, value] of Object.entries(bindingValues)) {
+        variables.push({ name: key, source: `script binding ${node.id}`, value });
       }
-      this.collectWidgetPreviewVariables(node.child, scope, variables, renderData);
+      const scriptValues = this.previewScriptValues(node, scope, bindingValues);
+      const nested = scriptValues ? { ...scope, ...scriptValues } : scope;
+      for (const [key, value] of Object.entries(scriptValues ?? {})) {
+        variables.push({ name: key, source: `script ${node.id}`, value });
+      }
+      this.collectWidgetPreviewVariables(node.child, nested, variables, renderData);
       return;
     }
     if (node.type === "if_else") {
@@ -1961,6 +1974,62 @@ export class EpPaperEditorApp extends LitElement {
       for (const child of node.children ?? []) {
         this.collectWidgetPreviewVariables(child.node, scope, variables, renderData);
       }
+    }
+  }
+
+  private previewScriptBindings(node: Extract<LayoutNode, { type: "script" }>, scope: Record<string, unknown>): Record<string, unknown> {
+    const values: Record<string, unknown> = {};
+    for (const [key, expression] of Object.entries(node.bindings ?? {})) {
+      values[key] = this.resolvePreviewExpression(expression, scope);
+    }
+    return values;
+  }
+
+  private previewScriptValues(
+    node: Extract<LayoutNode, { type: "script" }>,
+    scope: Record<string, unknown>,
+    bindings: Record<string, unknown>
+  ): Record<string, unknown> | undefined {
+    const source = String(node.source ?? "").trim();
+    if (!source) {
+      return undefined;
+    }
+    const globals = {
+      locale: this.project.locale ?? "en-US",
+      project: { id: this.project.id, name: this.project.name }
+    };
+    const context = { scope, globals, bindings, helpers: {}, shared: {}, locale: globals.locale, warn: () => undefined };
+    const attempts = [
+      `const { scope, globals, bindings, helpers, shared, locale, warn } = __ctx; ${source}`,
+      `const { scope, globals, bindings, helpers, shared, locale, warn } = __ctx; return (${source});`
+    ];
+    for (const body of attempts) {
+      try {
+        const result = Function("__ctx", body)(context) as unknown;
+        if (result && typeof result === "object" && !Array.isArray(result)) {
+          return result as Record<string, unknown>;
+        }
+        return undefined;
+      } catch {
+        // Try expression mode after statement mode fails; preview stays read-only.
+      }
+    }
+    return undefined;
+  }
+
+  private resolvePreviewExpression(expression: string, scope: Record<string, unknown>): unknown {
+    const trimmed = String(expression ?? "").trim();
+    if (!trimmed) {
+      return "";
+    }
+    const pathValue = this.valueAtPath(scope, trimmed);
+    if (pathValue !== undefined) {
+      return pathValue;
+    }
+    try {
+      return Function("scope", `with (scope) { return (${trimmed}); }`)(scope) as unknown;
+    } catch {
+      return expression;
     }
   }
 
@@ -3802,34 +3871,13 @@ export class EpPaperEditorApp extends LitElement {
           `;
           })()
         : nothing}
-      ${node.primitiveType === "state_tile"
-        ? this.renderContentAlignmentControls(node, owner, { horizontal: "center", vertical: "middle" })
-        : nothing}
-      ${node.primitiveType === "graph" || node.primitiveType === "history_bars"
-        ? html`
-            <label>
-              Query id
-              <input .value=${String(node.bindings?.query ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), bindings: { ...(current as PrimitiveInstanceNode).bindings, query: (event.target as HTMLInputElement).value } })))} />
-            </label>
-            <label>
-              Fill color
-              <select .value=${String(node.props?.colorRole ?? "accent")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, colorRole: (event.target as HTMLSelectElement).value as FillRole } })))}>
-                <option value="fg">black</option>
-                <option value="accent">accent</option>
-                <option value="gray">gray</option>
-                <option value="light-accent">light accent</option>
-                <option value="dark-accent">dark accent</option>
-              </select>
-            </label>
-          `
-        : nothing}
       ${node.primitiveType === "bar_chart"
         ? html`
             <label>
-              Data variable
-              <input placeholder="weather.daily or chart.items" .value=${String(node.bindings?.value ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), bindings: { ...(current as PrimitiveInstanceNode).bindings, value: (event.target as HTMLInputElement).value } })))} />
+              Data
+              <input placeholder='weather.daily, [12,18,9], or weather.daily.map(day => day.temperature_2m_max)' .value=${String(node.bindings?.value ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), bindings: { ...(current as PrimitiveInstanceNode).bindings, value: (event.target as HTMLInputElement).value } })))} />
             </label>
-            <div class="muted">Data: <code>[12, 18, 9]</code> or <code>[{"label":"Mon","value":12}]</code>. Object arrays use Value key below.</div>
+            <div class="muted">Use a variable path, JSON array, or expression. Object arrays use Value key below.</div>
             <div class="grid-two">
               <label>
                 Value key
@@ -3894,18 +3942,11 @@ export class EpPaperEditorApp extends LitElement {
             </label>
           `
         : nothing}
-      ${node.primitiveType === "circle"
-        ? html`
-            <label>
-              <input type="checkbox" .checked=${Boolean(node.props?.filled)} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, filled: (event.target as HTMLInputElement).checked } })))} />
-              Filled
-            </label>
-          `
-        : nothing}
     `;
   }
 
   private renderNodeEditor(node: LayoutNode, owner: { id: string; rootNode?: LayoutNode }, parentId?: string): TemplateResult {
+    const showLayoutControls = !isMetaWidgetNode(node);
     return html`
       <div class="inspector-panel">
         <div class="row">
@@ -3929,11 +3970,9 @@ export class EpPaperEditorApp extends LitElement {
               <div class="row">
                 <button @click=${() => this.createChildNode(owner, node.id, "text")}>Text</button>
                 <button @click=${() => this.createChildNode(owner, node.id, "number")}>Number</button>
-                <button @click=${() => this.createChildNode(owner, node.id, "graph")}>Graph</button>
                 <button @click=${() => this.createChildNode(owner, node.id, "icon")}>Icon</button>
+                <button @click=${() => this.createChildNode(owner, node.id, "bar_chart")}>Bar chart</button>
                 <button @click=${() => this.createChildNode(owner, node.id, "line")}>Line</button>
-                <button @click=${() => this.createChildNode(owner, node.id, "box")}>Box</button>
-                <button @click=${() => this.createChildNode(owner, node.id, "circle")}>Circle</button>
                 ${(this.project.widgetDefinitions ?? []).some((entry) => entry.kind === "compound")
                   ? html`<button @click=${() => this.createChildNode(owner, node.id, "compound_ref")}>Compound</button>`
                   : nothing}
@@ -3949,16 +3988,20 @@ export class EpPaperEditorApp extends LitElement {
               </div>
             `
           : nothing}
-        ${this.renderSizeSpecEditor("Width", node.width, (next) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, width: next }))))}
-        ${this.renderSizeSpecEditor("Height", node.height, (next) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, height: next }))))}
-        ${this.renderWidgetBoxControls(owner, node)}
-        <label>
-          Theme override
-          <select .value=${String(node.style?.themeId ?? "inherit")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, style: { ...current.style, themeId: (event.target as HTMLSelectElement).value } })))} }>
-            <option value="inherit">Inherit</option>
-            ${this.project.themes.map((theme) => html`<option value=${theme.id}>${theme.name}</option>`)}
-          </select>
-        </label>
+        ${showLayoutControls
+          ? html`
+              ${this.renderSizeSpecEditor("Width", node.width, (next) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, width: next }))))}
+              ${this.renderSizeSpecEditor("Height", node.height, (next) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, height: next }))))}
+              ${this.renderWidgetBoxControls(owner, node)}
+              <label>
+                Theme override
+                <select .value=${String(node.style?.themeId ?? "inherit")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, style: { ...current.style, themeId: (event.target as HTMLSelectElement).value } })))} }>
+                  <option value="inherit">Inherit</option>
+                  ${this.project.themes.map((theme) => html`<option value=${theme.id}>${theme.name}</option>`)}
+                </select>
+              </label>
+            `
+          : nothing}
         ${node.type === "stack" || node.type === "foreach"
           ? html`
               <label>

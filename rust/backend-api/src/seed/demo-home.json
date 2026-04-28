@@ -652,11 +652,11 @@
       "primitiveType": "icon"
     },
     {
-      "id": "builtin-graph",
+      "id": "builtin-bar_chart",
       "inputSchema": [],
       "kind": "primitive",
-      "name": "graph",
-      "primitiveType": "graph"
+      "name": "bar chart",
+      "primitiveType": "bar_chart"
     },
     {
       "id": "builtin-line",
@@ -664,62 +664,6 @@
       "kind": "primitive",
       "name": "line",
       "primitiveType": "line"
-    },
-    {
-      "id": "builtin-box",
-      "inputSchema": [],
-      "kind": "primitive",
-      "name": "box",
-      "primitiveType": "box"
-    },
-    {
-      "id": "builtin-circle",
-      "inputSchema": [],
-      "kind": "primitive",
-      "name": "circle",
-      "primitiveType": "circle"
-    },
-    {
-      "id": "builtin-date_time_compact",
-      "inputSchema": [],
-      "kind": "primitive",
-      "name": "date time compact",
-      "primitiveType": "date_time_compact"
-    },
-    {
-      "id": "builtin-agenda_list",
-      "inputSchema": [],
-      "kind": "primitive",
-      "name": "agenda list",
-      "primitiveType": "agenda_list"
-    },
-    {
-      "id": "builtin-state_tile",
-      "inputSchema": [],
-      "kind": "primitive",
-      "name": "state tile",
-      "primitiveType": "state_tile"
-    },
-    {
-      "id": "builtin-alert_banner",
-      "inputSchema": [],
-      "kind": "primitive",
-      "name": "alert banner",
-      "primitiveType": "alert_banner"
-    },
-    {
-      "id": "builtin-status_strip",
-      "inputSchema": [],
-      "kind": "primitive",
-      "name": "status strip",
-      "primitiveType": "status_strip"
-    },
-    {
-      "id": "builtin-history_bars",
-      "inputSchema": [],
-      "kind": "primitive",
-      "name": "history bars",
-      "primitiveType": "history_bars"
     },
     {
       "id": "widget-efd4b992",
