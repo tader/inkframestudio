@@ -170,7 +170,7 @@ function defaultPrimitiveNode(kind: PrimitiveWidgetKind): PrimitiveInstanceNode 
           : kind === "icon"
             ? { icon: DEFAULT_ICON_ID }
             : kind === "bar_chart"
-              ? { valueKey: "value", labelKey: "label", minValue: undefined, maxValue: undefined, baselineValue: 0, barGapPx: 1, barOrientation: "vertical", colorRole: "accent" }
+              ? { valueKey: "value", labelKey: "label", highlightKey: "highlight", minValue: undefined, maxValue: undefined, baselineValue: 0, barGapPx: 1, barOrientation: "vertical", colorRole: "accent", highlightColorRole: "fg" }
               : kind === "line"
               ? { lineDirection: "horizontal" }
               : {}
@@ -3881,6 +3881,10 @@ export class EpPaperEditorApp extends LitElement {
               <input placeholder='weather.daily, [12,18,9], or weather.daily.map(day => day.temperature_2m_max)' .value=${String(node.bindings?.value ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), bindings: { ...(current as PrimitiveInstanceNode).bindings, value: (event.target as HTMLInputElement).value } })))} />
             </label>
             <div class="muted">Use a variable path, JSON array, or expression. Object arrays use Value key below.</div>
+            <label>
+              Highlight indexes
+              <input placeholder="[0, 2], selectedIndexes, or weather.daily.map((day, index) => day.rain ? index : -1)" .value=${String(node.bindings?.highlightIndexes ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), bindings: { ...(current as PrimitiveInstanceNode).bindings, highlightIndexes: (event.target as HTMLInputElement).value } })))} />
+            </label>
             <div class="grid-two">
               <label>
                 Value key
@@ -3889,6 +3893,10 @@ export class EpPaperEditorApp extends LitElement {
               <label>
                 Label key
                 <input .value=${String(node.props?.labelKey ?? "label")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, labelKey: (event.target as HTMLInputElement).value } })))} />
+              </label>
+              <label>
+                Highlight key
+                <input .value=${String(node.props?.highlightKey ?? "highlight")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, highlightKey: (event.target as HTMLInputElement).value } })))} />
               </label>
               <label>
                 Min
@@ -3922,6 +3930,16 @@ export class EpPaperEditorApp extends LitElement {
               <label>
                 Fill color
                 <select .value=${String(node.props?.colorRole ?? "accent")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, colorRole: (event.target as HTMLSelectElement).value as FillRole } })))}>
+                  <option value="fg">black</option>
+                  <option value="accent">accent</option>
+                  <option value="gray">gray</option>
+                  <option value="light-accent">light accent</option>
+                  <option value="dark-accent">dark accent</option>
+                </select>
+              </label>
+              <label>
+                Highlight color
+                <select .value=${String(node.props?.highlightColorRole ?? "fg")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, highlightColorRole: (event.target as HTMLSelectElement).value as FillRole } })))}>
                   <option value="fg">black</option>
                   <option value="accent">accent</option>
                   <option value="gray">gray</option>

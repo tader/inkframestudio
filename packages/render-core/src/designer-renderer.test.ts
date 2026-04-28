@@ -4,7 +4,7 @@ import { layoutText } from "./text-layout.js";
 import { normalizeProject } from "./themes.js";
 import { SAMPLE_DATA, SAMPLE_PROJECT } from "./sample-project.js";
 import { registerFixtureFonts } from "./test-font-fixture.js";
-import type { LayoutDefinition, Project } from "./types.js";
+import type { LayoutDefinition, Project, WidgetProps } from "./types.js";
 import { installProjectScriptingRuntime } from "../../addon-backend/src/script-runtime.js";
 
 installProjectScriptingRuntime();
@@ -276,6 +276,53 @@ describe("designer renderer", () => {
 
     expect(pixelBounds(renderLayoutDefinition(jsonProject, jsonProject.layoutDefinitions![0]!, SAMPLE_DATA), 0, 0, 40, 20)).toBeTruthy();
     expect(pixelBounds(renderLayoutDefinition(expressionProject, expressionProject.layoutDefinitions![0]!, SAMPLE_DATA), 0, 0, 40, 20)).toBeTruthy();
+  });
+
+  it("highlights bar chart bars from indexes and object flags", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const base = {
+      ...normalized,
+      displayTypes: [{
+        id: "chart-display",
+        name: "Chart",
+        width: 30,
+        height: 10,
+        rotation: 0 as const,
+        contentPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+        gridUnitPx: 8,
+        palette: { bg: "#ffffff", fg: "#111111", accent: "#d7261b" }
+      }]
+    };
+    const renderBars = (bindings: Record<string, string>, props: WidgetProps = {}) => {
+      const project: Project = normalizeProject({
+        ...base,
+        layoutDefinitions: [{
+          id: "layout-bar-highlight",
+          name: "Bar Highlight",
+          kind: "fullscreen",
+          displayTypeId: "chart-display",
+          rootNode: {
+            id: "bars",
+            type: "primitive_instance",
+            primitiveType: "bar_chart",
+            bindings,
+            props: { minValue: 0, maxValue: 1, baselineValue: 0, barGapPx: 0, colorRole: "fg", highlightColorRole: "accent", ...props },
+            width: { mode: "fill" },
+            height: { mode: "fill" },
+            style: { paddingPx: 0, borderToken: "none" }
+          }
+        }]
+      });
+      return renderLayoutDefinition(project, project.layoutDefinitions![0]!, SAMPLE_DATA);
+    };
+
+    const highlightedByIndexes = renderBars({ value: "[1, 1, 1]", highlightIndexes: "[1]" });
+    expect(highlightedByIndexes.pixels[9 * highlightedByIndexes.width + 5]).toBe(1);
+    expect(highlightedByIndexes.pixels[9 * highlightedByIndexes.width + 15]).toBe(2);
+    expect(highlightedByIndexes.pixels[9 * highlightedByIndexes.width + 25]).toBe(1);
+
+    const highlightedByObject = renderBars({ value: "[{\"value\":1},{\"value\":1,\"highlight\":true},{\"value\":1}]" }, { valueKey: "value", highlightKey: "highlight" });
+    expect(highlightedByObject.pixels[9 * highlightedByObject.width + 15]).toBe(2);
   });
 
   it("renders assigned display from migrated virtual device", () => {

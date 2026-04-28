@@ -330,6 +330,8 @@ struct WidgetProps {
     quantize_step: Option<f64>,
     #[serde(rename = "valueKey")]
     value_key: Option<String>,
+    #[serde(rename = "highlightKey")]
+    highlight_key: Option<String>,
     #[serde(rename = "minValue")]
     min_value: Option<f64>,
     #[serde(rename = "maxValue")]
@@ -342,6 +344,8 @@ struct WidgetProps {
     bar_orientation: Option<String>,
     #[serde(rename = "colorRole")]
     color_role: Option<FillRole>,
+    #[serde(rename = "highlightColorRole")]
+    highlight_color_role: Option<FillRole>,
     #[serde(rename = "lineDirection")]
     line_direction: Option<String>,
     #[serde(rename = "fixedPixelSize")]
@@ -1517,7 +1521,10 @@ fn node_supported(node: &Node) -> bool {
                 return false;
             }
             bindings.iter().all(|(key, value)| {
-                matches!(key.as_str(), "entity" | "value" | "icon") && binding_supported(value)
+                matches!(
+                    key.as_str(),
+                    "entity" | "value" | "icon" | "highlightIndexes"
+                ) && binding_supported(value)
             })
         }
         Node::Spacer { width, height, .. } => {
@@ -1712,9 +1719,12 @@ fn unsupported_node_self_reason(node: &Node) -> Option<String> {
             primitive_type,
             bindings,
             ..
-        } if !bindings
-            .keys()
-            .all(|key| matches!(key.as_str(), "entity" | "value" | "icon")) =>
+        } if !bindings.keys().all(|key| {
+            matches!(
+                key.as_str(),
+                "entity" | "value" | "icon" | "highlightIndexes"
+            )
+        }) =>
         {
             let keys = bindings.keys().cloned().collect::<Vec<_>>().join(", ");
             Some(format!("unsupported primitive binding keys: {keys}"))
@@ -2914,12 +2924,52 @@ fn numeric_chart_value(item: &Value, value_key: &str) -> Option<f64> {
     .filter(|value| value.is_finite())
 }
 
-fn bar_chart_values(
+#[derive(Clone, Copy, Debug)]
+struct BarChartDatum {
+    value: f64,
+    highlighted: bool,
+}
+
+fn truthy_chart_flag(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::Bool(value)) => *value,
+        Some(Value::Number(value)) => value
+            .as_f64()
+            .is_some_and(|value| value.is_finite() && value != 0.0),
+        Some(Value::String(value)) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        _ => false,
+    }
+}
+
+fn highlighted_indexes(
+    scope: &Value,
+    bindings: &HashMap<String, String>,
+    locale: &str,
+) -> std::collections::HashSet<usize> {
+    let Some(Value::Array(items)) =
+        binding_scope_value(scope, bindings.get("highlightIndexes"), locale)
+    else {
+        return std::collections::HashSet::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| match item {
+            Value::Number(value) => value.as_u64().map(|value| value as usize),
+            Value::String(value) => value.trim().parse::<usize>().ok(),
+            _ => None,
+        })
+        .collect()
+}
+
+fn bar_chart_data(
     scope: &Value,
     bindings: &HashMap<String, String>,
     props: &WidgetProps,
     locale: &str,
-) -> Vec<f64> {
+) -> Vec<BarChartDatum> {
     let Some(Value::Array(items)) = binding_scope_value(scope, bindings.get("value"), locale)
     else {
         return Vec::new();
@@ -2930,19 +2980,43 @@ fn bar_chart_values(
     } else {
         value_key
     };
+    let highlight_key = props.highlight_key.as_deref().unwrap_or("highlight").trim();
+    let highlight_key = if highlight_key.is_empty() {
+        "highlight"
+    } else {
+        highlight_key
+    };
+    let highlighted_indexes = highlighted_indexes(scope, bindings, locale);
     items
         .iter()
-        .filter_map(|item| numeric_chart_value(item, value_key))
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let value = numeric_chart_value(item, value_key)?;
+            let object_highlight = match item {
+                Value::Object(object) => truthy_chart_flag(object.get(highlight_key)),
+                _ => false,
+            };
+            Some(BarChartDatum {
+                value,
+                highlighted: highlighted_indexes.contains(&index) || object_highlight,
+            })
+        })
         .collect()
 }
 
-fn draw_bar_chart(canvas: &mut IndexedCanvas, frame: Rect, values: &[f64], props: &WidgetProps) {
-    if values.is_empty() || frame.w <= 0 || frame.h <= 0 {
+fn draw_bar_chart(
+    canvas: &mut IndexedCanvas,
+    frame: Rect,
+    data: &[BarChartDatum],
+    props: &WidgetProps,
+) {
+    if data.is_empty() || frame.w <= 0 || frame.h <= 0 {
         return;
     }
     let color = fill_role_color(props.color_role.unwrap_or(FillRole::Accent));
-    let auto_min = values.iter().copied().fold(0.0_f64, f64::min);
-    let auto_max = values.iter().copied().fold(0.0_f64, f64::max);
+    let highlight_color = fill_role_color(props.highlight_color_role.unwrap_or(FillRole::Fg));
+    let auto_min = data.iter().map(|entry| entry.value).fold(0.0_f64, f64::min);
+    let auto_max = data.iter().map(|entry| entry.value).fold(0.0_f64, f64::max);
     let mut min = props
         .min_value
         .filter(|value| value.is_finite())
@@ -2959,12 +3033,12 @@ fn draw_bar_chart(canvas: &mut IndexedCanvas, frame: Rect, values: &[f64], props
     let baseline = props.baseline_value.unwrap_or(0.0).clamp(min, max);
     let gap = props.bar_gap_px.unwrap_or(1).max(0);
     if props.bar_orientation.as_deref() == Some("horizontal") {
-        let slot = ((frame.h + gap) / values.len() as i32).max(1);
+        let slot = ((frame.h + gap) / data.len() as i32).max(1);
         let bar_h = (slot - gap).max(1);
         let base_x =
             frame.x + (((baseline - min) / range) * (frame.w - 1).max(0) as f64).round() as i32;
-        for (index, value) in values.iter().enumerate() {
-            let clamped = value.clamp(min, max);
+        for (index, entry) in data.iter().enumerate() {
+            let clamped = entry.value.clamp(min, max);
             let target_x =
                 frame.x + (((clamped - min) / range) * (frame.w - 1).max(0) as f64).round() as i32;
             let x = base_x.min(target_x);
@@ -2974,17 +3048,24 @@ fn draw_bar_chart(canvas: &mut IndexedCanvas, frame: Rect, values: &[f64], props
             if h == 0 {
                 continue;
             }
-            canvas.fill_rect(Rect { x, y, w, h }, color);
+            canvas.fill_rect(
+                Rect { x, y, w, h },
+                if entry.highlighted {
+                    highlight_color
+                } else {
+                    color
+                },
+            );
         }
         return;
     }
-    let slot = ((frame.w + gap) / values.len() as i32).max(1);
+    let slot = ((frame.w + gap) / data.len() as i32).max(1);
     let bar_w = (slot - gap).max(1);
     let base_y = frame.y + frame.h
         - 1
         - (((baseline - min) / range) * (frame.h - 1).max(0) as f64).round() as i32;
-    for (index, value) in values.iter().enumerate() {
-        let clamped = value.clamp(min, max);
+    for (index, entry) in data.iter().enumerate() {
+        let clamped = entry.value.clamp(min, max);
         let target_y = frame.y + frame.h
             - 1
             - (((clamped - min) / range) * (frame.h - 1).max(0) as f64).round() as i32;
@@ -2995,7 +3076,14 @@ fn draw_bar_chart(canvas: &mut IndexedCanvas, frame: Rect, values: &[f64], props
         if w == 0 {
             continue;
         }
-        canvas.fill_rect(Rect { x, y, w, h }, color);
+        canvas.fill_rect(
+            Rect { x, y, w, h },
+            if entry.highlighted {
+                highlight_color
+            } else {
+                color
+            },
+        );
     }
 }
 
@@ -3589,8 +3677,8 @@ fn render_primitive(
     }
     if primitive_type == "bar_chart" {
         let inner = inset_rect_by(frame, &chrome);
-        let values = bar_chart_values(scope, bindings, props, &project.locale);
-        draw_bar_chart(canvas, inner, &values, props);
+        let data = bar_chart_data(scope, bindings, props, &project.locale);
+        draw_bar_chart(canvas, inner, &data, props);
         return Ok(());
     }
     let Some(spec) = primitive_render_spec(project, scope, node, user_fonts)? else {
@@ -5120,6 +5208,82 @@ mod tests {
             .filter(|pixel| pixel.0[0..3] == [0, 0, 0])
             .count();
         assert!(black_pixels > 20, "bar chart should draw visible bars");
+    }
+
+    #[test]
+    fn bar_chart_highlights_indexes_and_object_flags() {
+        let project_value = json!({
+            "id": "demo",
+            "name": "Demo",
+            "locale": "en-US",
+            "fontPresets": { "tiny": 8, "normal": 12, "header": 24 },
+            "themes": [{
+                "id": "classic-outline",
+                "accentRole": "fg",
+                "text": { "title": "fg", "body": "fg", "value": "fg" }
+            }],
+            "displayTypes": [{
+                "id": "tiny",
+                "width": 30,
+                "height": 10,
+                "palette": { "bg": "#ffffff", "fg": "#000000", "accent": "#ff0000" }
+            }],
+            "layoutDefinitions": [{
+                "id": "layout-bar-chart",
+                "displayTypeId": "tiny",
+                "rootNode": {
+                    "id": "bars",
+                    "type": "primitive_instance",
+                    "primitiveType": "bar_chart",
+                    "width": { "mode": "fill" },
+                    "height": { "mode": "fill" },
+                    "style": { "borderToken": "none", "paddingPx": 0 },
+                    "bindings": { "value": "[1,1,1]", "highlightIndexes": "[1]" },
+                    "props": { "minValue": 0, "maxValue": 1, "baselineValue": 0, "barGapPx": 0, "colorRole": "fg", "highlightColorRole": "accent" }
+                }
+            }]
+        });
+        let rendered = render_layout_preview(
+            &project_value,
+            &json!({}),
+            &json!({}),
+            "layout-bar-chart",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let image = image::load_from_memory(&rendered.png_bytes)
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(image.get_pixel(5, 9).0, [0, 0, 0, 255]);
+        assert_eq!(image.get_pixel(15, 9).0, [255, 0, 0, 255]);
+        assert_eq!(image.get_pixel(25, 9).0, [0, 0, 0, 255]);
+
+        let mut object_project = project_value.clone();
+        object_project["layoutDefinitions"][0]["rootNode"]["bindings"] =
+            json!({ "value": "[{\"value\":1},{\"value\":1,\"highlight\":true},{\"value\":1}]" });
+        object_project["layoutDefinitions"][0]["rootNode"]["props"]["valueKey"] = json!("value");
+        object_project["layoutDefinitions"][0]["rootNode"]["props"]["highlightKey"] =
+            json!("highlight");
+        let rendered = render_layout_preview(
+            &object_project,
+            &json!({}),
+            &json!({}),
+            "layout-bar-chart",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let image = image::load_from_memory(&rendered.png_bytes)
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(image.get_pixel(15, 9).0, [255, 0, 0, 255]);
     }
 
     #[test]

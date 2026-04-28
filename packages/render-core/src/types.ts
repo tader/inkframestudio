@@ -589,6 +589,7 @@ export interface WidgetProps {
   digits?: number;
   valueKey?: string;
   labelKey?: string;
+  highlightKey?: string;
   minValue?: number;
   maxValue?: number;
   baselineValue?: number;
@@ -619,6 +620,7 @@ export interface WidgetProps {
   dateFormat?: "iso" | "day-month" | "weekday-date";
   timeFormat?: "24h" | "12h";
   colorRole?: FillRole;
+  highlightColorRole?: FillRole;
   titleTextStyle?: Partial<TextStyle>;
   bodyTextStyle?: Partial<TextStyle>;
   valueTextStyle?: Partial<TextStyle>;

@@ -1590,23 +1590,62 @@ function numericChartValue(item: ScopeContext[string], valueKey: string): number
   return undefined;
 }
 
-function barChartValues(node: PrimitiveInstanceNode, inputContext: ScopeContext, locale: string): number[] {
+interface BarChartDatum {
+  value: number;
+  highlighted: boolean;
+}
+
+function truthyChartFlag(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0 && Number.isFinite(value);
+  }
+  if (typeof value === "string") {
+    return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+  }
+  return false;
+}
+
+function highlightedIndexes(node: PrimitiveInstanceNode, inputContext: ScopeContext, locale: string): Set<number> {
+  const raw = resolveBindingRaw(node.bindings?.highlightIndexes, inputContext, locale);
+  if (!Array.isArray(raw)) {
+    return new Set();
+  }
+  return new Set(raw.flatMap((item) => {
+    const index = typeof item === "number" ? item : typeof item === "string" ? Number(item) : NaN;
+    return Number.isInteger(index) && index >= 0 ? [index] : [];
+  }));
+}
+
+function barChartData(node: PrimitiveInstanceNode, inputContext: ScopeContext, locale: string): BarChartDatum[] {
   const raw = resolveBindingRaw(node.bindings?.value, inputContext, locale);
   if (!Array.isArray(raw)) {
     return [];
   }
   const valueKey = String(node.props?.valueKey ?? "value").trim() || "value";
-  return raw.flatMap((item) => {
+  const highlightKey = String(node.props?.highlightKey ?? "highlight").trim() || "highlight";
+  const indexes = highlightedIndexes(node, inputContext, locale);
+  return raw.flatMap((item, index) => {
     const value = numericChartValue(item, valueKey);
-    return value === undefined ? [] : [value];
+    if (value === undefined) {
+      return [];
+    }
+    const objectHighlight = item && typeof item === "object" && !Array.isArray(item)
+      ? truthyChartFlag((item as Record<string, unknown>)[highlightKey])
+      : false;
+    return [{ value, highlighted: indexes.has(index) || objectHighlight }];
   });
 }
 
-function drawBarChart(buffer: PixelBuffer, frame: PixelFrame, values: number[], node: PrimitiveInstanceNode, theme: WidgetTheme, clip?: PixelFrame): void {
-  if (!values.length || frame.w <= 0 || frame.h <= 0) {
+function drawBarChart(buffer: PixelBuffer, frame: PixelFrame, data: BarChartDatum[], node: PrimitiveInstanceNode, theme: WidgetTheme, clip?: PixelFrame): void {
+  if (!data.length || frame.w <= 0 || frame.h <= 0) {
     return;
   }
   const paint = fillRoleToPaint(node.props?.colorRole ?? theme.accentRole) ?? { kind: "solid", color: roleToColor(theme.accentRole) };
+  const highlightPaint = fillRoleToPaint(node.props?.highlightColorRole ?? "fg") ?? paint;
+  const values = data.map((entry) => entry.value);
   const orientation = node.props?.barOrientation === "horizontal" ? "horizontal" : "vertical";
   const gap = Math.max(0, Math.trunc(Number(node.props?.barGapPx ?? 1) || 0));
   const autoMin = Math.min(0, ...values);
@@ -1624,32 +1663,32 @@ function drawBarChart(buffer: PixelBuffer, frame: PixelFrame, values: number[], 
     return;
   }
   if (orientation === "horizontal") {
-    const slot = Math.max(1, Math.floor((frame.h + gap) / values.length));
+    const slot = Math.max(1, Math.floor((frame.h + gap) / data.length));
     const barH = Math.max(1, slot - gap);
     const baseX = frame.x + Math.round(((baseline - min) / range) * Math.max(0, frame.w - 1));
-    values.forEach((value, index) => {
+    data.forEach(({ value, highlighted }, index) => {
       const targetX = frame.x + Math.round(((Math.max(min, Math.min(max, value)) - min) / range) * Math.max(0, frame.w - 1));
       const x = Math.min(baseX, targetX);
       const w = Math.max(1, Math.abs(targetX - baseX) + 1);
       const y = frame.y + index * slot;
       const h = Math.max(0, Math.min(barH, frame.y + frame.h - y));
       if (h > 0) {
-        buffer.drawPaintRect(x, y, w, h, paint, toClipRect(visible));
+        buffer.drawPaintRect(x, y, w, h, highlighted ? highlightPaint : paint, toClipRect(visible));
       }
     });
     return;
   }
-  const slot = Math.max(1, Math.floor((frame.w + gap) / values.length));
+  const slot = Math.max(1, Math.floor((frame.w + gap) / data.length));
   const barW = Math.max(1, slot - gap);
   const baseY = frame.y + frame.h - 1 - Math.round(((baseline - min) / range) * Math.max(0, frame.h - 1));
-  values.forEach((value, index) => {
+  data.forEach(({ value, highlighted }, index) => {
     const targetY = frame.y + frame.h - 1 - Math.round(((Math.max(min, Math.min(max, value)) - min) / range) * Math.max(0, frame.h - 1));
     const y = Math.min(baseY, targetY);
     const h = Math.max(1, Math.abs(targetY - baseY) + 1);
     const x = frame.x + index * slot;
     const w = Math.max(0, Math.min(barW, frame.x + frame.w - x));
     if (w > 0) {
-      buffer.drawPaintRect(x, y, w, h, paint, toClipRect(visible));
+      buffer.drawPaintRect(x, y, w, h, highlighted ? highlightPaint : paint, toClipRect(visible));
     }
   });
 }
@@ -1787,7 +1826,7 @@ function drawPrimitiveNode(
   }
 
   if (node.primitiveType === "bar_chart") {
-    drawBarChart(buffer, visibleInnerFrame, barChartValues(node, inputContext, project.locale ?? "en-US"), node, theme, visibleInnerFrame);
+    drawBarChart(buffer, visibleInnerFrame, barChartData(node, inputContext, project.locale ?? "en-US"), node, theme, visibleInnerFrame);
     return;
   }
 
