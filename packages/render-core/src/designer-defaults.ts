@@ -13,6 +13,7 @@ export const BUILT_IN_PRIMITIVE_KINDS: PrimitiveWidgetKind[] = [
   "number",
   "icon",
   "graph",
+  "bar_chart",
   "line",
   "box",
   "circle",

@@ -161,7 +161,7 @@ function defaultPrimitiveNode(kind: PrimitiveWidgetKind): PrimitiveInstanceNode 
     width: defaultSizeSpec("fill"),
     height: defaultSizeSpec("fill"),
     style: { paddingPx: 4, borderToken: "none" },
-    bindings: kind === "graph" ? { query: "" } : kind === "text" || kind === "number" ? { entity: "", value: "" } : kind === "icon" ? { value: "" } : {},
+    bindings: kind === "graph" ? { query: "" } : kind === "bar_chart" || kind === "text" || kind === "number" ? { entity: "", value: "" } : kind === "icon" ? { value: "" } : {},
     props:
       kind === "text"
         ? { text: "Text", autoFit: true, placeholderText: "Placeholder", horizontalAlign: "left", verticalAlign: "top", overflow: "wrap", renderEntityState: false, paddingPx: 4 }
@@ -169,6 +169,8 @@ function defaultPrimitiveNode(kind: PrimitiveWidgetKind): PrimitiveInstanceNode 
           ? { digits: 1, autoFit: true, placeholderValue: "88.8", horizontalAlign: "center", verticalAlign: "middle", paddingPx: 4 }
           : kind === "icon"
             ? { icon: DEFAULT_ICON_ID }
+            : kind === "bar_chart"
+              ? { valueKey: "value", labelKey: "label", minValue: undefined, maxValue: undefined, baselineValue: 0, barGapPx: 1, barOrientation: "vertical", colorRole: "accent" }
             : kind === "line"
               ? { lineDirection: "horizontal" }
               : kind === "circle"
@@ -3819,6 +3821,64 @@ export class EpPaperEditorApp extends LitElement {
                 <option value="dark-accent">dark accent</option>
               </select>
             </label>
+          `
+        : nothing}
+      ${node.primitiveType === "bar_chart"
+        ? html`
+            <label>
+              Data variable
+              <input placeholder="weather.daily or chart.items" .value=${String(node.bindings?.value ?? "")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), bindings: { ...(current as PrimitiveInstanceNode).bindings, value: (event.target as HTMLInputElement).value } })))} />
+            </label>
+            <div class="muted">Data: <code>[12, 18, 9]</code> or <code>[{"label":"Mon","value":12}]</code>. Object arrays use Value key below.</div>
+            <div class="grid-two">
+              <label>
+                Value key
+                <input .value=${String(node.props?.valueKey ?? "value")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, valueKey: (event.target as HTMLInputElement).value } })))} />
+              </label>
+              <label>
+                Label key
+                <input .value=${String(node.props?.labelKey ?? "label")} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, labelKey: (event.target as HTMLInputElement).value } })))} />
+              </label>
+              <label>
+                Min
+                <input type="number" placeholder="auto" .value=${node.props?.minValue === undefined ? "" : String(node.props.minValue)} @input=${(event: Event) => {
+                  const raw = (event.target as HTMLInputElement).value;
+                  this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, minValue: raw === "" ? undefined : Number(raw) } })));
+                }} />
+              </label>
+              <label>
+                Max
+                <input type="number" placeholder="auto" .value=${node.props?.maxValue === undefined ? "" : String(node.props.maxValue)} @input=${(event: Event) => {
+                  const raw = (event.target as HTMLInputElement).value;
+                  this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, maxValue: raw === "" ? undefined : Number(raw) } })));
+                }} />
+              </label>
+              <label>
+                Baseline
+                <input type="number" .value=${String(node.props?.baselineValue ?? 0)} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, baselineValue: Number((event.target as HTMLInputElement).value) } })))} />
+              </label>
+              <label>
+                Bar gap
+                <input type="number" min="0" .value=${String(node.props?.barGapPx ?? 1)} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, barGapPx: Number((event.target as HTMLInputElement).value) } })))} />
+              </label>
+              <label>
+                Orientation
+                <select .value=${String(node.props?.barOrientation ?? "vertical")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, barOrientation: (event.target as HTMLSelectElement).value as "vertical" | "horizontal" } })))}>
+                  <option value="vertical">Vertical</option>
+                  <option value="horizontal">Horizontal</option>
+                </select>
+              </label>
+              <label>
+                Fill color
+                <select .value=${String(node.props?.colorRole ?? "accent")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, colorRole: (event.target as HTMLSelectElement).value as FillRole } })))}>
+                  <option value="fg">black</option>
+                  <option value="accent">accent</option>
+                  <option value="gray">gray</option>
+                  <option value="light-accent">light accent</option>
+                  <option value="dark-accent">dark accent</option>
+                </select>
+              </label>
+            </div>
           `
         : nothing}
       ${node.primitiveType === "line"

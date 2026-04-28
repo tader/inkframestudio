@@ -326,6 +326,20 @@ struct WidgetProps {
     digits: Option<i32>,
     #[serde(rename = "quantizeStep")]
     quantize_step: Option<f64>,
+    #[serde(rename = "valueKey")]
+    value_key: Option<String>,
+    #[serde(rename = "minValue")]
+    min_value: Option<f64>,
+    #[serde(rename = "maxValue")]
+    max_value: Option<f64>,
+    #[serde(rename = "baselineValue")]
+    baseline_value: Option<f64>,
+    #[serde(rename = "barGapPx")]
+    bar_gap_px: Option<i32>,
+    #[serde(rename = "barOrientation")]
+    bar_orientation: Option<String>,
+    #[serde(rename = "colorRole")]
+    color_role: Option<FillRole>,
     #[serde(rename = "lineDirection")]
     line_direction: Option<String>,
     #[serde(rename = "fixedPixelSize")]
@@ -344,6 +358,7 @@ struct WidgetProps {
     vertical_align: Option<String>,
     #[serde(rename = "autoFit")]
     auto_fit: Option<bool>,
+    overflow: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -580,14 +595,7 @@ impl IndexedCanvas {
         }
     }
 
-    fn draw_border_span(
-        &mut self,
-        horizontal: bool,
-        fixed: i32,
-        start: i32,
-        end: i32,
-        color: u8,
-    ) {
+    fn draw_border_span(&mut self, horizontal: bool, fixed: i32, start: i32, end: i32, color: u8) {
         for pos in start..end {
             if horizontal {
                 self.set_pixel(pos, fixed, color);
@@ -983,7 +991,11 @@ fn border_side_for(style: &LayoutStyle, edge: &str) -> BorderSide {
     let size = side
         .as_ref()
         .and_then(|side| side.size.clone())
-        .or_else(|| legacy_pattern.clone().filter(|value| matches!(value.as_str(), "none" | "thin" | "thick" | "fat")))
+        .or_else(|| {
+            legacy_pattern
+                .clone()
+                .filter(|value| matches!(value.as_str(), "none" | "thin" | "thick" | "fat"))
+        })
         .unwrap_or(legacy_size);
     let pattern = legacy_pattern
         .filter(|value| !matches!(value.as_str(), "none" | "thin" | "thick" | "fat"))
@@ -1058,16 +1070,30 @@ fn vertical_insets(insets: &EdgeInsets) -> i32 {
     edge_inset(insets, "top") + edge_inset(insets, "bottom")
 }
 
-fn draw_border_side(canvas: &mut IndexedCanvas, frame: Rect, edge: &str, side: &BorderSide, color: u8) {
+fn draw_border_side(
+    canvas: &mut IndexedCanvas,
+    frame: Rect,
+    edge: &str,
+    side: &BorderSide,
+    color: u8,
+) {
     let pattern = side.pattern.as_deref().unwrap_or("solid");
     let line_thickness = border_side_line_thickness(side);
     let total_thickness = border_side_thickness(side);
-    if side.size.as_deref().unwrap_or("none") == "none" || total_thickness <= 0 || frame.w <= 0 || frame.h <= 0 {
+    if side.size.as_deref().unwrap_or("none") == "none"
+        || total_thickness <= 0
+        || frame.w <= 0
+        || frame.h <= 0
+    {
         return;
     }
     let horizontal = edge == "top" || edge == "bottom";
     let start = if horizontal { frame.x } else { frame.y };
-    let end = if horizontal { frame.x + frame.w } else { frame.y + frame.h };
+    let end = if horizontal {
+        frame.x + frame.w
+    } else {
+        frame.y + frame.h
+    };
     let outer = match edge {
         "top" => frame.y,
         "bottom" => frame.y + frame.h - 1,
@@ -1094,12 +1120,35 @@ fn draw_border_side(canvas: &mut IndexedCanvas, frame: Rect, edge: &str, side: &
 
 fn draw_node_border(canvas: &mut IndexedCanvas, frame: Rect, style: &LayoutStyle, color: u8) {
     draw_border_side(canvas, frame, "top", &border_side_for(style, "top"), color);
-    draw_border_side(canvas, frame, "right", &border_side_for(style, "right"), color);
-    draw_border_side(canvas, frame, "bottom", &border_side_for(style, "bottom"), color);
-    draw_border_side(canvas, frame, "left", &border_side_for(style, "left"), color);
+    draw_border_side(
+        canvas,
+        frame,
+        "right",
+        &border_side_for(style, "right"),
+        color,
+    );
+    draw_border_side(
+        canvas,
+        frame,
+        "bottom",
+        &border_side_for(style, "bottom"),
+        color,
+    );
+    draw_border_side(
+        canvas,
+        frame,
+        "left",
+        &border_side_for(style, "left"),
+        color,
+    );
 }
 
-fn render_box_chrome(canvas: &mut IndexedCanvas, theme: &WidgetTheme, style: &LayoutStyle, frame: Rect) -> Rect {
+fn render_box_chrome(
+    canvas: &mut IndexedCanvas,
+    theme: &WidgetTheme,
+    style: &LayoutStyle,
+    frame: Rect,
+) -> Rect {
     let border = node_border_edges(style);
     if should_fill_node_surface(style) {
         if let Some(fill_role) = theme.surface.fill_role {
@@ -1395,7 +1444,10 @@ fn node_supported(node: &Node) -> bool {
             height,
             ..
         } => {
-            if !matches!(primitive_type.as_str(), "text" | "number" | "line" | "icon") {
+            if !matches!(
+                primitive_type.as_str(),
+                "text" | "number" | "line" | "icon" | "bar_chart"
+            ) {
                 return false;
             }
             if primitive_type == "icon"
@@ -1630,7 +1682,10 @@ fn unsupported_node_self_reason(node: &Node) -> Option<String> {
         }
         Node::DataQuery(_) => None,
         Node::PrimitiveInstance { primitive_type, .. }
-            if !matches!(primitive_type.as_str(), "text" | "number" | "line" | "icon") =>
+            if !matches!(
+                primitive_type.as_str(),
+                "text" | "number" | "line" | "icon" | "bar_chart"
+            ) =>
         {
             Some(format!("unsupported primitive type {primitive_type}"))
         }
@@ -2481,12 +2536,265 @@ fn painted_bounds(run: &TextLayoutRun) -> PaintedBounds {
     }
 }
 
-fn auto_fit_pixel_size(
+fn text_width(
     text: &str,
     family: &str,
     weight: &str,
     slope: &str,
+    pixel_size: u32,
     tabular: bool,
+    presets: &FontPresetValues,
+    user_fonts: &HashMap<String, RuntimeFontFamilyData>,
+) -> Result<i32, ApiError> {
+    Ok(text_run(
+        text, family, weight, slope, pixel_size, tabular, presets, user_fonts,
+    )?
+    .map(|run| painted_bounds(&run).width)
+    .unwrap_or(0))
+}
+
+fn truncate_text_to_width(
+    text: &str,
+    suffix: &str,
+    max_width: i32,
+    spec: &PrimitiveTextSpec,
+    pixel_size: u32,
+    presets: &FontPresetValues,
+    user_fonts: &HashMap<String, RuntimeFontFamilyData>,
+) -> Result<String, ApiError> {
+    if max_width <= 0 {
+        return Ok(String::new());
+    }
+    if text_width(
+        text,
+        &spec.family,
+        &spec.weight,
+        &spec.slope,
+        pixel_size,
+        spec.tabular,
+        presets,
+        user_fonts,
+    )? <= max_width
+    {
+        return Ok(text.to_string());
+    }
+    let suffix_width = if suffix.is_empty() {
+        0
+    } else {
+        text_width(
+            suffix,
+            &spec.family,
+            &spec.weight,
+            &spec.slope,
+            pixel_size,
+            spec.tabular,
+            presets,
+            user_fonts,
+        )?
+    };
+    if suffix_width > max_width {
+        return truncate_text_to_width("", "", max_width, spec, pixel_size, presets, user_fonts);
+    }
+    let mut chars = text.chars().collect::<Vec<_>>();
+    while !chars.is_empty() {
+        let candidate = chars.iter().collect::<String>() + suffix;
+        if text_width(
+            &candidate,
+            &spec.family,
+            &spec.weight,
+            &spec.slope,
+            pixel_size,
+            spec.tabular,
+            presets,
+            user_fonts,
+        )? <= max_width
+        {
+            return Ok(candidate);
+        }
+        chars.pop();
+    }
+    Ok(suffix.to_string())
+}
+
+fn wrap_word_by_character(
+    word: &str,
+    max_width: i32,
+    spec: &PrimitiveTextSpec,
+    pixel_size: u32,
+    presets: &FontPresetValues,
+    user_fonts: &HashMap<String, RuntimeFontFamilyData>,
+) -> Result<Vec<String>, ApiError> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for ch in word.chars() {
+        let next = format!("{current}{ch}");
+        if current.is_empty()
+            || text_width(
+                &next,
+                &spec.family,
+                &spec.weight,
+                &spec.slope,
+                pixel_size,
+                spec.tabular,
+                presets,
+                user_fonts,
+            )? <= max_width
+        {
+            current = next;
+            continue;
+        }
+        lines.push(current);
+        current = ch.to_string();
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    Ok(if lines.is_empty() {
+        vec![word.to_string()]
+    } else {
+        lines
+    })
+}
+
+fn layout_text_lines(
+    spec: &PrimitiveTextSpec,
+    pixel_size: u32,
+    max_width: i32,
+    presets: &FontPresetValues,
+    user_fonts: &HashMap<String, RuntimeFontFamilyData>,
+) -> Result<Vec<String>, ApiError> {
+    let overflow = spec.overflow.as_str();
+    if overflow != "wrap" {
+        let suffix = if overflow == "ellipsis" { "..." } else { "" };
+        return spec
+            .text
+            .split('\n')
+            .map(|line| {
+                truncate_text_to_width(
+                    line, suffix, max_width, spec, pixel_size, presets, user_fonts,
+                )
+            })
+            .collect();
+    }
+    let mut lines = Vec::new();
+    for paragraph in spec.text.split('\n') {
+        let words = paragraph.split_whitespace().collect::<Vec<_>>();
+        if words.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        let mut current = String::new();
+        for word in words {
+            let candidate = if current.is_empty() {
+                word.to_string()
+            } else {
+                format!("{current} {word}")
+            };
+            if current.is_empty()
+                || text_width(
+                    &candidate,
+                    &spec.family,
+                    &spec.weight,
+                    &spec.slope,
+                    pixel_size,
+                    spec.tabular,
+                    presets,
+                    user_fonts,
+                )? <= max_width
+            {
+                current = candidate;
+                continue;
+            }
+            lines.push(current);
+            if text_width(
+                word,
+                &spec.family,
+                &spec.weight,
+                &spec.slope,
+                pixel_size,
+                spec.tabular,
+                presets,
+                user_fonts,
+            )? <= max_width
+            {
+                current = word.to_string();
+            } else {
+                let broken =
+                    wrap_word_by_character(word, max_width, spec, pixel_size, presets, user_fonts)?;
+                lines.extend(broken.iter().take(broken.len().saturating_sub(1)).cloned());
+                current = broken.last().cloned().unwrap_or_default();
+            }
+        }
+        if !current.is_empty() {
+            lines.push(current);
+        }
+    }
+    Ok(if lines.is_empty() {
+        vec![spec.text.clone()]
+    } else {
+        lines
+    })
+}
+
+struct TextLineRun {
+    run: TextLayoutRun,
+    bounds: PaintedBounds,
+}
+
+fn text_line_runs(
+    spec: &PrimitiveTextSpec,
+    pixel_size: u32,
+    frame_width: i32,
+    presets: &FontPresetValues,
+    user_fonts: &HashMap<String, RuntimeFontFamilyData>,
+) -> Result<Vec<TextLineRun>, ApiError> {
+    let lines = layout_text_lines(spec, pixel_size, frame_width, presets, user_fonts)?;
+    let mut runs = Vec::new();
+    for line in lines {
+        let Some(run) = text_run(
+            &line,
+            &spec.family,
+            &spec.weight,
+            &spec.slope,
+            pixel_size,
+            spec.tabular,
+            presets,
+            user_fonts,
+        )?
+        else {
+            continue;
+        };
+        let bounds = painted_bounds(&run);
+        runs.push(TextLineRun { run, bounds });
+    }
+    Ok(runs)
+}
+
+fn text_lines_block_size(runs: &[TextLineRun], line_spacing_px: i32) -> (i32, i32) {
+    let width = runs
+        .iter()
+        .map(|line| line.bounds.width)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let height = runs
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            line.bounds.height
+                + if index + 1 < runs.len() {
+                    line_spacing_px.max(0)
+                } else {
+                    0
+                }
+        })
+        .sum::<i32>()
+        .max(1);
+    (width, height)
+}
+
+fn auto_fit_pixel_size(
+    spec: &PrimitiveTextSpec,
     frame: Rect,
     presets: &FontPresetValues,
     user_fonts: &HashMap<String, RuntimeFontFamilyData>,
@@ -2496,14 +2804,12 @@ fn auto_fit_pixel_size(
     let mut best = None;
     while low <= high {
         let mid = low + (high - low) / 2;
-        let Some(run) = text_run(
-            text, family, weight, slope, mid, tabular, presets, user_fonts,
-        )?
-        else {
+        let runs = text_line_runs(spec, mid, frame.w, presets, user_fonts)?;
+        if runs.is_empty() {
             return Ok(None);
-        };
-        let bounds = painted_bounds(&run);
-        if bounds.width <= frame.w && bounds.height <= frame.h {
+        }
+        let (w, h) = text_lines_block_size(&runs, spec.line_spacing_px);
+        if w <= frame.w && h + spec.top_padding_px.max(0) <= frame.h {
             best = Some(mid);
             low = mid.saturating_add(1);
         } else if mid == 0 {
@@ -2556,12 +2862,123 @@ fn binding_scope_text(scope: &Value, binding: Option<&String>, locale: &str) -> 
     binding_scope_value(scope, binding, locale).map(|value| stringify_scope_value(&value))
 }
 
-fn draw_text_run(canvas: &mut IndexedCanvas, run: &TextLayoutRun, x: i32, y: i32, color: u8) {
+fn numeric_chart_value(item: &Value, value_key: &str) -> Option<f64> {
+    match item {
+        Value::Number(number) => number.as_f64(),
+        Value::String(text) => text.parse::<f64>().ok(),
+        Value::Object(object) => object.get(value_key).and_then(|value| match value {
+            Value::Number(number) => number.as_f64(),
+            Value::String(text) => text.parse::<f64>().ok(),
+            _ => None,
+        }),
+        _ => None,
+    }
+    .filter(|value| value.is_finite())
+}
+
+fn bar_chart_values(
+    scope: &Value,
+    bindings: &HashMap<String, String>,
+    props: &WidgetProps,
+    locale: &str,
+) -> Vec<f64> {
+    let Some(Value::Array(items)) = binding_scope_value(scope, bindings.get("value"), locale)
+    else {
+        return Vec::new();
+    };
+    let value_key = props.value_key.as_deref().unwrap_or("value").trim();
+    let value_key = if value_key.is_empty() {
+        "value"
+    } else {
+        value_key
+    };
+    items
+        .iter()
+        .filter_map(|item| numeric_chart_value(item, value_key))
+        .collect()
+}
+
+fn draw_bar_chart(canvas: &mut IndexedCanvas, frame: Rect, values: &[f64], props: &WidgetProps) {
+    if values.is_empty() || frame.w <= 0 || frame.h <= 0 {
+        return;
+    }
+    let color = fill_role_color(props.color_role.unwrap_or(FillRole::Accent));
+    let auto_min = values.iter().copied().fold(0.0_f64, f64::min);
+    let auto_max = values.iter().copied().fold(0.0_f64, f64::max);
+    let mut min = props
+        .min_value
+        .filter(|value| value.is_finite())
+        .unwrap_or(auto_min);
+    let mut max = props
+        .max_value
+        .filter(|value| value.is_finite())
+        .unwrap_or(auto_max);
+    if (max - min).abs() < f64::EPSILON {
+        min -= 1.0;
+        max += 1.0;
+    }
+    let range = (max - min).max(0.000001);
+    let baseline = props.baseline_value.unwrap_or(0.0).clamp(min, max);
+    let gap = props.bar_gap_px.unwrap_or(1).max(0);
+    if props.bar_orientation.as_deref() == Some("horizontal") {
+        let slot = ((frame.h + gap) / values.len() as i32).max(1);
+        let bar_h = (slot - gap).max(1);
+        let base_x =
+            frame.x + (((baseline - min) / range) * (frame.w - 1).max(0) as f64).round() as i32;
+        for (index, value) in values.iter().enumerate() {
+            let clamped = value.clamp(min, max);
+            let target_x =
+                frame.x + (((clamped - min) / range) * (frame.w - 1).max(0) as f64).round() as i32;
+            let x = base_x.min(target_x);
+            let w = (target_x - base_x).abs() + 1;
+            let y = frame.y + index as i32 * slot;
+            let h = bar_h.min(frame.y + frame.h - y).max(0);
+            if h == 0 {
+                continue;
+            }
+            canvas.fill_rect(Rect { x, y, w, h }, color);
+        }
+        return;
+    }
+    let slot = ((frame.w + gap) / values.len() as i32).max(1);
+    let bar_w = (slot - gap).max(1);
+    let base_y = frame.y + frame.h
+        - 1
+        - (((baseline - min) / range) * (frame.h - 1).max(0) as f64).round() as i32;
+    for (index, value) in values.iter().enumerate() {
+        let clamped = value.clamp(min, max);
+        let target_y = frame.y + frame.h
+            - 1
+            - (((clamped - min) / range) * (frame.h - 1).max(0) as f64).round() as i32;
+        let y = base_y.min(target_y);
+        let h = (target_y - base_y).abs() + 1;
+        let x = frame.x + index as i32 * slot;
+        let w = bar_w.min(frame.x + frame.w - x).max(0);
+        if w == 0 {
+            continue;
+        }
+        canvas.fill_rect(Rect { x, y, w, h }, color);
+    }
+}
+
+fn draw_text_run(
+    canvas: &mut IndexedCanvas,
+    run: &TextLayoutRun,
+    x: i32,
+    y: i32,
+    color: u8,
+    clip: Rect,
+) {
     for glyph in &run.glyphs {
         for (gy, row) in glyph.pixels.iter().enumerate() {
             for (gx, pixel) in row.iter().enumerate() {
                 if *pixel != 0 {
-                    canvas.set_pixel(x + glyph.x + gx as i32, y + glyph.y + gy as i32, color);
+                    let px = x + glyph.x + gx as i32;
+                    let py = y + glyph.y + gy as i32;
+                    if px >= clip.x && py >= clip.y && px < clip.x + clip.w && py < clip.y + clip.h
+                    {
+                        canvas.set_pixel(px, py, color);
+                    }
                 }
             }
         }
@@ -2581,6 +2998,7 @@ struct PrimitiveTextSpec {
     padding: i32,
     line_spacing_px: i32,
     top_padding_px: i32,
+    overflow: String,
 }
 
 fn primitive_render_spec(
@@ -2671,6 +3089,7 @@ fn primitive_render_spec(
             top_padding_px: role_style
                 .and_then(|style| style.top_padding_px)
                 .unwrap_or(0),
+            overflow: props.overflow.as_deref().unwrap_or("wrap").to_string(),
         }
     } else if primitive_type == "number" {
         let effective_color_role =
@@ -2754,6 +3173,7 @@ fn primitive_render_spec(
             top_padding_px: role_style
                 .and_then(|style| style.top_padding_px)
                 .unwrap_or(0),
+            overflow: "hide".to_string(),
         }
     } else {
         return Ok(None);
@@ -2771,21 +3191,7 @@ fn measure_primitive(
     node: &Node,
     user_fonts: &HashMap<String, RuntimeFontFamilyData>,
 ) -> Result<Option<(i32, i32)>, ApiError> {
-    let Some(PrimitiveTextSpec {
-        text,
-        family,
-        weight,
-        slope,
-        color: _color,
-        tabular,
-        default_px: pixel_size,
-        h_align: _h_align,
-        v_align: _v_align,
-        padding,
-        line_spacing_px: _line_spacing_px,
-        top_padding_px,
-    }) = primitive_render_spec(project, scope, node, user_fonts)?
-    else {
+    let Some(spec) = primitive_render_spec(project, scope, node, user_fonts)? else {
         let Node::PrimitiveInstance {
             primitive_type,
             props,
@@ -2796,37 +3202,59 @@ fn measure_primitive(
             return Ok(None);
         };
         if primitive_type == "line" {
-            let chrome = add_edge_insets(&node_border_edges(style), &node_padding_edges(style, Some(props)));
-            return Ok(Some((1 + horizontal_insets(&chrome), 1 + vertical_insets(&chrome))));
+            let chrome = add_edge_insets(
+                &node_border_edges(style),
+                &node_padding_edges(style, Some(props)),
+            );
+            return Ok(Some((
+                1 + horizontal_insets(&chrome),
+                1 + vertical_insets(&chrome),
+            )));
         }
         if primitive_type == "icon" {
-            let chrome = add_edge_insets(&node_border_edges(style), &node_padding_edges(style, Some(props)));
-            return Ok(Some((10 + horizontal_insets(&chrome), 10 + vertical_insets(&chrome))));
+            let chrome = add_edge_insets(
+                &node_border_edges(style),
+                &node_padding_edges(style, Some(props)),
+            );
+            return Ok(Some((
+                10 + horizontal_insets(&chrome),
+                10 + vertical_insets(&chrome),
+            )));
+        }
+        if primitive_type == "bar_chart" {
+            let chrome = add_edge_insets(
+                &node_border_edges(style),
+                &node_padding_edges(style, Some(props)),
+            );
+            return Ok(Some((
+                24 + horizontal_insets(&chrome),
+                16 + vertical_insets(&chrome),
+            )));
         }
         return Ok(None);
     };
-    let Some(run) = text_run(
-        &text,
-        &family,
-        &weight,
-        &slope,
-        pixel_size,
-        tabular,
+    let runs = text_line_runs(
+        &spec,
+        spec.default_px,
+        10_000,
         &project.font_presets,
         user_fonts,
-    )?
-    else {
+    )?;
+    if runs.is_empty() {
         return Ok(None);
-    };
-    let bounds = painted_bounds(&run);
+    }
+    let (text_w, text_h) = text_lines_block_size(&runs, spec.line_spacing_px);
     let chrome = if let Node::PrimitiveInstance { props, style, .. } = node {
-        add_edge_insets(&node_border_edges(style), &node_padding_edges(style, Some(props)))
+        add_edge_insets(
+            &node_border_edges(style),
+            &node_padding_edges(style, Some(props)),
+        )
     } else {
         EdgeInsets::default()
     };
     Ok(Some((
-        bounds.width + horizontal_insets(&chrome).max(padding * 2),
-        bounds.height + vertical_insets(&chrome).max(padding * 2) + top_padding_px.max(0),
+        text_w + horizontal_insets(&chrome).max(spec.padding * 2),
+        text_h + vertical_insets(&chrome).max(spec.padding * 2) + spec.top_padding_px.max(0),
     )))
 }
 
@@ -3121,65 +3549,53 @@ fn render_primitive(
         )?;
         return Ok(());
     }
-    let Some(PrimitiveTextSpec {
-        text,
-        family,
-        weight,
-        slope,
-        color,
-        tabular,
-        default_px,
-        h_align,
-        v_align,
-        padding: _padding,
-        line_spacing_px: _line_spacing_px,
-        top_padding_px,
-    }) = primitive_render_spec(project, scope, node, user_fonts)?
-    else {
+    if primitive_type == "bar_chart" {
+        let inner = inset_rect_by(frame, &chrome);
+        let values = bar_chart_values(scope, bindings, props, &project.locale);
+        draw_bar_chart(canvas, inner, &values, props);
+        return Ok(());
+    }
+    let Some(spec) = primitive_render_spec(project, scope, node, user_fonts)? else {
         return Ok(());
     };
     let inner = inset_rect_by(frame, &chrome);
     let pixel_size = if props.auto_fit.unwrap_or(false) {
-        auto_fit_pixel_size(
-            &text,
-            &family,
-            &weight,
-            &slope,
-            tabular,
-            inner,
-            &project.font_presets,
-            user_fonts,
-        )?
-        .unwrap_or(default_px)
+        auto_fit_pixel_size(&spec, inner, &project.font_presets, user_fonts)?
+            .unwrap_or(spec.default_px)
     } else {
-        props.fixed_pixel_size.unwrap_or(default_px)
+        props.fixed_pixel_size.unwrap_or(spec.default_px)
     };
-    let Some(run) = text_run(
-        &text,
-        &family,
-        &weight,
-        &slope,
+    let runs = text_line_runs(
+        &spec,
         pixel_size,
-        tabular,
+        inner.w,
         &project.font_presets,
         user_fonts,
-    )?
-    else {
+    )?;
+    if runs.is_empty() {
         return Ok(());
-    };
-    let bounds = painted_bounds(&run);
-    let draw_x = match h_align.as_str() {
-        "center" => inner.x + ((inner.w - bounds.width) / 2),
-        "right" => inner.x + inner.w - bounds.width,
-        _ => inner.x,
-    } - bounds.min_x;
-    let draw_y = match v_align.as_str() {
-        "middle" => inner.y + ((inner.h - bounds.height) / 2),
-        "bottom" => inner.y + inner.h - bounds.height,
+    }
+    let (_block_w, block_h) = text_lines_block_size(&runs, spec.line_spacing_px);
+    let mut cursor_y = match spec.v_align.as_str() {
+        "middle" => inner.y + ((inner.h - block_h) / 2),
+        "bottom" => inner.y + inner.h - block_h,
         _ => inner.y,
-    } - bounds.min_y
-        + top_padding_px;
-    draw_text_run(canvas, &run, draw_x, draw_y, color);
+    } + spec.top_padding_px.max(0);
+    for (index, line) in runs.iter().enumerate() {
+        let draw_x = match spec.h_align.as_str() {
+            "center" => inner.x + ((inner.w - line.bounds.width) / 2),
+            "right" => inner.x + inner.w - line.bounds.width,
+            _ => inner.x,
+        } - line.bounds.min_x;
+        let draw_y = cursor_y - line.bounds.min_y;
+        draw_text_run(canvas, &line.run, draw_x, draw_y, spec.color, inner);
+        cursor_y += line.bounds.height
+            + if index + 1 < runs.len() {
+                spec.line_spacing_px.max(0)
+            } else {
+                0
+            };
+    }
     Ok(())
 }
 
@@ -3640,12 +4056,31 @@ fn render_node(
                 let main = shared_main
                     .unwrap_or(if horizontal { measured.0 } else { measured.1 })
                     .max(1);
-                let cross = if horizontal {
-                    measured.1.min(inner.h)
+                let cross_spec = if horizontal {
+                    node_height_spec(template)
                 } else {
-                    measured.0.min(inner.w)
+                    node_width_spec(template)
+                };
+                let cross_available = if horizontal { inner.h } else { inner.w };
+                let cross = match cross_spec.and_then(|spec| spec.mode.as_deref()) {
+                    None | Some("fill") => cross_available,
+                    Some("fraction") => cross_spec
+                        .and_then(|spec| spec.value)
+                        .map(|value| (cross_available as f64 * value).round() as i32)
+                        .unwrap_or(cross_available),
+                    Some("fixed_px") => cross_spec
+                        .and_then(|spec| spec.value)
+                        .map(|value| value.round() as i32)
+                        .unwrap_or(cross_available),
+                    _ => {
+                        if horizontal {
+                            measured.1
+                        } else {
+                            measured.0
+                        }
+                    }
                 }
-                .max(1);
+                .clamp(1, cross_available.max(1));
                 let child_frame = if horizontal {
                     Rect {
                         x: cursor,
@@ -4338,6 +4773,86 @@ mod tests {
         .unwrap();
         assert!(rendered.is_some());
         assert!(rendered.unwrap().hash.starts_with("native-layout:"));
+    }
+
+    #[test]
+    fn foreach_vertical_fill_child_uses_full_cross_axis() {
+        let project_value = json!({
+            "id": "demo",
+            "name": "Demo",
+            "locale": "en-US",
+            "fontPresets": { "tiny": 8, "normal": 12, "header": 24 },
+            "themes": [{
+                "id": "classic-outline",
+                "text": { "title": "fg", "body": "fg", "value": "fg" }
+            }],
+            "displayTypes": [{
+                "id": "tiny",
+                "width": 32,
+                "height": 8,
+                "palette": { "bg": "#ffffff", "fg": "#000000", "accent": "#ff0000" }
+            }],
+            "layoutDefinitions": [{
+                "id": "layout-foreach-fill",
+                "displayTypeId": "tiny",
+                "rootNode": {
+                    "id": "query",
+                    "type": "data_query",
+                    "queryKind": "calendar_events",
+                    "variableName": "items",
+                    "width": { "mode": "fill" },
+                    "height": { "mode": "fill" },
+                    "style": { "borderToken": "none", "paddingPx": 0 },
+                    "child": {
+                        "id": "each",
+                        "type": "foreach",
+                        "itemsRef": "items",
+                        "itemAlias": "item",
+                        "indexAlias": "index",
+                        "axis": "vertical",
+                        "maxItems": 1,
+                        "width": { "mode": "fill" },
+                        "height": { "mode": "fill" },
+                        "style": { "borderToken": "none", "paddingPx": 0 },
+                        "child": {
+                            "id": "line",
+                            "type": "primitive_instance",
+                            "primitiveType": "line",
+                            "width": { "mode": "fill" },
+                            "height": { "mode": "fixed_px", "value": 1 },
+                            "style": { "borderToken": "none", "paddingPx": 0 },
+                            "props": { "lineDirection": "horizontal" }
+                        }
+                    }
+                }
+            }]
+        });
+        let rendered = render_layout_preview(
+            &project_value,
+            &json!({}),
+            &json!({
+                "metaQueries": {
+                    "query": {
+                        "items": [{ "summary": "one" }]
+                    }
+                },
+                "now": "2026-04-24T22:00:00+02:00"
+            }),
+            "layout-foreach-fill",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let image = image::load_from_memory(&rendered.png_bytes)
+            .unwrap()
+            .to_rgba8();
+        let black_pixels = (0..32)
+            .filter(|x| image.get_pixel(*x, 0).0[0..3] == [0, 0, 0])
+            .count();
+        assert_eq!(black_pixels, 32);
     }
 
     #[test]

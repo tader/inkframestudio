@@ -494,7 +494,8 @@ fn draw_widget_text_block(
 ) -> Result<(), ApiError> {
     let (x, y, w, h) = frame;
     draw_widget_frame(canvas, x, y, w, h, border_color);
-    let (content_w, content_h) = canvas.measure_text_block(lines, style, paint.presets, paint.fonts)?;
+    let (content_w, content_h) =
+        canvas.measure_text_block(lines, style, paint.presets, paint.fonts)?;
     draw_dashed_frame(
         canvas,
         x + 6,
@@ -761,7 +762,12 @@ pub(crate) fn render_theme_preview_value(
             .normal
             .as_ref()
             .and_then(|value| value.family.clone())
-            .or_else(|| font_roles.tiny.as_ref().and_then(|value| value.family.clone()))
+            .or_else(|| {
+                font_roles
+                    .tiny
+                    .as_ref()
+                    .and_then(|value| value.family.clone())
+            })
             .unwrap_or_else(|| "missing-font".into());
         let sizes = [8_u32, 12_u32, 18_u32, 24_u32];
         for (index, size) in sizes.iter().enumerate() {

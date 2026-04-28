@@ -159,6 +159,58 @@ describe("designer renderer", () => {
     expect(rendered.hash.length).toBeGreaterThan(10);
   });
 
+  it("renders bar chart values from scoped variables", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const project: Project = normalizeProject({
+      ...normalized,
+      displayTypes: [{
+        id: "chart-display",
+        name: "Chart",
+        width: 40,
+        height: 20,
+        rotation: 0,
+        contentPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+        gridUnitPx: 8,
+        palette: { bg: "#ffffff", fg: "#111111", accent: "#d7261b" }
+      }],
+      layoutDefinitions: [
+        {
+          id: "layout-bar-chart",
+          name: "Bar Chart",
+          kind: "fullscreen",
+          displayTypeId: "chart-display",
+          rootNode: {
+            id: "script",
+            type: "script",
+            source: "return { chart: [{ label: 'A', value: 2 }, { label: 'B', value: 4 }, { label: 'C', value: 1 }] };",
+            outputMode: "merge_object",
+            bindings: {},
+            width: { mode: "fill" },
+            height: { mode: "fill" },
+            child: {
+              id: "bars",
+              type: "primitive_instance",
+              primitiveType: "bar_chart",
+              bindings: { value: "chart" },
+              props: { valueKey: "value", minValue: 0, maxValue: 4, baselineValue: 0, barGapPx: 1, colorRole: "accent" },
+              width: { mode: "fill" },
+              height: { mode: "fill" },
+              style: { paddingPx: 0 }
+            }
+          }
+        }
+      ]
+    });
+
+    const rendered = renderLayoutDefinition(project, project.layoutDefinitions![0]!, SAMPLE_DATA);
+    const bounds = pixelBounds(rendered, 0, 0, 40, 20);
+    expect(bounds).toBeTruthy();
+    expect(bounds!.height).toBeGreaterThan(12);
+    expect(regionPixels(rendered, 13, 0, 1, 20).filter((pixel) => pixel !== 0).length).toBeGreaterThan(
+      regionPixels(rendered, 26, 0, 1, 20).filter((pixel) => pixel !== 0).length
+    );
+  });
+
   it("renders assigned display from migrated virtual device", () => {
     const project = normalizeProject(SAMPLE_PROJECT);
     const displayId = project.devices?.[0]?.id;
@@ -1008,6 +1060,75 @@ describe("designer renderer", () => {
       ellipsisInspection.root?.children[0]?.frame.w ?? 0,
       ellipsisInspection.root?.children[0]?.frame.h ?? 0
     ));
+  });
+
+  it("clips text overflow for wrap, hide, and ellipsis across width and height sizing modes", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const widthModes = [
+      { mode: "fixed_px" as const, value: 28 },
+      { mode: "fill" as const },
+      { mode: "fit_content" as const }
+    ];
+    const heightModes = [
+      { mode: "fixed_px" as const, value: 8 },
+      { mode: "fill" as const },
+      { mode: "fit_content" as const },
+      { mode: "fit_glyph_bounds" as const }
+    ];
+    for (const overflow of ["wrap", "hide", "ellipsis"] as const) {
+      for (const width of widthModes) {
+        for (const height of heightModes) {
+          const project: Project = normalizeProject({
+            ...normalized,
+            displayTypes: [{
+              id: "overflow-display",
+              name: "Overflow",
+              width: 72,
+              height: 36,
+              rotation: 0,
+              contentPadding: { top: 0, right: 0, bottom: 0, left: 0 },
+              gridUnitPx: 8,
+              palette: { bg: "#ffffff", fg: "#111111", accent: "#d7261b" }
+            }],
+            layoutDefinitions: [{
+              id: `layout-overflow-${overflow}-${width.mode}-${height.mode}`,
+              name: "Overflow",
+              kind: "fullscreen",
+              displayTypeId: "overflow-display",
+              rootNode: {
+                id: "root",
+                type: "stack",
+                axis: "vertical",
+                width: { mode: "fixed_px", value: 36 },
+                height: { mode: "fixed_px", value: 18 },
+                children: [{
+                  id: "text",
+                  type: "primitive_instance",
+                  primitiveType: "text",
+                  width,
+                  height,
+                  props: {
+                    text: "ALPHA BETA GAMMA",
+                    overflow,
+                    fixedPixelSize: 8,
+                    paddingPx: 0,
+                    borderToken: "none"
+                  }
+                }]
+              }
+            }]
+          });
+          const layout = project.layoutDefinitions![0]!;
+          const inspection = inspectLayoutDefinition(project, layout, SAMPLE_DATA);
+          const frame = inspection.root?.children[0]?.frame;
+          expect(frame, `${overflow} ${width.mode} ${height.mode}`).toBeTruthy();
+          const rendered = renderLayoutDefinition(project, layout, SAMPLE_DATA);
+          const bounds = pixelBounds(rendered, 0, 0, rendered.width, rendered.height);
+          expect(bounds?.maxX ?? -1, `${overflow} ${width.mode} ${height.mode} maxX`).toBeLessThan((frame?.x ?? 0) + (frame?.w ?? 0));
+          expect(bounds?.maxY ?? -1, `${overflow} ${width.mode} ${height.mode} maxY`).toBeLessThan((frame?.y ?? 0) + (frame?.h ?? 0));
+        }
+      }
+    }
   });
 
   it("uses tight glyph bounds for fit-glyph-bounds text sizing", () => {

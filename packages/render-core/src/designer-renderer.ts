@@ -5,6 +5,7 @@ import { applyScopeTemplate, evaluateArrayExpression, evaluateScopeExpression, e
 import { COLOR_ACCENT, COLOR_BG, COLOR_FG, PixelBuffer, type PixelClipRect, type PixelPaint } from "./pixel-buffer.js";
 import { formatQuantizedNumber } from "./quantize.js";
 import { createActiveRenderScripting, type ActiveRenderScripting } from "./scripting.js";
+import { layoutText } from "./text-layout.js";
 import { DEFAULT_WIDGET_THEME_ID, DEFAULT_WIDGET_THEMES } from "./themes.js";
 import type {
   BorderToken,
@@ -1134,7 +1135,7 @@ function wrapByCharacter(buffer: PixelBuffer, text: string, style: Partial<TextS
   let current = "";
   for (const char of chars) {
     const next = `${current}${char}`;
-    if (!current || buffer.measureText(next, style).width <= maxWidth) {
+    if (!current || paintedTextWidth(buffer, next, style) <= maxWidth) {
       current = next;
       continue;
     }
@@ -1145,6 +1146,20 @@ function wrapByCharacter(buffer: PixelBuffer, text: string, style: Partial<TextS
     lines.push(current);
   }
   return lines.length ? lines : [text];
+}
+
+function paintedTextWidth(buffer: PixelBuffer, text: string, style: Partial<TextStyle>): number {
+  const run = layoutText(text, style, buffer.fontPresets);
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  for (const glyph of run.glyphs) {
+    if (glyph.width <= 0 || glyph.height <= 0) {
+      continue;
+    }
+    minX = Math.min(minX, glyph.x);
+    maxX = Math.max(maxX, glyph.x + glyph.width);
+  }
+  return Number.isFinite(minX) ? Math.max(1, maxX - minX) : 0;
 }
 
 function wrapText(buffer: PixelBuffer, text: string, style: Partial<TextStyle>, maxWidth: number): string[] {
@@ -1159,12 +1174,12 @@ function wrapText(buffer: PixelBuffer, text: string, style: Partial<TextStyle>, 
     let current = "";
     for (const word of words) {
       const candidate = current ? `${current} ${word}` : word;
-      if (!current || buffer.measureText(candidate, style).width <= maxWidth) {
+      if (!current || paintedTextWidth(buffer, candidate, style) <= maxWidth) {
         current = candidate;
         continue;
       }
       lines.push(current);
-      if (buffer.measureText(word, style).width <= maxWidth) {
+      if (paintedTextWidth(buffer, word, style) <= maxWidth) {
         current = word;
       } else {
         const broken = wrapByCharacter(buffer, word, style, maxWidth);
@@ -1194,17 +1209,17 @@ function truncateTextToWidth(
   if (maxWidth <= 0) {
     return "";
   }
-  if (buffer.measureText(text, style).width <= maxWidth) {
+  if (paintedTextWidth(buffer, text, style) <= maxWidth) {
     return text;
   }
-  const suffixWidth = suffix ? buffer.measureText(suffix, style).width : 0;
+  const suffixWidth = suffix ? paintedTextWidth(buffer, suffix, style) : 0;
   if (suffixWidth > maxWidth) {
     return truncateTextToWidth(buffer, suffix, style, maxWidth, "");
   }
   const chars = Array.from(text);
   while (chars.length) {
     const candidate = `${chars.join("")}${suffix}`;
-    if (buffer.measureText(candidate, style).width <= maxWidth) {
+    if (paintedTextWidth(buffer, candidate, style) <= maxWidth) {
       return candidate;
     }
     chars.pop();
@@ -1245,7 +1260,7 @@ function pickAutoTextStyle(
     return entries.every((entry) => {
       if (!wrap) {
         return (
-          buffer.measureText(entry, candidate).width <= frame.w &&
+          paintedTextWidth(buffer, entry, candidate) <= frame.w &&
           adjustedTextBlockHeight(
             renderedTextBlockHeight(buffer, [entry], candidate, frame.w, 0),
             topPaddingPx
@@ -1564,6 +1579,112 @@ function drawGraph(buffer: PixelBuffer, frame: PixelFrame, data: RenderData, que
   });
 }
 
+function resolveBindingRaw(binding: string | undefined, inputContext: ScopeContext, locale = "en-US"): ScopeContext[string] | undefined {
+  const raw = String(binding ?? "").trim();
+  if (!raw) {
+    return undefined;
+  }
+  if (raw.includes("{{") || raw.includes("${")) {
+    return applyInputTemplate(raw, inputContext, locale);
+  }
+  const direct = resolveScopePath(inputContext, raw);
+  if (direct !== undefined) {
+    return direct;
+  }
+  if (raw.includes("|")) {
+    const resolved = evaluateScopeValueExpression(raw, inputContext, templateOptions(inputContext, locale));
+    if (resolved !== undefined && resolved !== null) {
+      return resolved as ScopeContext[string];
+    }
+  }
+  return undefined;
+}
+
+function numericChartValue(item: ScopeContext[string], valueKey: string): number | undefined {
+  if (typeof item === "number" && Number.isFinite(item)) {
+    return item;
+  }
+  if (typeof item === "string") {
+    const parsed = Number(item);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  if (item && typeof item === "object" && !Array.isArray(item)) {
+    const raw = (item as Record<string, unknown>)[valueKey];
+    if (typeof raw === "number" && Number.isFinite(raw)) {
+      return raw;
+    }
+    if (typeof raw === "string") {
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+  }
+  return undefined;
+}
+
+function barChartValues(node: PrimitiveInstanceNode, inputContext: ScopeContext, locale: string): number[] {
+  const raw = resolveBindingRaw(node.bindings?.value, inputContext, locale);
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const valueKey = String(node.props?.valueKey ?? "value").trim() || "value";
+  return raw.flatMap((item) => {
+    const value = numericChartValue(item, valueKey);
+    return value === undefined ? [] : [value];
+  });
+}
+
+function drawBarChart(buffer: PixelBuffer, frame: PixelFrame, values: number[], node: PrimitiveInstanceNode, theme: WidgetTheme, clip?: PixelFrame): void {
+  if (!values.length || frame.w <= 0 || frame.h <= 0) {
+    return;
+  }
+  const paint = fillRoleToPaint(node.props?.colorRole ?? theme.accentRole) ?? { kind: "solid", color: roleToColor(theme.accentRole) };
+  const orientation = node.props?.barOrientation === "horizontal" ? "horizontal" : "vertical";
+  const gap = Math.max(0, Math.trunc(Number(node.props?.barGapPx ?? 1) || 0));
+  const autoMin = Math.min(0, ...values);
+  const autoMax = Math.max(0, ...values);
+  let min = typeof node.props?.minValue === "number" && Number.isFinite(node.props.minValue) ? node.props.minValue : autoMin;
+  let max = typeof node.props?.maxValue === "number" && Number.isFinite(node.props.maxValue) ? node.props.maxValue : autoMax;
+  if (min === max) {
+    min -= 1;
+    max += 1;
+  }
+  const baseline = Math.max(min, Math.min(max, Number(node.props?.baselineValue ?? 0) || 0));
+  const range = Math.max(0.000001, max - min);
+  const visible = clip ? intersectFrame(frame, clip) : frame;
+  if (!hasArea(visible)) {
+    return;
+  }
+  if (orientation === "horizontal") {
+    const slot = Math.max(1, Math.floor((frame.h + gap) / values.length));
+    const barH = Math.max(1, slot - gap);
+    const baseX = frame.x + Math.round(((baseline - min) / range) * Math.max(0, frame.w - 1));
+    values.forEach((value, index) => {
+      const targetX = frame.x + Math.round(((Math.max(min, Math.min(max, value)) - min) / range) * Math.max(0, frame.w - 1));
+      const x = Math.min(baseX, targetX);
+      const w = Math.max(1, Math.abs(targetX - baseX) + 1);
+      const y = frame.y + index * slot;
+      const h = Math.max(0, Math.min(barH, frame.y + frame.h - y));
+      if (h > 0) {
+        buffer.drawPaintRect(x, y, w, h, paint, toClipRect(visible));
+      }
+    });
+    return;
+  }
+  const slot = Math.max(1, Math.floor((frame.w + gap) / values.length));
+  const barW = Math.max(1, slot - gap);
+  const baseY = frame.y + frame.h - 1 - Math.round(((baseline - min) / range) * Math.max(0, frame.h - 1));
+  values.forEach((value, index) => {
+    const targetY = frame.y + frame.h - 1 - Math.round(((Math.max(min, Math.min(max, value)) - min) / range) * Math.max(0, frame.h - 1));
+    const y = Math.min(baseY, targetY);
+    const h = Math.max(1, Math.abs(targetY - baseY) + 1);
+    const x = frame.x + index * slot;
+    const w = Math.max(0, Math.min(barW, frame.x + frame.w - x));
+    if (w > 0) {
+      buffer.drawPaintRect(x, y, w, h, paint, toClipRect(visible));
+    }
+  });
+}
+
 function drawPrimitiveNode(
   buffer: PixelBuffer,
   project: Project,
@@ -1698,6 +1819,11 @@ function drawPrimitiveNode(
 
   if (node.primitiveType === "graph") {
     drawGraph(buffer, visibleInnerFrame, data, node.bindings?.query, fillRoleToPaint(node.props?.colorRole ?? theme.accentRole) ?? { kind: "solid", color: roleToColor(theme.accentRole) });
+    return;
+  }
+
+  if (node.primitiveType === "bar_chart") {
+    drawBarChart(buffer, visibleInnerFrame, barChartValues(node, inputContext, project.locale ?? "en-US"), node, theme, visibleInnerFrame);
     return;
   }
 

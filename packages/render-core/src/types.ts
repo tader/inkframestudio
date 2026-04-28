@@ -37,6 +37,7 @@ export type PrimitiveWidgetKind =
   | "number"
   | "icon"
   | "graph"
+  | "bar_chart"
   | "line"
   | "box"
   | "circle"
@@ -603,6 +604,13 @@ export interface WidgetProps {
   maxItems?: number;
   quantizeStep?: number;
   digits?: number;
+  valueKey?: string;
+  labelKey?: string;
+  minValue?: number;
+  maxValue?: number;
+  baselineValue?: number;
+  barGapPx?: number;
+  barOrientation?: "vertical" | "horizontal";
   unit?: string;
   lineDirection?: "horizontal" | "vertical" | "diag_down" | "diag_up";
   filled?: boolean;
