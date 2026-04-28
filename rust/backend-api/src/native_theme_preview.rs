@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use base64::Engine;
 use epd_text_engine::{
     render as render_text_layout, FontFamilyData as EngineFontFamilyData,
-    FontPresets as EngineFontPresets, LayoutRequest, TextStyle as EngineTextStyle,
+    FontPresets as EngineFontPresets, LayoutRequest, TextLayoutRun, TextStyle as EngineTextStyle,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -13,13 +13,13 @@ use crate::{rgba_to_png, ApiError};
 const COLOR_BG: u8 = 0;
 const COLOR_FG: u8 = 1;
 const COLOR_ACCENT: u8 = 2;
+const THEME_PREVIEW_WIDTH: u32 = 320;
+const THEME_PREVIEW_HEIGHT: u32 = 220;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DisplayType {
     id: String,
-    width: u32,
-    height: u32,
     palette: Palette,
 }
 
@@ -99,6 +99,8 @@ struct PartialTextStyle {
     slope: Option<String>,
     pixel_size: Option<u32>,
     color_role: Option<TextColorRole>,
+    line_spacing_px: Option<i32>,
+    top_padding_px: Option<i32>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -160,6 +162,8 @@ struct ResolvedTextStyle {
     weight: String,
     slope: String,
     pixel_size: u32,
+    line_spacing_px: i32,
+    top_padding_px: i32,
 }
 
 struct IndexedCanvas {
@@ -217,8 +221,30 @@ impl IndexedCanvas {
         fonts: &HashMap<String, RuntimeFontFamilyData>,
         color: u8,
     ) -> Result<(), ApiError> {
-        let Some(family_data) = resolve_font_family_data(&style.family, fonts) else {
+        let Some(run) = self.layout_text(text, style, presets, fonts)? else {
             return Ok(());
+        };
+        for glyph in run.glyphs {
+            for (gy, row) in glyph.pixels.iter().enumerate() {
+                for (gx, pixel) in row.iter().enumerate() {
+                    if *pixel != 0 {
+                        self.set_pixel(x + glyph.x + gx as i32, y + glyph.y + gy as i32, color);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn layout_text(
+        &self,
+        text: &str,
+        style: &ResolvedTextStyle,
+        presets: &FontPresetValues,
+        fonts: &HashMap<String, RuntimeFontFamilyData>,
+    ) -> Result<Option<TextLayoutRun>, ApiError> {
+        let Some(family_data) = resolve_font_family_data(&style.family, fonts) else {
+            return Ok(None);
         };
         let run = render_text_layout(LayoutRequest {
             op: "layout".into(),
@@ -249,16 +275,7 @@ impl IndexedCanvas {
             oversample_factor: 1,
         })
         .map_err(ApiError::internal)?;
-        for glyph in run.glyphs {
-            for (gy, row) in glyph.pixels.iter().enumerate() {
-                for (gx, pixel) in row.iter().enumerate() {
-                    if *pixel != 0 {
-                        self.set_pixel(x + glyph.x + gx as i32, y + glyph.y + gy as i32, color);
-                    }
-                }
-            }
-        }
-        Ok(())
+        Ok(Some(run))
     }
 
     fn draw_outlined_text(
@@ -286,6 +303,69 @@ impl IndexedCanvas {
             }
         }
         self.draw_text(text, x, y, style, presets, fonts, fill_color)
+    }
+
+    fn draw_outlined_text_block(
+        &mut self,
+        lines: &[&str],
+        x: i32,
+        y: i32,
+        style: &ResolvedTextStyle,
+        presets: &FontPresetValues,
+        fonts: &HashMap<String, RuntimeFontFamilyData>,
+        fill_color: u8,
+        outline_color: Option<u8>,
+        thickness: i32,
+    ) -> Result<(), ApiError> {
+        let mut cursor_y = y + style.top_padding_px;
+        for (index, line) in lines.iter().enumerate() {
+            let line_height = self
+                .layout_text(line, style, presets, fonts)?
+                .map(|run| run.line_height)
+                .unwrap_or(style.pixel_size as i32);
+            self.draw_outlined_text(
+                line,
+                x,
+                cursor_y,
+                style,
+                presets,
+                fonts,
+                fill_color,
+                outline_color,
+                thickness,
+            )?;
+            cursor_y += line_height
+                + if index < lines.len().saturating_sub(1) {
+                    style.line_spacing_px
+                } else {
+                    0
+                };
+        }
+        Ok(())
+    }
+
+    fn measure_text_block(
+        &self,
+        lines: &[&str],
+        style: &ResolvedTextStyle,
+        presets: &FontPresetValues,
+        fonts: &HashMap<String, RuntimeFontFamilyData>,
+    ) -> Result<(i32, i32), ApiError> {
+        let mut width = 0;
+        let mut height = style.top_padding_px.max(0);
+        for (index, line) in lines.iter().enumerate() {
+            if let Some(run) = self.layout_text(line, style, presets, fonts)? {
+                width = width.max(run.width);
+                height += run.line_height;
+            } else {
+                width = width.max((line.len() as i32 * style.pixel_size as i32 / 2).max(1));
+                height += style.pixel_size as i32;
+            }
+            if index < lines.len().saturating_sub(1) {
+                height += style.line_spacing_px;
+            }
+        }
+        Ok((width.max(1), height.max(1)))
     }
 
     fn to_rgba(&self, display_type: &DisplayType) -> Result<Vec<u8>, ApiError> {
@@ -368,7 +448,72 @@ fn resolve_text_style(
         pixel_size: partial
             .and_then(|value| value.pixel_size)
             .unwrap_or(defaults.pixel_size),
+        line_spacing_px: partial
+            .and_then(|value| value.line_spacing_px)
+            .unwrap_or(defaults.line_spacing_px),
+        top_padding_px: partial
+            .and_then(|value| value.top_padding_px)
+            .unwrap_or(defaults.top_padding_px),
     }
+}
+
+struct TextPaint<'a> {
+    presets: &'a FontPresetValues,
+    fonts: &'a HashMap<String, RuntimeFontFamilyData>,
+    fill_color: u8,
+    outline_color: Option<u8>,
+    outline_thickness: i32,
+}
+
+fn draw_widget_frame(canvas: &mut IndexedCanvas, x: i32, y: i32, w: i32, h: i32, border_color: u8) {
+    canvas.draw_rect_outline(x, y, w, h, border_color);
+}
+
+fn draw_dashed_frame(canvas: &mut IndexedCanvas, x: i32, y: i32, w: i32, h: i32, color: u8) {
+    for px in x..x + w {
+        if ((px - x) / 4) % 2 == 0 {
+            canvas.set_pixel(px, y, color);
+            canvas.set_pixel(px, y + h - 1, color);
+        }
+    }
+    for py in y..y + h {
+        if ((py - y) / 4) % 2 == 0 {
+            canvas.set_pixel(x, py, color);
+            canvas.set_pixel(x + w - 1, py, color);
+        }
+    }
+}
+
+fn draw_widget_text_block(
+    canvas: &mut IndexedCanvas,
+    frame: (i32, i32, i32, i32),
+    lines: &[&str],
+    style: &ResolvedTextStyle,
+    paint: &TextPaint<'_>,
+    border_color: u8,
+) -> Result<(), ApiError> {
+    let (x, y, w, h) = frame;
+    draw_widget_frame(canvas, x, y, w, h, border_color);
+    let (content_w, content_h) = canvas.measure_text_block(lines, style, paint.presets, paint.fonts)?;
+    draw_dashed_frame(
+        canvas,
+        x + 6,
+        y + 5,
+        (content_w + 1).min((w - 12).max(1)),
+        (content_h + 1).min((h - 10).max(1)),
+        border_color,
+    );
+    canvas.draw_outlined_text_block(
+        lines,
+        x + 6,
+        y + 5,
+        style,
+        paint.presets,
+        paint.fonts,
+        paint.fill_color,
+        paint.outline_color,
+        paint.outline_thickness,
+    )
 }
 
 fn resolve_font_family_data(
@@ -409,7 +554,7 @@ pub(crate) fn render_theme_preview_value(
         .cloned()
         .ok_or_else(|| ApiError::bad_request("Unknown theme preview target"))?;
 
-    let mut canvas = IndexedCanvas::new(display_type.width, display_type.height, COLOR_BG);
+    let mut canvas = IndexedCanvas::new(THEME_PREVIEW_WIDTH, THEME_PREVIEW_HEIGHT, COLOR_BG);
     let (fill_primary, fill_secondary) =
         fill_role_paint(theme.surface.as_ref().and_then(|value| value.fill_role));
     if let Some(secondary) = fill_secondary {
@@ -422,8 +567,8 @@ pub(crate) fn render_theme_preview_value(
         canvas.draw_rect_outline(
             0,
             0,
-            display_type.width as i32,
-            display_type.height as i32,
+            THEME_PREVIEW_WIDTH as i32,
+            THEME_PREVIEW_HEIGHT as i32,
             role_color(theme.border.color_role),
         );
     }
@@ -434,12 +579,16 @@ pub(crate) fn render_theme_preview_value(
         weight: "regular".into(),
         slope: "roman".into(),
         pixel_size: project.font_presets.tiny,
+        line_spacing_px: 0,
+        top_padding_px: 0,
     };
     let normal_default = ResolvedTextStyle {
         family: "missing-font".into(),
         weight: "regular".into(),
         slope: "roman".into(),
         pixel_size: project.font_presets.normal,
+        line_spacing_px: 0,
+        top_padding_px: 0,
     };
     let emphasis_default = ResolvedTextStyle {
         family: font_roles
@@ -462,12 +611,24 @@ pub(crate) fn render_theme_preview_value(
             .as_ref()
             .and_then(|value| value.pixel_size)
             .unwrap_or(project.font_presets.normal),
+        line_spacing_px: font_roles
+            .normal
+            .as_ref()
+            .and_then(|value| value.line_spacing_px)
+            .unwrap_or(0),
+        top_padding_px: font_roles
+            .normal
+            .as_ref()
+            .and_then(|value| value.top_padding_px)
+            .unwrap_or(0),
     };
     let header_default = ResolvedTextStyle {
         family: "missing-font".into(),
         weight: "regular".into(),
         slope: "roman".into(),
         pixel_size: project.font_presets.header,
+        line_spacing_px: 0,
+        top_padding_px: 0,
     };
 
     let tiny_style = resolve_text_style(font_roles.tiny.as_ref(), &tiny_default);
@@ -487,14 +648,38 @@ pub(crate) fn render_theme_preview_value(
         .and_then(|value| value.thickness_px)
         .unwrap_or(1);
 
-    if let Some(color) = text_color_role(
+    let border_color = role_color(theme.border.color_role);
+    let title_color = text_color_role(
         font_roles.tiny.as_ref().and_then(|value| value.color_role),
         theme.text.title,
-    ) {
+    );
+    let body_color = text_color_role(
+        font_roles
+            .normal
+            .as_ref()
+            .and_then(|value| value.color_role),
+        theme.text.body,
+    );
+    let emphasis_color = text_color_role(
+        font_roles
+            .normal_emphasis
+            .as_ref()
+            .and_then(|value| value.color_role),
+        theme.text.body,
+    );
+    let value_color = text_color_role(
+        font_roles
+            .header
+            .as_ref()
+            .and_then(|value| value.color_role),
+        theme.text.value,
+    );
+
+    if let Some(color) = title_color {
         canvas.draw_outlined_text(
-            "TINY SAMPLE",
+            "THEME PREVIEW",
             8,
-            8,
+            7,
             &tiny_style,
             &project.font_presets,
             &user_fonts,
@@ -505,8 +690,8 @@ pub(crate) fn render_theme_preview_value(
     }
     canvas.draw_outlined_text(
         "ACCENT",
-        display_type.width as i32 - 54,
-        8,
+        THEME_PREVIEW_WIDTH as i32 - 54,
+        7,
         &tiny_style,
         &project.font_presets,
         &user_fonts,
@@ -521,64 +706,102 @@ pub(crate) fn render_theme_preview_value(
             .and_then(|value| value.color_role),
         theme.text.body,
     ) {
-        canvas.draw_outlined_text(
-            "Normal sample text",
-            8,
-            28,
+        let paint = TextPaint {
+            presets: &project.font_presets,
+            fonts: &user_fonts,
+            fill_color: color,
+            outline_color,
+            outline_thickness,
+        };
+        draw_widget_text_block(
+            &mut canvas,
+            (8, 24, 150, 64),
+            &["Normal text", "line spacing", "third line"],
             &normal_style,
-            &project.font_presets,
-            &user_fonts,
-            color,
-            outline_color,
-            outline_thickness,
+            &paint,
+            border_color,
         )?;
     }
-    if let Some(color) = text_color_role(
-        font_roles
-            .normal_emphasis
-            .as_ref()
-            .and_then(|value| value.color_role),
-        theme.text.body,
-    ) {
-        canvas.draw_outlined_text(
-            "Emphasis sample",
-            8,
-            42,
+    if let Some(color) = emphasis_color {
+        let paint = TextPaint {
+            presets: &project.font_presets,
+            fonts: &user_fonts,
+            fill_color: color,
+            outline_color,
+            outline_thickness,
+        };
+        draw_widget_text_block(
+            &mut canvas,
+            (166, 24, 146, 64),
+            &["Top padding", "inside border"],
             &emphasis_style,
-            &project.font_presets,
-            &user_fonts,
-            color,
-            outline_color,
-            outline_thickness,
+            &paint,
+            border_color,
         )?;
     }
-    if let Some(color) = text_color_role(
-        font_roles
-            .header
-            .as_ref()
-            .and_then(|value| value.color_role),
-        theme.text.value,
-    ) {
-        canvas.draw_outlined_text(
-            "Header 21.5",
-            8,
-            58,
+    if let Some(color) = value_color {
+        let paint = TextPaint {
+            presets: &project.font_presets,
+            fonts: &user_fonts,
+            fill_color: color,
+            outline_color,
+            outline_thickness,
+        };
+        draw_widget_text_block(
+            &mut canvas,
+            (8, 96, 304, 52),
+            &["Header value", "21.5 multi line"],
             &header_style,
-            &project.font_presets,
-            &user_fonts,
-            color,
-            outline_color,
-            outline_thickness,
+            &paint,
+            border_color,
         )?;
     }
-    if let Some(color) = text_color_role(
-        font_roles.tiny.as_ref().and_then(|value| value.color_role),
-        theme.text.body,
-    ) {
+    if let Some(color) = title_color.or(body_color) {
+        let auto_family = font_roles
+            .normal
+            .as_ref()
+            .and_then(|value| value.family.clone())
+            .or_else(|| font_roles.tiny.as_ref().and_then(|value| value.family.clone()))
+            .unwrap_or_else(|| "missing-font".into());
+        let sizes = [8_u32, 12_u32, 18_u32, 24_u32];
+        for (index, size) in sizes.iter().enumerate() {
+            let x = 8 + index as i32 * 78;
+            let style = ResolvedTextStyle {
+                family: auto_family.clone(),
+                weight: "regular".into(),
+                slope: "roman".into(),
+                pixel_size: *size,
+                line_spacing_px: 0,
+                top_padding_px: 0,
+            };
+            draw_widget_frame(&mut canvas, x, 156, 70, 50, border_color);
+            canvas.draw_outlined_text(
+                "Auto",
+                x + 5,
+                162,
+                &style,
+                &project.font_presets,
+                &user_fonts,
+                color,
+                outline_color,
+                outline_thickness,
+            )?;
+            canvas.draw_outlined_text(
+                &format!("{size}px"),
+                x + 5,
+                188,
+                &tiny_style,
+                &project.font_presets,
+                &user_fonts,
+                role_color(theme.accent_role),
+                outline_color,
+                outline_thickness,
+            )?;
+        }
         canvas.draw_outlined_text(
-            "body / accent",
+            "multi-line, widget borders, top padding, auto-fit sizes",
             8,
-            display_type.height as i32 - 18,
+            THEME_PREVIEW_HEIGHT as i32 - 11,
             &tiny_style,
             &project.font_presets,
             &user_fonts,
@@ -587,26 +810,15 @@ pub(crate) fn render_theme_preview_value(
             outline_thickness,
         )?;
     }
-    canvas.draw_outlined_text(
-        "*",
-        display_type.width as i32 - 14,
-        display_type.height as i32 - 22,
-        &header_style,
-        &project.font_presets,
-        &user_fonts,
-        role_color(theme.accent_role),
-        outline_color,
-        outline_thickness,
-    )?;
 
     let rgba = canvas.to_rgba(&display_type)?;
     Ok(serde_json::json!({
-        "width": display_type.width,
-        "height": display_type.height,
+        "width": THEME_PREVIEW_WIDTH,
+        "height": THEME_PREVIEW_HEIGHT,
         "hash": format!("theme:{}:{}", theme.id, display_type.id),
         "activeScreenId": format!("theme-preview:{}", theme.id),
         "dataSourceMessage": "Theme preview",
-        "pngBase64": base64::engine::general_purpose::STANDARD.encode(rgba_to_png(&rgba, display_type.width, display_type.height)?),
+        "pngBase64": base64::engine::general_purpose::STANDARD.encode(rgba_to_png(&rgba, THEME_PREVIEW_WIDTH, THEME_PREVIEW_HEIGHT)?),
     }))
 }
 
@@ -635,7 +847,8 @@ mod tests {
                 "accentRole": "accent",
                 "fontRoles": {
                     "tiny": { "family": "arial", "pixelSize": 8, "weight": "regular", "slope": "roman" },
-                    "normal": { "family": "arial", "pixelSize": 8, "weight": "regular", "slope": "roman" },
+                    "normal": { "family": "arial", "pixelSize": 8, "weight": "regular", "slope": "roman", "lineSpacingPx": 2 },
+                    "normalEmphasis": { "family": "arial", "pixelSize": 8, "weight": "regular", "slope": "roman", "topPaddingPx": 3 },
                     "header": { "family": "arial", "pixelSize": 8, "weight": "regular", "slope": "roman" }
                 },
                 "textOutline": { "enabled": false, "colorRole": "bg", "thicknessPx": 1 }
@@ -653,6 +866,8 @@ mod tests {
         });
         let value =
             render_theme_preview_value(&project, &user_fonts, "default", "demo").expect("render");
+        assert_eq!(value.get("width").and_then(Value::as_u64), Some(320));
+        assert_eq!(value.get("height").and_then(Value::as_u64), Some(220));
         let png = value.get("pngBase64").and_then(Value::as_str).expect("png");
         assert!(!png.is_empty());
     }

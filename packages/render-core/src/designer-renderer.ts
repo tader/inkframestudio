@@ -31,6 +31,10 @@ import type {
   SizeSpec,
   TextStyle,
   UniqueLayoutNode,
+  WidgetBorderEdges,
+  WidgetBorderPattern,
+  WidgetBorderSide,
+  WidgetBorderSize,
   WidgetTheme
 } from "./types.js";
 
@@ -145,6 +149,149 @@ function borderColor(theme: WidgetTheme, token?: BorderToken): number {
     return roleToColor(theme.border.colorRole);
   }
   return roleToColor(theme.borderTokens?.[token]?.colorRole ?? theme.border.colorRole);
+}
+
+function legacyBorderSide(token: BorderToken | undefined): WidgetBorderSide {
+  if (!token || token === "none") {
+    return { size: "none", pattern: "solid", thicknessPx: 0 };
+  }
+  return { size: token === "thick" ? "thick" : "thin", pattern: "solid", thicknessPx: token === "thick" ? 2 : 1 };
+}
+
+function defaultBorderThickness(size: WidgetBorderSize | undefined): number {
+  if (!size || size === "none") return 0;
+  if (size === "thick") return 2;
+  if (size === "fat") return 3;
+  return 1;
+}
+
+function normalizedBorderSide(side: WidgetBorderSide | undefined, fallback: WidgetBorderSide): WidgetBorderSide {
+  const legacyPattern = side?.pattern as string | undefined;
+  const size = side?.size ?? (legacyPattern === "none" || legacyPattern === "thin" || legacyPattern === "thick" || legacyPattern === "fat" ? legacyPattern : undefined) ?? fallback.size ?? "none";
+  const pattern = side?.pattern && !["none", "thin", "thick", "fat"].includes(side.pattern) ? side.pattern : fallback.pattern ?? "solid";
+  const thicknessPx = Math.max(0, Math.trunc(Number(side?.thicknessPx ?? fallback.thicknessPx ?? defaultBorderThickness(size)) || 0));
+  return { size, pattern, thicknessPx: size === "none" ? 0 : Math.max(1, thicknessPx || defaultBorderThickness(size)) };
+}
+
+function nodeBorderEdges(node: LayoutNode): Required<WidgetBorderEdges> {
+  const styleBorder = node.style?.border;
+  const legacy = legacyBorderSide(node.type === "primitive_instance" ? node.props?.borderToken ?? node.style?.borderToken : node.style?.borderToken);
+  return {
+    top: normalizedBorderSide(styleBorder?.top, legacy),
+    right: normalizedBorderSide(styleBorder?.right, legacy),
+    bottom: normalizedBorderSide(styleBorder?.bottom, legacy),
+    left: normalizedBorderSide(styleBorder?.left, legacy)
+  };
+}
+
+function borderSideThickness(side: WidgetBorderSide | undefined): number {
+  const lineThickness = side?.size === "none" ? 0 : Math.max(0, Math.trunc(Number(side?.thicknessPx ?? defaultBorderThickness(side?.size)) || 0));
+  return side?.pattern === "double" && lineThickness > 0 ? lineThickness * 3 : lineThickness;
+}
+
+function borderSideLineThickness(side: WidgetBorderSide | undefined): number {
+  return side?.size === "none" ? 0 : Math.max(0, Math.trunc(Number(side?.thicknessPx ?? defaultBorderThickness(side?.size)) || 0));
+}
+
+function nodeBorderInsets(node: LayoutNode): EdgeInsets {
+  const border = nodeBorderEdges(node);
+  return {
+    top: borderSideThickness(border.top),
+    right: borderSideThickness(border.right),
+    bottom: borderSideThickness(border.bottom),
+    left: borderSideThickness(border.left)
+  };
+}
+
+function addInsets(left: Partial<EdgeInsets>, right: Partial<EdgeInsets>): EdgeInsets {
+  return {
+    top: Math.max(0, Number(left.top ?? 0)) + Math.max(0, Number(right.top ?? 0)),
+    right: Math.max(0, Number(left.right ?? 0)) + Math.max(0, Number(right.right ?? 0)),
+    bottom: Math.max(0, Number(left.bottom ?? 0)) + Math.max(0, Number(right.bottom ?? 0)),
+    left: Math.max(0, Number(left.left ?? 0)) + Math.max(0, Number(right.left ?? 0))
+  };
+}
+
+function subtractInsets(outer: Partial<EdgeInsets>, inner: Partial<EdgeInsets>): EdgeInsets {
+  return {
+    top: Math.max(0, Number(outer.top ?? 0) - Math.max(0, Number(inner.top ?? 0))),
+    right: Math.max(0, Number(outer.right ?? 0) - Math.max(0, Number(inner.right ?? 0))),
+    bottom: Math.max(0, Number(outer.bottom ?? 0) - Math.max(0, Number(inner.bottom ?? 0))),
+    left: Math.max(0, Number(outer.left ?? 0) - Math.max(0, Number(inner.left ?? 0)))
+  };
+}
+
+function maxHorizontalInsets(insets: Partial<EdgeInsets>): number {
+  return Math.max(0, Number(insets.left ?? 0)) + Math.max(0, Number(insets.right ?? 0));
+}
+
+function maxVerticalInsets(insets: Partial<EdgeInsets>): number {
+  return Math.max(0, Number(insets.top ?? 0)) + Math.max(0, Number(insets.bottom ?? 0));
+}
+
+function drawBorderSpan(
+  buffer: PixelBuffer,
+  color: number,
+  horizontal: boolean,
+  fixed: number,
+  start: number,
+  end: number,
+  clip: PixelClipRect | undefined,
+  draw: boolean
+): void {
+  if (!draw) return;
+  for (let pos = start; pos < end; pos += 1) {
+    if (horizontal) {
+      buffer.setPixel(pos, fixed, color, clip);
+    } else {
+      buffer.setPixel(fixed, pos, color, clip);
+    }
+  }
+}
+
+function drawBorderSide(
+  buffer: PixelBuffer,
+  frame: PixelFrame,
+  side: "top" | "right" | "bottom" | "left",
+  spec: WidgetBorderSide,
+  color: number,
+  clip?: PixelClipRect
+): void {
+  const pattern = spec.pattern ?? "solid";
+  const lineThickness = borderSideLineThickness(spec);
+  const totalThickness = borderSideThickness(spec);
+  if (spec.size === "none" || totalThickness <= 0 || frame.w <= 0 || frame.h <= 0) {
+    return;
+  }
+  const horizontal = side === "top" || side === "bottom";
+  const start = horizontal ? frame.x : frame.y;
+  const end = horizontal ? frame.x + frame.w : frame.y + frame.h;
+  const outer = side === "top" ? frame.y : side === "bottom" ? frame.y + frame.h - 1 : side === "left" ? frame.x : frame.x + frame.w - 1;
+  for (let offset = 0; offset < totalThickness; offset += 1) {
+    const fixed = side === "top" || side === "left" ? outer + offset : outer - offset;
+    const draw =
+      pattern === "dashed"
+        ? Math.floor((offset + (horizontal ? start : fixed)) / 4) % 2 === 0
+        : pattern !== "double" || offset < lineThickness || offset >= lineThickness * 2;
+    if (pattern === "dashed") {
+      for (let pos = start; pos < end; pos += 1) {
+        const dashed = Math.floor((pos - start) / 4) % 2 === 0;
+        drawBorderSpan(buffer, color, horizontal, fixed, pos, pos + 1, clip, dashed);
+      }
+    } else {
+      drawBorderSpan(buffer, color, horizontal, fixed, start, end, clip, draw);
+    }
+  }
+}
+
+function drawNodeBorder(buffer: PixelBuffer, node: LayoutNode, frame: PixelFrame, theme: WidgetTheme, visibleFrame: PixelFrame): void {
+  const border = nodeBorderEdges(node);
+  const color = borderColor(theme, node.type === "primitive_instance" ? node.props?.borderToken ?? node.style?.borderToken : node.style?.borderToken);
+  const clip = toClipRect(visibleFrame);
+  drawBorderSide(buffer, frame, "top", border.top, color, clip);
+  drawBorderSide(buffer, frame, "right", border.right, color, clip);
+  drawBorderSide(buffer, frame, "bottom", border.bottom, color, clip);
+  drawBorderSide(buffer, frame, "left", border.left, color, clip);
 }
 
 function insetFrame(frame: PixelFrame, pixels: number): PixelFrame {
@@ -269,6 +416,22 @@ function getNodePadding(node: LayoutNode): number {
     return Math.max(0, Number(node.props?.paddingPx ?? node.style?.paddingPx ?? 0));
   }
   return Math.max(0, Number(node.style?.paddingPx ?? 0));
+}
+
+function getNodePaddingEdges(node: LayoutNode): EdgeInsets {
+  const uniform = getNodePadding(node);
+  const stylePadding = node.style?.padding;
+  const propPadding = node.type === "primitive_instance" ? node.props?.padding : undefined;
+  return {
+    top: Math.max(0, Number(propPadding?.top ?? stylePadding?.top ?? uniform)),
+    right: Math.max(0, Number(propPadding?.right ?? stylePadding?.right ?? uniform)),
+    bottom: Math.max(0, Number(propPadding?.bottom ?? stylePadding?.bottom ?? uniform)),
+    left: Math.max(0, Number(propPadding?.left ?? stylePadding?.left ?? uniform))
+  };
+}
+
+function getNodeChromeInsets(node: LayoutNode): EdgeInsets {
+  return addInsets(nodeBorderInsets(node), getNodePaddingEdges(node));
 }
 
 function textOverflowMode(node: PrimitiveInstanceNode): "wrap" | "hide" | "ellipsis" {
@@ -482,8 +645,8 @@ function fitContentWidth(
   inputContext: ScopeContext,
   locale = "en-US"
 ): number {
-  const token = node.type === "primitive_instance" ? node.props?.borderToken ?? node.style?.borderToken : node.style?.borderToken;
-  const chrome = (borderThickness(theme, token) + getNodePadding(node)) * 2;
+  const chromeInsets = getNodeChromeInsets(node);
+  const chrome = maxHorizontalInsets(chromeInsets);
   const innerWidth = Math.max(1, availableWidth - chrome);
 
   if (node.type === "stack") {
@@ -588,9 +751,9 @@ function fitContentHeight(
   inputContext: ScopeContext,
   locale = "en-US"
 ): number {
-  const token = node.type === "primitive_instance" ? node.props?.borderToken ?? node.style?.borderToken : node.style?.borderToken;
-  const chrome = (borderThickness(theme, token) + getNodePadding(node)) * 2;
-  const innerWidth = Math.max(1, contentWidth - chrome);
+  const chromeInsets = getNodeChromeInsets(node);
+  const chrome = maxVerticalInsets(chromeInsets);
+  const innerWidth = Math.max(1, contentWidth - maxHorizontalInsets(chromeInsets));
 
   if (node.type === "stack") {
     const horizontal = node.axis === "horizontal";
@@ -824,9 +987,9 @@ function fitGlyphBoundsHeight(
   inputContext: ScopeContext,
   locale = "en-US"
 ): number {
-  const token = node.type === "primitive_instance" ? node.props?.borderToken ?? node.style?.borderToken : node.style?.borderToken;
-  const chrome = (borderThickness(theme, token) + getNodePadding(node)) * 2;
-  const innerWidth = Math.max(1, contentWidth - chrome);
+  const chromeInsets = getNodeChromeInsets(node);
+  const chrome = maxVerticalInsets(chromeInsets);
+  const innerWidth = Math.max(1, contentWidth - maxHorizontalInsets(chromeInsets));
   const outlineThickness = theme.textOutline?.enabled ? Math.max(1, theme.textOutline.thicknessPx ?? 1) : 0;
 
   if (node.type !== "primitive_instance") {
@@ -900,8 +1063,7 @@ function resolveSize(
     pixelSize: theme.fontRoles?.[role]?.pixelSize ?? fontPresets[role]
   } as Partial<TextStyle>;
   const metrics = buffer.measureText("Hg", style);
-  const token = node.type === "primitive_instance" ? node.props?.borderToken ?? node.style?.borderToken : node.style?.borderToken;
-  const chrome = (borderThickness(theme, token) + getNodePadding(node)) * 2;
+  const chrome = maxVerticalInsets(getNodeChromeInsets(node));
   const intrinsic = metrics.lineHeight + chrome + Math.max(0, Number(spec.paddingPx ?? 0));
   return Math.max(0, Math.min(available, axis === "height" ? intrinsic : available));
 }
@@ -1413,26 +1575,22 @@ function drawPrimitiveNode(
   clip?: PixelFrame,
   contentInsets?: Partial<EdgeInsets>
 ): void {
-  const token = node.props?.borderToken ?? node.style?.borderToken;
-  const thickness = borderThickness(theme, token);
-  const baseInnerFrame = insetFrame(frame, thickness + getNodePadding(node));
+  const borderInsets = nodeBorderInsets(node);
+  const paddingInsets = getNodePaddingEdges(node);
+  const baseInnerFrame = insetFrameByEdges(frame, addInsets(borderInsets, paddingInsets));
   const innerFrame = insetFrameByEdges(baseInnerFrame, contentInsets);
   const visibleFrame = clip ? intersectFrame(frame, clip) : frame;
   const visibleInnerFrame = clip ? intersectFrame(innerFrame, clip) : innerFrame;
   if (!hasArea(visibleFrame)) {
     return;
   }
-  if (thickness > 0) {
-    buffer.drawRect(frame.x, frame.y, frame.w, frame.h, borderColor(theme, token), false, toClipRect(visibleFrame));
-    if (thickness > 1) {
-      buffer.drawRect(frame.x + 1, frame.y + 1, frame.w - 2, frame.h - 2, borderColor(theme, token), false, toClipRect(visibleFrame));
-    }
-  }
+  drawNodeBorder(buffer, node, frame, theme, visibleFrame);
   const fillPaint = fillRoleToPaint(theme.surface.fillRole);
   if (fillPaint && baseInnerFrame.w > 0 && baseInnerFrame.h > 0) {
-    const visibleBaseInnerFrame = clip ? intersectFrame(baseInnerFrame, clip) : baseInnerFrame;
+    const fillFrame = insetFrameByEdges(frame, borderInsets);
+    const visibleBaseInnerFrame = clip ? intersectFrame(fillFrame, clip) : fillFrame;
     if (hasArea(visibleBaseInnerFrame)) {
-      buffer.drawPaintRect(baseInnerFrame.x, baseInnerFrame.y, baseInnerFrame.w, baseInnerFrame.h, fillPaint, toClipRect(visibleBaseInnerFrame));
+      buffer.drawPaintRect(fillFrame.x, fillFrame.y, fillFrame.w, fillFrame.h, fillPaint, toClipRect(visibleBaseInnerFrame));
     }
   }
   if (!hasArea(visibleInnerFrame)) {
@@ -1475,7 +1633,7 @@ function drawPrimitiveNode(
       overflow,
       lineSpacingPx,
       topPaddingPx,
-      node.height?.mode === "fit_glyph_bounds",
+      node.height?.mode === "fit_glyph_bounds" || Boolean(node.props?.autoFit && autoFitAllowed(node)),
       visibleInnerFrame
     );
     return;
@@ -1511,7 +1669,7 @@ function drawPrimitiveNode(
       "hide",
       0,
       Math.round(Number(style.topPaddingPx ?? 0)),
-      node.height?.mode === "fit_glyph_bounds",
+      node.height?.mode === "fit_glyph_bounds" || Boolean(node.props?.autoFit && autoFitAllowed(node)),
       visibleInnerFrame
     );
     return;
@@ -1605,7 +1763,7 @@ function renderNode(
   }
   if (node.type === "primitive_instance") {
     const primitiveContentFrame = insetFrameByEdges(
-      insetFrame(frame, borderThickness(theme, node.props?.borderToken ?? node.style?.borderToken) + getNodePadding(node)),
+      insetFrameByEdges(frame, getNodeChromeInsets(node)),
       contentInsets
     );
     drawPrimitiveNode(buffer, project, node, frame, data, theme, inputContext, visibleFrame, contentInsets);
@@ -1675,21 +1833,15 @@ function renderNode(
     return collectInspection ? buildInspectionNode(project, node, frame, frame, resolvedThemeId, []) : undefined;
   }
 
-  const token = node.style?.borderToken;
-  const thickness = borderThickness(theme, token);
-  const contentFrame = insetFrame(frame, thickness);
+  const borderInsets = nodeBorderInsets(node);
+  const contentFrame = insetFrameByEdges(frame, borderInsets);
   const visibleContentFrame = intersectFrame(contentFrame, visibleFrame) ?? visibleFrame;
-  if (thickness > 0) {
-    buffer.drawRect(frame.x, frame.y, frame.w, frame.h, borderColor(theme, token), false, toClipRect(visibleFrame));
-    if (thickness > 1) {
-      buffer.drawRect(frame.x + 1, frame.y + 1, frame.w - 2, frame.h - 2, borderColor(theme, token), false, toClipRect(visibleFrame));
-    }
-  }
+  drawNodeBorder(buffer, node, frame, theme, visibleFrame);
   const containerFillPaint = fillRoleToPaint(theme.surface.fillRole);
   if (containerFillPaint && contentFrame.w > 0 && contentFrame.h > 0) {
     buffer.drawPaintRect(contentFrame.x, contentFrame.y, contentFrame.w, contentFrame.h, containerFillPaint, toClipRect(visibleContentFrame));
   }
-  const baseInnerFrame = insetFrame(contentFrame, getNodePadding(node));
+  const baseInnerFrame = insetFrameByEdges(contentFrame, getNodePaddingEdges(node));
   const innerFrame = insetFrameByEdges(baseInnerFrame, contentInsets);
   const visibleInnerFrame = intersectFrame(innerFrame, visibleFrame);
   const gap = Math.max(0, Number(node.style?.gapPx ?? 0));

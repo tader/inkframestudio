@@ -15,6 +15,9 @@ export type NumericComparisonOp = "gt" | "gte" | "lt" | "lte" | "eq" | "neq";
 export type ProviderKind = "openepaperlink" | "openepaperlink-ap" | "virtual" | (string & {});
 export type ProviderDomain = "source" | "display";
 export type BorderToken = "none" | "thin" | "thick";
+export type WidgetBorderSize = "none" | "thin" | "thick" | "fat";
+export type WidgetBorderPattern = "solid" | "dashed" | "double";
+export type EdgeName = "top" | "right" | "bottom" | "left";
 export type SizeSpecMode = "fixed_px" | "fill" | "fraction" | "fit_content" | "fit_glyph_bounds" | "intrinsic_font_height";
 export type CompositionNodeType =
   | "stack"
@@ -167,6 +170,14 @@ export interface EdgeInsets {
   left: number;
 }
 
+export interface WidgetBorderSide {
+  size?: WidgetBorderSize;
+  pattern?: WidgetBorderPattern;
+  thicknessPx?: number;
+}
+
+export type WidgetBorderEdges = Partial<Record<EdgeName, WidgetBorderSide>>;
+
 export interface WidgetTheme {
   id: WidgetThemeId;
   name: string;
@@ -255,8 +266,10 @@ export interface SizeSpec {
 
 export interface LayoutStyle {
   paddingPx?: number;
+  padding?: Partial<EdgeInsets>;
   gapPx?: number;
   borderToken?: BorderToken;
+  border?: WidgetBorderEdges;
   themeId?: ThemeRef;
   horizontalAlign?: "left" | "center" | "right" | "fill";
   verticalAlign?: "top" | "middle" | "bottom" | "fill";
@@ -605,6 +618,7 @@ export interface WidgetProps {
   lineSpacingPx?: number;
   renderEntityState?: boolean;
   paddingPx?: number;
+  padding?: Partial<EdgeInsets>;
   borderToken?: BorderToken;
   fontRole?: FontRole;
   fixedPixelSize?: number;

@@ -1,6 +1,6 @@
 import { LitElement, css, html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import { BUILT_IN_WIDGET_DEFINITIONS, DEFAULT_FONT_PRESETS, DISPLAY_PROFILES, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type FillRole, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutNode, type ManagedDisplay, type PlaceSearchEntry, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type ProviderConnectionStatus, type ProviderDescriptor, type ProviderInstance, type RenderData, type Rule, type SizeSpec, type TextStyle, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
+import { BUILT_IN_WIDGET_DEFINITIONS, DEFAULT_FONT_PRESETS, DISPLAY_PROFILES, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type EdgeInsets, type EdgeName, type FillRole, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutNode, type ManagedDisplay, type PlaceSearchEntry, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type ProviderConnectionStatus, type ProviderDescriptor, type ProviderInstance, type RenderData, type Rule, type SizeSpec, type TextStyle, type WidgetBorderPattern, type WidgetBorderSide, type WidgetBorderSize, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
 import {
   deleteProviderInstance,
   deleteFont,
@@ -423,6 +423,17 @@ function parseAllowedPixelSizes(value: string): number[] {
         .filter((entry) => Number.isInteger(entry) && entry >= 4)
     )
   ).sort((left, right) => left - right);
+}
+
+const EDGE_NAMES: EdgeName[] = ["top", "right", "bottom", "left"];
+const BORDER_SIZES: WidgetBorderSize[] = ["none", "thin", "thick", "fat"];
+const BORDER_PATTERNS: WidgetBorderPattern[] = ["solid", "dashed", "double"];
+
+function defaultBorderThicknessForSize(size: WidgetBorderSize): number {
+  if (size === "none") return 0;
+  if (size === "thick") return 2;
+  if (size === "fat") return 3;
+  return 1;
 }
 
 function variantLabel(weight: string, slope: string): string {
@@ -1014,6 +1025,17 @@ export class EpPaperEditorApp extends LitElement {
       align-items: center;
       margin-bottom: 8px;
     }
+    .grid-two {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .compact-row {
+      display: grid;
+      grid-template-columns: 0.8fr 1fr;
+      gap: 8px;
+      align-items: end;
+    }
     label {
       display: block;
       margin-bottom: 8px;
@@ -1033,7 +1055,7 @@ export class EpPaperEditorApp extends LitElement {
       resize: vertical;
     }
     .preview-stage {
-      border: 2px solid #111;
+      border: 0;
       background: #efe7d4;
       image-rendering: pixelated;
       display: inline-block;
@@ -1055,6 +1077,7 @@ export class EpPaperEditorApp extends LitElement {
     }
     .structure-stage {
       position: relative;
+      border: 2px solid #111;
       overflow: auto;
       touch-action: none;
       cursor: crosshair;
@@ -3513,6 +3536,87 @@ export class EpPaperEditorApp extends LitElement {
     `;
   }
 
+  private renderWidgetBoxControls(owner: { id: string; rootNode?: LayoutNode }, node: LayoutNode): TemplateResult {
+    const paddingSource = node.type === "primitive_instance" ? node.props?.padding ?? node.style?.padding : node.style?.padding;
+    const uniformPadding = Number(node.type === "primitive_instance" ? node.props?.paddingPx ?? node.style?.paddingPx ?? 0 : node.style?.paddingPx ?? 0);
+    const padding: EdgeInsets = {
+      top: Number(paddingSource?.top ?? uniformPadding),
+      right: Number(paddingSource?.right ?? uniformPadding),
+      bottom: Number(paddingSource?.bottom ?? uniformPadding),
+      left: Number(paddingSource?.left ?? uniformPadding)
+    };
+    const border = node.style?.border;
+    const legacySize = String(node.type === "primitive_instance" ? node.props?.borderToken ?? node.style?.borderToken ?? "none" : node.style?.borderToken ?? "none") as WidgetBorderSize;
+    const updateStyle = (patch: Partial<LayoutNode["style"]>) => {
+      this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({
+        ...current,
+        style: { ...current.style, ...patch }
+      })));
+    };
+    const updatePadding = (edge: EdgeName, value: number) => updateStyle({
+      padding: { ...(node.style?.padding ?? {}), [edge]: Math.max(0, Math.trunc(value || 0)) },
+      paddingPx: undefined
+    });
+    const updateBorder = (edge: EdgeName, patch: Partial<WidgetBorderSide>) => {
+      const current = border?.[edge] ?? { size: legacySize, pattern: "solid" as WidgetBorderPattern, thicknessPx: defaultBorderThicknessForSize(legacySize) };
+      const nextSize = (patch.size ?? current.size ?? "none") as WidgetBorderSize;
+      const nextPattern = (patch.pattern ?? current.pattern ?? "solid") as WidgetBorderPattern;
+      updateStyle({
+        border: {
+          ...(node.style?.border ?? {}),
+          [edge]: {
+            ...current,
+            ...patch,
+            size: nextSize,
+            pattern: nextPattern,
+            thicknessPx: patch.thicknessPx ?? current.thicknessPx ?? defaultBorderThicknessForSize(nextSize)
+          }
+        },
+        borderToken: undefined
+      });
+    };
+    return html`
+      <div class="section">
+        <h3>Padding</h3>
+        <div class="grid-two">
+          ${EDGE_NAMES.map((edge) => html`
+            <label>
+              ${edge}
+              <input type="number" .value=${String(padding[edge])} @input=${(event: Event) => updatePadding(edge, Number((event.target as HTMLInputElement).value))} />
+            </label>
+          `)}
+        </div>
+      </div>
+      <div class="section">
+        <h3>Border</h3>
+        ${EDGE_NAMES.map((edge) => {
+          const side = border?.[edge] ?? { size: legacySize, pattern: "solid" as WidgetBorderPattern, thicknessPx: defaultBorderThicknessForSize(legacySize) };
+          const size = (side.size ?? legacySize) as WidgetBorderSize;
+          const pattern = (side.pattern ?? "solid") as WidgetBorderPattern;
+          return html`
+            <div class="row compact-row">
+              <label>
+                ${edge}
+                <select .value=${size} @change=${(event: Event) => {
+                  const nextSize = (event.target as HTMLSelectElement).value as WidgetBorderSize;
+                  updateBorder(edge, { size: nextSize, thicknessPx: defaultBorderThicknessForSize(nextSize) });
+                }}>
+                  ${BORDER_SIZES.map((entry) => html`<option value=${entry}>${entry}</option>`)}
+                </select>
+              </label>
+              <label>
+                pattern
+                <select .value=${pattern} ?disabled=${size === "none"} @change=${(event: Event) => updateBorder(edge, { pattern: (event.target as HTMLSelectElement).value as WidgetBorderPattern })}>
+                  ${BORDER_PATTERNS.map((entry) => html`<option value=${entry}>${entry}</option>`)}
+                </select>
+              </label>
+            </div>
+          `;
+        })}
+      </div>
+    `;
+  }
+
   private primitiveAutoFitDisabled(node: PrimitiveInstanceNode): boolean {
     return (
       node.width?.mode === "fit_content" ||
@@ -3787,22 +3891,7 @@ export class EpPaperEditorApp extends LitElement {
           : nothing}
         ${this.renderSizeSpecEditor("Width", node.width, (next) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, width: next }))))}
         ${this.renderSizeSpecEditor("Height", node.height, (next) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, height: next }))))}
-        ${node.type === "primitive_instance"
-          ? nothing
-          : html`
-              <label>
-                Padding
-                <input type="number" .value=${String(node.style?.paddingPx ?? 0)} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, style: { ...current.style, paddingPx: Number((event.target as HTMLInputElement).value) } })))} />
-              </label>
-            `}
-        <label>
-          Border token
-          <select .value=${String(node.style?.borderToken ?? "none")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, style: { ...current.style, borderToken: (event.target as HTMLSelectElement).value as BorderToken } })))} }>
-            <option value="none">None</option>
-            <option value="thin">Thin</option>
-            <option value="thick">Thick</option>
-          </select>
-        </label>
+        ${this.renderWidgetBoxControls(owner, node)}
         <label>
           Theme override
           <select .value=${String(node.style?.themeId ?? "inherit")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, style: { ...current.style, themeId: (event.target as HTMLSelectElement).value } })))} }>

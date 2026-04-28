@@ -117,11 +117,19 @@ struct WidgetTheme {
     id: String,
     text: ThemeTextRoles,
     #[serde(default)]
+    border: ThemeBorder,
+    #[serde(default)]
     surface: ThemeSurface,
     #[serde(rename = "autoFitFontFamily")]
     auto_fit_font_family: Option<String>,
     #[serde(rename = "fontRoles")]
     font_roles: Option<ThemeFontRoles>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ThemeBorder {
+    color_role: PaletteRole,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -264,6 +272,7 @@ struct GridChild {
 struct LayoutStyle {
     #[serde(rename = "paddingPx")]
     padding_px: Option<i32>,
+    padding: Option<EdgeInsets>,
     #[serde(rename = "gapPx")]
     gap_px: Option<i32>,
     #[allow(dead_code)]
@@ -274,8 +283,36 @@ struct LayoutStyle {
     vertical_align: Option<String>,
     #[serde(rename = "borderToken")]
     border_token: Option<String>,
+    border: Option<BorderEdges>,
     #[serde(rename = "themeId")]
     theme_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EdgeInsets {
+    top: Option<i32>,
+    right: Option<i32>,
+    bottom: Option<i32>,
+    left: Option<i32>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BorderEdges {
+    top: Option<BorderSide>,
+    right: Option<BorderSide>,
+    bottom: Option<BorderSide>,
+    left: Option<BorderSide>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BorderSide {
+    size: Option<String>,
+    pattern: Option<String>,
+    #[serde(rename = "thicknessPx")]
+    thickness_px: Option<i32>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -297,6 +334,7 @@ struct WidgetProps {
     render_entity_state: Option<bool>,
     #[serde(rename = "paddingPx")]
     padding_px: Option<i32>,
+    padding: Option<EdgeInsets>,
     #[allow(dead_code)]
     #[serde(rename = "fontRole")]
     font_role: Option<String>,
@@ -538,6 +576,23 @@ impl IndexedCanvas {
         for y in y0..y1 {
             for x in x0..x1 {
                 self.set_pixel(x, y, color);
+            }
+        }
+    }
+
+    fn draw_border_span(
+        &mut self,
+        horizontal: bool,
+        fixed: i32,
+        start: i32,
+        end: i32,
+        color: u8,
+    ) {
+        for pos in start..end {
+            if horizontal {
+                self.set_pixel(pos, fixed, color);
+            } else {
+                self.set_pixel(fixed, pos, color);
             }
         }
     }
@@ -875,11 +930,190 @@ fn node_padding(style: &LayoutStyle, props_padding: Option<i32>) -> i32 {
         .max(0)
 }
 
+fn edge_value(insets: Option<EdgeInsets>, edge: &str, fallback: i32) -> i32 {
+    let value = match edge {
+        "top" => insets.and_then(|value| value.top),
+        "right" => insets.and_then(|value| value.right),
+        "bottom" => insets.and_then(|value| value.bottom),
+        _ => insets.and_then(|value| value.left),
+    };
+    value.unwrap_or(fallback).max(0)
+}
+
+fn node_padding_edges(style: &LayoutStyle, props: Option<&WidgetProps>) -> EdgeInsets {
+    let fallback = node_padding(style, props.and_then(|props| props.padding_px));
+    let insets = props.and_then(|props| props.padding).or(style.padding);
+    EdgeInsets {
+        top: Some(edge_value(insets, "top", fallback)),
+        right: Some(edge_value(insets, "right", fallback)),
+        bottom: Some(edge_value(insets, "bottom", fallback)),
+        left: Some(edge_value(insets, "left", fallback)),
+    }
+}
+
+fn edge_inset(insets: &EdgeInsets, edge: &str) -> i32 {
+    match edge {
+        "top" => insets.top,
+        "right" => insets.right,
+        "bottom" => insets.bottom,
+        _ => insets.left,
+    }
+    .unwrap_or(0)
+    .max(0)
+}
+
+fn border_default_thickness(size: &str) -> i32 {
+    match size {
+        "none" => 0,
+        "thick" => 2,
+        "fat" => 3,
+        _ => 1,
+    }
+}
+
+fn border_side_for(style: &LayoutStyle, edge: &str) -> BorderSide {
+    let legacy_size = style.border_token.as_deref().unwrap_or("none").to_string();
+    let side = style.border.as_ref().and_then(|border| match edge {
+        "top" => border.top.clone(),
+        "right" => border.right.clone(),
+        "bottom" => border.bottom.clone(),
+        _ => border.left.clone(),
+    });
+    let legacy_pattern = side.as_ref().and_then(|side| side.pattern.clone());
+    let size = side
+        .as_ref()
+        .and_then(|side| side.size.clone())
+        .or_else(|| legacy_pattern.clone().filter(|value| matches!(value.as_str(), "none" | "thin" | "thick" | "fat")))
+        .unwrap_or(legacy_size);
+    let pattern = legacy_pattern
+        .filter(|value| !matches!(value.as_str(), "none" | "thin" | "thick" | "fat"))
+        .unwrap_or_else(|| "solid".into());
+    let thickness = side
+        .as_ref()
+        .and_then(|side| side.thickness_px)
+        .unwrap_or_else(|| border_default_thickness(&size))
+        .max(0);
+    BorderSide {
+        size: Some(size.clone()),
+        pattern: Some(pattern.clone()),
+        thickness_px: Some(if size == "none" { 0 } else { thickness.max(1) }),
+    }
+}
+
+fn border_side_thickness(side: &BorderSide) -> i32 {
+    let line_thickness = border_side_line_thickness(side);
+    if side.pattern.as_deref().unwrap_or("solid") == "double" && line_thickness > 0 {
+        line_thickness * 3
+    } else {
+        line_thickness
+    }
+}
+
+fn border_side_line_thickness(side: &BorderSide) -> i32 {
+    if side.size.as_deref().unwrap_or("none") == "none" {
+        0
+    } else {
+        side.thickness_px
+            .unwrap_or_else(|| border_default_thickness(side.size.as_deref().unwrap_or("thin")))
+            .max(1)
+    }
+}
+
+fn node_border_edges(style: &LayoutStyle) -> EdgeInsets {
+    EdgeInsets {
+        top: Some(border_side_thickness(&border_side_for(style, "top"))),
+        right: Some(border_side_thickness(&border_side_for(style, "right"))),
+        bottom: Some(border_side_thickness(&border_side_for(style, "bottom"))),
+        left: Some(border_side_thickness(&border_side_for(style, "left"))),
+    }
+}
+
+fn inset_rect_by(rect: Rect, insets: &EdgeInsets) -> Rect {
+    let top = edge_inset(insets, "top");
+    let right = edge_inset(insets, "right");
+    let bottom = edge_inset(insets, "bottom");
+    let left = edge_inset(insets, "left");
+    Rect {
+        x: rect.x + left,
+        y: rect.y + top,
+        w: (rect.w - left - right).max(1),
+        h: (rect.h - top - bottom).max(1),
+    }
+}
+
+fn add_edge_insets(left: &EdgeInsets, right: &EdgeInsets) -> EdgeInsets {
+    EdgeInsets {
+        top: Some(edge_inset(left, "top") + edge_inset(right, "top")),
+        right: Some(edge_inset(left, "right") + edge_inset(right, "right")),
+        bottom: Some(edge_inset(left, "bottom") + edge_inset(right, "bottom")),
+        left: Some(edge_inset(left, "left") + edge_inset(right, "left")),
+    }
+}
+
+fn horizontal_insets(insets: &EdgeInsets) -> i32 {
+    edge_inset(insets, "left") + edge_inset(insets, "right")
+}
+
+fn vertical_insets(insets: &EdgeInsets) -> i32 {
+    edge_inset(insets, "top") + edge_inset(insets, "bottom")
+}
+
+fn draw_border_side(canvas: &mut IndexedCanvas, frame: Rect, edge: &str, side: &BorderSide, color: u8) {
+    let pattern = side.pattern.as_deref().unwrap_or("solid");
+    let line_thickness = border_side_line_thickness(side);
+    let total_thickness = border_side_thickness(side);
+    if side.size.as_deref().unwrap_or("none") == "none" || total_thickness <= 0 || frame.w <= 0 || frame.h <= 0 {
+        return;
+    }
+    let horizontal = edge == "top" || edge == "bottom";
+    let start = if horizontal { frame.x } else { frame.y };
+    let end = if horizontal { frame.x + frame.w } else { frame.y + frame.h };
+    let outer = match edge {
+        "top" => frame.y,
+        "bottom" => frame.y + frame.h - 1,
+        "right" => frame.x + frame.w - 1,
+        _ => frame.x,
+    };
+    for offset in 0..total_thickness {
+        let fixed = if edge == "top" || edge == "left" {
+            outer + offset
+        } else {
+            outer - offset
+        };
+        if pattern == "dashed" {
+            for pos in start..end {
+                if ((pos - start) / 4) % 2 == 0 {
+                    canvas.draw_border_span(horizontal, fixed, pos, pos + 1, color);
+                }
+            }
+        } else if pattern != "double" || offset < line_thickness || offset >= line_thickness * 2 {
+            canvas.draw_border_span(horizontal, fixed, start, end, color);
+        }
+    }
+}
+
+fn draw_node_border(canvas: &mut IndexedCanvas, frame: Rect, style: &LayoutStyle, color: u8) {
+    draw_border_side(canvas, frame, "top", &border_side_for(style, "top"), color);
+    draw_border_side(canvas, frame, "right", &border_side_for(style, "right"), color);
+    draw_border_side(canvas, frame, "bottom", &border_side_for(style, "bottom"), color);
+    draw_border_side(canvas, frame, "left", &border_side_for(style, "left"), color);
+}
+
+fn render_box_chrome(canvas: &mut IndexedCanvas, theme: &WidgetTheme, style: &LayoutStyle, frame: Rect) -> Rect {
+    let border = node_border_edges(style);
+    if should_fill_node_surface(style) {
+        if let Some(fill_role) = theme.surface.fill_role {
+            canvas.fill_rect(inset_rect_by(frame, &border), fill_role_color(fill_role));
+        }
+    }
+    draw_node_border(canvas, frame, style, role_color(theme.border.color_role));
+    let padding = node_padding_edges(style, None);
+    inset_rect_by(frame, &add_edge_insets(&border, &padding))
+}
+
 fn unsupported_border(style: &LayoutStyle) -> bool {
-    style
-        .border_token
-        .as_deref()
-        .is_some_and(|value| value != "none")
+    let _ = style;
+    false
 }
 
 fn node_width_spec(node: &Node) -> Option<&SizeSpec> {
@@ -2209,17 +2443,42 @@ fn theme_font_role<'a>(theme: &'a WidgetTheme, role: &str) -> Option<&'a Partial
     }
 }
 
-fn painted_bounds(run: &TextLayoutRun) -> (i32, i32) {
-    let mut max_x = 0;
-    let mut max_y = 0;
+#[derive(Clone, Copy)]
+struct PaintedBounds {
+    min_x: i32,
+    min_y: i32,
+    width: i32,
+    height: i32,
+}
+
+fn painted_bounds(run: &TextLayoutRun) -> PaintedBounds {
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
     for glyph in &run.glyphs {
         if glyph.width <= 0 || glyph.height <= 0 {
             continue;
         }
+        min_x = min_x.min(glyph.x);
+        min_y = min_y.min(glyph.y);
         max_x = max_x.max(glyph.x + glyph.width);
         max_y = max_y.max(glyph.y + glyph.height);
     }
-    (max_x.max(1), max_y.max(1))
+    if min_x == i32::MAX {
+        return PaintedBounds {
+            min_x: 0,
+            min_y: 0,
+            width: 1,
+            height: 1,
+        };
+    }
+    PaintedBounds {
+        min_x,
+        min_y,
+        width: (max_x - min_x).max(1),
+        height: (max_y - min_y).max(1),
+    }
 }
 
 fn auto_fit_pixel_size(
@@ -2243,8 +2502,8 @@ fn auto_fit_pixel_size(
         else {
             return Ok(None);
         };
-        let (w, h) = painted_bounds(&run);
-        if w <= frame.w && h <= frame.h {
+        let bounds = painted_bounds(&run);
+        if bounds.width <= frame.w && bounds.height <= frame.h {
             best = Some(mid);
             low = mid.saturating_add(1);
         } else if mid == 0 {
@@ -2537,12 +2796,12 @@ fn measure_primitive(
             return Ok(None);
         };
         if primitive_type == "line" {
-            let padding = node_padding(style, props.padding_px);
-            return Ok(Some((1 + padding * 2, 1 + padding * 2)));
+            let chrome = add_edge_insets(&node_border_edges(style), &node_padding_edges(style, Some(props)));
+            return Ok(Some((1 + horizontal_insets(&chrome), 1 + vertical_insets(&chrome))));
         }
         if primitive_type == "icon" {
-            let padding = node_padding(style, props.padding_px);
-            return Ok(Some((10 + padding * 2, 10 + padding * 2)));
+            let chrome = add_edge_insets(&node_border_edges(style), &node_padding_edges(style, Some(props)));
+            return Ok(Some((10 + horizontal_insets(&chrome), 10 + vertical_insets(&chrome))));
         }
         return Ok(None);
     };
@@ -2559,10 +2818,15 @@ fn measure_primitive(
     else {
         return Ok(None);
     };
-    let (painted_w, painted_h) = painted_bounds(&run);
+    let bounds = painted_bounds(&run);
+    let chrome = if let Node::PrimitiveInstance { props, style, .. } = node {
+        add_edge_insets(&node_border_edges(style), &node_padding_edges(style, Some(props)))
+    } else {
+        EdgeInsets::default()
+    };
     Ok(Some((
-        painted_w + padding * 2,
-        painted_h + padding * 2 + top_padding_px.max(0),
+        bounds.width + horizontal_insets(&chrome).max(padding * 2),
+        bounds.height + vertical_insets(&chrome).max(padding * 2) + top_padding_px.max(0),
     )))
 }
 
@@ -2799,19 +3063,17 @@ fn render_primitive(
         return Ok(());
     };
     let theme = theme_for_node(project, style);
+    let border = node_border_edges(style);
+    let padding = node_padding_edges(style, Some(props));
+    let chrome = add_edge_insets(&border, &padding);
     if should_fill_node_surface(style) {
         if let Some(fill_role) = theme.surface.fill_role {
-            canvas.fill_rect(frame, fill_role_color(fill_role));
+            canvas.fill_rect(inset_rect_by(frame, &border), fill_role_color(fill_role));
         }
     }
+    draw_node_border(canvas, frame, style, role_color(theme.border.color_role));
     if primitive_type == "line" {
-        let padding = node_padding(style, props.padding_px);
-        let inner = Rect {
-            x: frame.x + padding,
-            y: frame.y + padding,
-            w: (frame.w - padding * 2).max(1),
-            h: (frame.h - padding * 2).max(1),
-        };
+        let inner = inset_rect_by(frame, &chrome);
         let direction = props.line_direction.as_deref().unwrap_or("horizontal");
         let (x1, y1, x2, y2) = match direction {
             "vertical" => (
@@ -2843,13 +3105,7 @@ fn render_primitive(
         return Ok(());
     }
     if primitive_type == "icon" {
-        let padding = node_padding(style, props.padding_px);
-        let inner = Rect {
-            x: frame.x + padding,
-            y: frame.y + padding,
-            w: (frame.w - padding * 2).max(1),
-            h: (frame.h - padding * 2).max(1),
-        };
+        let inner = inset_rect_by(frame, &chrome);
         let icon_id = binding_scope_text(scope, bindings.get("value"), &project.locale)
             .or_else(|| binding_scope_text(scope, bindings.get("icon"), &project.locale))
             .filter(|value| !value.trim().is_empty())
@@ -2875,19 +3131,14 @@ fn render_primitive(
         default_px,
         h_align,
         v_align,
-        padding,
+        padding: _padding,
         line_spacing_px: _line_spacing_px,
         top_padding_px,
     }) = primitive_render_spec(project, scope, node, user_fonts)?
     else {
         return Ok(());
     };
-    let inner = Rect {
-        x: frame.x + padding,
-        y: frame.y + padding,
-        w: (frame.w - padding * 2).max(1),
-        h: (frame.h - padding * 2).max(1),
-    };
+    let inner = inset_rect_by(frame, &chrome);
     let pixel_size = if props.auto_fit.unwrap_or(false) {
         auto_fit_pixel_size(
             &text,
@@ -2916,17 +3167,18 @@ fn render_primitive(
     else {
         return Ok(());
     };
-    let (painted_w, painted_h) = painted_bounds(&run);
+    let bounds = painted_bounds(&run);
     let draw_x = match h_align.as_str() {
-        "center" => inner.x + ((inner.w - painted_w) / 2),
-        "right" => inner.x + inner.w - painted_w,
+        "center" => inner.x + ((inner.w - bounds.width) / 2),
+        "right" => inner.x + inner.w - bounds.width,
         _ => inner.x,
-    };
+    } - bounds.min_x;
     let draw_y = match v_align.as_str() {
-        "middle" => inner.y + ((inner.h - painted_h) / 2),
-        "bottom" => inner.y + inner.h - painted_h,
+        "middle" => inner.y + ((inner.h - bounds.height) / 2),
+        "bottom" => inner.y + inner.h - bounds.height,
         _ => inner.y,
-    } + top_padding_px;
+    } - bounds.min_y
+        + top_padding_px;
     draw_text_run(canvas, &run, draw_x, draw_y, color);
     Ok(())
 }
@@ -3216,19 +3468,8 @@ fn render_node(
             ..
         } => {
             let theme = theme_for_node(project, style);
-            if should_fill_node_surface(style) {
-                if let Some(fill_role) = theme.surface.fill_role {
-                    canvas.fill_rect(frame, fill_role_color(fill_role));
-                }
-            }
-            let padding = style.padding_px.unwrap_or(0).max(0);
             let gap = style.gap_px.unwrap_or(0).max(0);
-            let inner = Rect {
-                x: frame.x + padding,
-                y: frame.y + padding,
-                w: (frame.w - padding * 2).max(1),
-                h: (frame.h - padding * 2).max(1),
-            };
+            let inner = render_box_chrome(canvas, theme, style, frame);
             let mut rects = child_rects(axis, children, inner, project, scope, user_fonts);
             if !rects.is_empty() && gap > 0 {
                 let total_gap = gap * (rects.len().saturating_sub(1) as i32);
@@ -3266,18 +3507,7 @@ fn render_node(
             children, style, ..
         } => {
             let theme = theme_for_node(project, style);
-            if should_fill_node_surface(style) {
-                if let Some(fill_role) = theme.surface.fill_role {
-                    canvas.fill_rect(frame, fill_role_color(fill_role));
-                }
-            }
-            let padding = style.padding_px.unwrap_or(0).max(0);
-            let inner = Rect {
-                x: frame.x + padding,
-                y: frame.y + padding,
-                w: (frame.w - padding * 2).max(1),
-                h: (frame.h - padding * 2).max(1),
-            };
+            let inner = render_box_chrome(canvas, theme, style, frame);
             for child in children {
                 render_child_or_placeholder(canvas, project, scope, child, inner, user_fonts);
             }
@@ -3291,19 +3521,8 @@ fn render_node(
             ..
         } => {
             let theme = theme_for_node(project, style);
-            if should_fill_node_surface(style) {
-                if let Some(fill_role) = theme.surface.fill_role {
-                    canvas.fill_rect(frame, fill_role_color(fill_role));
-                }
-            }
-            let padding = style.padding_px.unwrap_or(0).max(0);
             let gap = style.gap_px.unwrap_or(0).max(0);
-            let inner = Rect {
-                x: frame.x + padding,
-                y: frame.y + padding,
-                w: (frame.w - padding * 2).max(1),
-                h: (frame.h - padding * 2).max(1),
-            };
+            let inner = render_box_chrome(canvas, theme, style, frame);
             let row_sizes = track_sizes(rows, inner.h, gap);
             let col_sizes = track_sizes(columns, inner.w, gap);
             let row_offsets = grid_line_offsets(&row_sizes, inner.y, gap);
@@ -3336,6 +3555,8 @@ fn render_node(
             Ok(())
         }
         Node::DataQuery(node) => {
+            let theme = theme_for_node(project, &node.style);
+            let inner = render_box_chrome(canvas, theme, &node.style, frame);
             let mut nested_scope = scope.clone();
             let items = scope
                 .get("metaQueries")
@@ -3368,7 +3589,7 @@ fn render_node(
                     project,
                     &nested_scope,
                     child,
-                    frame,
+                    inner,
                     user_fonts,
                 );
             }
@@ -3387,13 +3608,8 @@ fn render_node(
                 return Ok(());
             };
             let gap = node.style.gap_px.unwrap_or(0).max(0);
-            let padding = node.style.padding_px.unwrap_or(0).max(0);
-            let inner = Rect {
-                x: frame.x + padding,
-                y: frame.y + padding,
-                w: (frame.w - padding * 2).max(1),
-                h: (frame.h - padding * 2).max(1),
-            };
+            let theme = theme_for_node(project, &node.style);
+            let inner = render_box_chrome(canvas, theme, &node.style, frame);
             let horizontal = node.axis == "horizontal";
             let available_main =
                 if horizontal { inner.w } else { inner.h } - gap * (count.saturating_sub(1) as i32);

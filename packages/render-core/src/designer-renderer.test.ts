@@ -387,6 +387,99 @@ describe("designer renderer", () => {
     expect(child?.frame.h).toBe(textMetrics.lineHeight + 10);
   });
 
+  it("applies per-side padding after per-side borders", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [{
+        id: "layout-edge-box",
+        name: "Edge Box",
+        kind: "fullscreen",
+        rootNode: {
+          id: "root",
+          type: "stack",
+          axis: "vertical",
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          style: { paddingPx: 0, borderToken: "none" },
+          children: [{
+            id: "box",
+            type: "stack",
+            axis: "vertical",
+            width: { mode: "fixed_px", value: 40 },
+            height: { mode: "fixed_px", value: 30 },
+          style: {
+            padding: { top: 4, right: 5, bottom: 6, left: 7 },
+            border: {
+              top: { size: "thin", pattern: "solid" },
+              right: { size: "thick", pattern: "solid" },
+              bottom: { size: "fat", pattern: "solid" },
+              left: { size: "thin", pattern: "dashed" }
+            }
+          },
+          children: []
+          }]
+        }
+      }]
+    });
+    const inspection = inspectLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const child = inspection.root?.children[0];
+    expect(child?.contentFrame).toMatchObject({
+      x: 12,
+      y: 9,
+      w: 25,
+      h: 16
+    });
+    const rendered = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    expect(rendered.pixels[4 * rendered.width + 4]).toBe(1);
+    expect(rendered.pixels[4 * rendered.width + 43]).toBe(1);
+    expect(rendered.pixels[33 * rendered.width + 20]).toBe(1);
+    expect(regionPixels(rendered, 4, 4, 1, 12).filter((pixel) => pixel === 1).length).toBeLessThan(12);
+  });
+
+  it("draws double borders as two strokes with matching stroke and gap size", () => {
+    const normalized = normalizeProject(SAMPLE_PROJECT);
+    const project: Project = normalizeProject({
+      ...normalized,
+      layoutDefinitions: [{
+        id: "layout-double-border",
+        name: "Double Border",
+        kind: "fullscreen",
+        rootNode: {
+          id: "root",
+          type: "stack",
+          axis: "vertical",
+          width: { mode: "fill" },
+          height: { mode: "fill" },
+          style: { paddingPx: 0, borderToken: "none" },
+          children: [{
+            id: "box",
+            type: "stack",
+            axis: "vertical",
+            width: { mode: "fixed_px", value: 32 },
+            height: { mode: "fixed_px", value: 20 },
+            style: {
+              border: {
+                top: { size: "thick", pattern: "double" }
+              }
+            },
+            children: []
+          }]
+        }
+      }]
+    });
+    const inspection = inspectLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    expect(inspection.root?.children[0]?.contentFrame.y).toBe(10);
+    const rendered = renderLayoutDefinition(project, project.layoutDefinitions?.[0]!, SAMPLE_DATA);
+    const rowPixels = (y: number) => regionPixels(rendered, 4, y, 32, 1).filter((pixel) => pixel === 1).length;
+    expect(rowPixels(4)).toBe(32);
+    expect(rowPixels(5)).toBe(32);
+    expect(rowPixels(6)).toBe(0);
+    expect(rowPixels(7)).toBe(0);
+    expect(rowPixels(8)).toBe(32);
+    expect(rowPixels(9)).toBe(32);
+  });
+
   it("keeps auto-fit disabled when width or height uses fit-content", () => {
     const normalized = normalizeProject(SAMPLE_PROJECT);
     const project: Project = normalizeProject({
