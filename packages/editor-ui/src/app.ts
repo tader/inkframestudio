@@ -48,6 +48,7 @@ import {
   STRUCTURE_PREVIEW_TOP_PADDING,
   deriveStructureDropIntent,
   findInspectionNodeAtPoint,
+  findInspectionNodesAtPoint,
   translateStructurePreviewTree,
   type StructureDropIntent
 } from "./structure-preview-model.js";
@@ -91,6 +92,10 @@ type WidgetPreviewVariable = {
   name: string;
   source: string;
   value: unknown;
+};
+
+type NodeClipboard = {
+  node: LayoutNode;
 };
 
 type NodeCreateKind =
@@ -153,6 +158,10 @@ function defaultSizeSpec(mode: SizeSpec["mode"] = "fill", value?: number): SizeS
   return { mode, value };
 }
 
+function defaultPadding(value: number): EdgeInsets {
+  return { top: value, right: value, bottom: value, left: value };
+}
+
 function defaultPrimitiveNode(kind: PrimitiveWidgetKind): PrimitiveInstanceNode {
   return {
     id: nextId("node"),
@@ -160,13 +169,13 @@ function defaultPrimitiveNode(kind: PrimitiveWidgetKind): PrimitiveInstanceNode 
     primitiveType: kind,
     width: defaultSizeSpec("fill"),
     height: defaultSizeSpec("fill"),
-    style: { paddingPx: 4, borderToken: "none" },
+    style: { padding: defaultPadding(4), borderToken: "none" },
     bindings: kind === "bar_chart" || kind === "text" || kind === "number" ? { entity: "", value: "" } : kind === "icon" ? { value: "" } : {},
     props:
       kind === "text"
-        ? { text: "Text", autoFit: true, placeholderText: "Placeholder", horizontalAlign: "left", verticalAlign: "top", overflow: "wrap", renderEntityState: false, paddingPx: 4 }
+        ? { text: "Text", autoFit: true, placeholderText: "Placeholder", horizontalAlign: "left", verticalAlign: "top", overflow: "wrap", renderEntityState: false }
         : kind === "number"
-          ? { digits: 1, autoFit: true, placeholderValue: "88.8", horizontalAlign: "center", verticalAlign: "middle", paddingPx: 4 }
+          ? { digits: 1, autoFit: true, placeholderValue: "88.8", horizontalAlign: "center", verticalAlign: "middle" }
           : kind === "icon"
             ? { icon: DEFAULT_ICON_ID }
             : kind === "bar_chart"
@@ -186,7 +195,7 @@ function defaultCompoundRefNode(definitionId = ""): LayoutNode {
     definitionId,
     width: defaultSizeSpec("fill"),
     height: defaultSizeSpec("fill"),
-    style: { paddingPx: 0, borderToken: "none" },
+    style: { borderToken: "none" },
     inputBindings: {},
     inputValues: {}
   };
@@ -203,9 +212,10 @@ function defaultDataQueryNode(): LayoutNode {
     calendarEntityIds: [],
     entityIds: [],
     offsetDays: 0,
+    offsetDaysExpression: "",
     width: defaultSizeSpec("fill"),
     height: defaultSizeSpec("fill"),
-    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+    style: { gapPx: 0, borderToken: "none" }
   };
 }
 
@@ -219,7 +229,7 @@ function defaultForEachNode(): LayoutNode {
     axis: "vertical",
     width: defaultSizeSpec("fill"),
     height: defaultSizeSpec("fill"),
-    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+    style: { gapPx: 0, borderToken: "none" }
   };
 }
 
@@ -234,7 +244,7 @@ function defaultFilterNode(): LayoutNode {
     condition: 'event.summary != "Blocked"',
     width: defaultSizeSpec("fill"),
     height: defaultSizeSpec("fill"),
-    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+    style: { gapPx: 0, borderToken: "none" }
   };
 }
 
@@ -249,7 +259,7 @@ function defaultUniqueNode(): LayoutNode {
     keyTemplate: '{{ event.start | format("HH:MM") }}--{{ event.summary }}',
     width: defaultSizeSpec("fill"),
     height: defaultSizeSpec("fill"),
-    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+    style: { gapPx: 0, borderToken: "none" }
   };
 }
 
@@ -260,7 +270,7 @@ function defaultIfElseNode(): LayoutNode {
     condition: "event.allday == true",
     width: defaultSizeSpec("fill"),
     height: defaultSizeSpec("fill"),
-    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+    style: { gapPx: 0, borderToken: "none" }
   };
 }
 
@@ -273,7 +283,7 @@ function defaultScriptNode(): LayoutNode {
     bindings: {},
     width: defaultSizeSpec("fill"),
     height: defaultSizeSpec("fill"),
-    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+    style: { gapPx: 0, borderToken: "none" }
   };
 }
 
@@ -341,6 +351,43 @@ function parentIdForNode(root: LayoutNode | undefined, nodeId: string): string |
   return buildNodeTree(root).find((entry) => entry.node.id === nodeId)?.parentId;
 }
 
+function copyName(name: string): string {
+  return `${name.replace(/\s+copy(?:\s+\d+)?$/i, "")} copy`;
+}
+
+function cloneLayoutNodeWithNewIds(node: LayoutNode): LayoutNode {
+  const base = { ...structuredClone(node), id: nextId("node") } as LayoutNode;
+  if (base.type === "stack" || base.type === "zstack") {
+    return {
+      ...base,
+      children: base.children.map((child) => cloneLayoutNodeWithNewIds(child))
+    };
+  }
+  if (base.type === "grid") {
+    return {
+      ...base,
+      children: base.children.map((child) => ({
+        ...child,
+        node: cloneLayoutNodeWithNewIds(child.node)
+      }))
+    };
+  }
+  if (base.type === "data_query" || base.type === "filter" || base.type === "unique" || base.type === "foreach" || base.type === "script") {
+    return {
+      ...base,
+      child: base.child ? cloneLayoutNodeWithNewIds(base.child) : undefined
+    };
+  }
+  if (base.type === "if_else") {
+    return {
+      ...base,
+      thenChild: base.thenChild ? cloneLayoutNodeWithNewIds(base.thenChild) : undefined,
+      elseChild: base.elseChild ? cloneLayoutNodeWithNewIds(base.elseChild) : undefined
+    };
+  }
+  return base;
+}
+
 function defaultRootNode(kind: "stack" | "grid" | "zstack" = "stack"): LayoutNode {
   if (kind === "grid") {
     return {
@@ -351,7 +398,7 @@ function defaultRootNode(kind: "stack" | "grid" | "zstack" = "stack"): LayoutNod
       children: [],
       width: defaultSizeSpec("fill"),
       height: defaultSizeSpec("fill"),
-      style: { paddingPx: 4, gapPx: 4, borderToken: "none" }
+      style: { padding: defaultPadding(4), gapPx: 4, borderToken: "none" }
     };
   }
   if (kind === "zstack") {
@@ -361,7 +408,7 @@ function defaultRootNode(kind: "stack" | "grid" | "zstack" = "stack"): LayoutNod
       children: [defaultPrimitiveNode("bar_chart"), defaultPrimitiveNode("number")],
       width: defaultSizeSpec("fill"),
       height: defaultSizeSpec("fill"),
-      style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+      style: { gapPx: 0, borderToken: "none" }
     };
   }
   return {
@@ -371,7 +418,7 @@ function defaultRootNode(kind: "stack" | "grid" | "zstack" = "stack"): LayoutNod
     children: [defaultPrimitiveNode("text")],
     width: defaultSizeSpec("fill"),
     height: defaultSizeSpec("fill"),
-    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+    style: { gapPx: 0, borderToken: "none" }
   };
 }
 
@@ -383,7 +430,7 @@ function emptyStackRoot(): LayoutNode {
     children: [],
     width: defaultSizeSpec("fill"),
     height: defaultSizeSpec("fill"),
-    style: { paddingPx: 0, gapPx: 0, borderToken: "none" }
+    style: { gapPx: 0, borderToken: "none" }
   };
 }
 
@@ -833,6 +880,11 @@ function fillRoleLabel(role: FillRole | undefined): string {
   return "dark accent";
 }
 
+function entityCatalogLabel(entry: { entityId: string; friendlyName: string; domain: string; unit?: string }): string {
+  const suffix = entry.unit ? ` ${entry.unit}` : "";
+  return `${entry.friendlyName || entry.entityId} (${entry.entityId})${suffix}`;
+}
+
 function fontRoleThemeTextKey(role: FontRole): "title" | "body" | "value" | undefined {
   if (role === "tiny") {
     return "title";
@@ -921,6 +973,8 @@ export class EpPaperEditorApp extends LitElement {
     selectedWidgetDefinitionId: { state: true },
     selectedLayoutId: { state: true },
     selectedNodeId: { state: true },
+    nodeClipboard: { state: true },
+    structureHitCycle: { state: true },
     createChildTargetNodeId: { state: true },
     selectedThemeId: { state: true },
     selectedPreviewThemeId: { state: true },
@@ -930,6 +984,7 @@ export class EpPaperEditorApp extends LitElement {
     icons: { state: true },
     fonts: { state: true },
     entityCatalog: { state: true },
+    entityPickerQueries: { state: true },
     previewPngBase64: { state: true },
     previewHash: { state: true },
     previewWidth: { state: true },
@@ -1322,6 +1377,8 @@ export class EpPaperEditorApp extends LitElement {
   declare private selectedWidgetDefinitionId: string;
   declare private selectedLayoutId: string;
   declare private selectedNodeId: string;
+  declare private nodeClipboard: NodeClipboard | null;
+  declare private structureHitCycle: { key: string; index: number };
   declare private createChildTargetNodeId: string;
   declare private selectedThemeId: string;
   declare private selectedPreviewThemeId: string;
@@ -1331,6 +1388,7 @@ export class EpPaperEditorApp extends LitElement {
   declare private icons: IconDefinition[];
   declare private fonts: FontOption[];
   declare private entityCatalog: Array<{ entityId: string; friendlyName: string; domain: string; unit?: string }>;
+  declare private entityPickerQueries: Record<string, string>;
   declare private previewPngBase64: string;
   declare private previewHash: string;
   declare private previewWidth: number;
@@ -1381,6 +1439,8 @@ export class EpPaperEditorApp extends LitElement {
     this.selectedWidgetDefinitionId = "";
     this.selectedLayoutId = "";
     this.selectedNodeId = "";
+    this.nodeClipboard = null;
+    this.structureHitCycle = { key: "", index: 0 };
     this.createChildTargetNodeId = "";
     this.selectedThemeId = "";
     this.selectedPreviewThemeId = "";
@@ -1390,6 +1450,7 @@ export class EpPaperEditorApp extends LitElement {
     this.icons = [];
     this.fonts = [];
     this.entityCatalog = [];
+    this.entityPickerQueries = {};
     this.previewPngBase64 = "";
     this.previewHash = "";
     this.previewWidth = 0;
@@ -1896,7 +1957,7 @@ export class EpPaperEditorApp extends LitElement {
             definitionId: definition.id,
             width: defaultSizeSpec("fill"),
             height: defaultSizeSpec("fill"),
-            style: { paddingPx: 0, borderToken: "none", themeId: this.effectivePreviewThemeId },
+            style: { borderToken: "none", themeId: this.effectivePreviewThemeId },
             inputBindings: {},
             inputValues: Object.fromEntries(
               (definition.inputSchema ?? []).map((input) => [
@@ -2309,6 +2370,28 @@ export class EpPaperEditorApp extends LitElement {
     this.widgetPreviewDataMessage = "";
   }
 
+  private duplicateWidgetDefinition(definitionId: string): void {
+    const definition = this.project.widgetDefinitions?.find((entry) => entry.id === definitionId);
+    if (!definition) {
+      return;
+    }
+    const duplicate: WidgetDefinition = {
+      ...structuredClone(definition),
+      id: nextId("widget"),
+      name: copyName(definition.name),
+      rootNode: definition.rootNode ? cloneLayoutNodeWithNewIds(definition.rootNode) : undefined
+    };
+    this.replaceProject({
+      ...this.project,
+      widgetDefinitions: [...(this.project.widgetDefinitions ?? []), duplicate]
+    });
+    this.selectedWidgetDefinitionId = duplicate.id;
+    this.selectedNodeId = duplicate.rootNode?.id ?? "";
+    this.widgetPreviewRenderData = null;
+    this.widgetPreviewDefinitionId = "";
+    this.widgetPreviewDataMessage = "";
+  }
+
   private updateWidgetDefinition(id: string, updater: (definition: WidgetDefinition) => WidgetDefinition): void {
     this.replaceProject({
       ...this.project,
@@ -2325,6 +2408,25 @@ export class EpPaperEditorApp extends LitElement {
     this.selectedLayoutId = layout.id;
   }
 
+  private duplicateLayout(layoutId: string): void {
+    const layout = this.project.layoutDefinitions?.find((entry) => entry.id === layoutId);
+    if (!layout) {
+      return;
+    }
+    const duplicate: LayoutDefinition = {
+      ...structuredClone(layout),
+      id: nextId("layout"),
+      name: copyName(layout.name),
+      rootNode: layout.rootNode ? cloneLayoutNodeWithNewIds(layout.rootNode) : undefined
+    };
+    this.replaceProject({
+      ...this.project,
+      layoutDefinitions: [...(this.project.layoutDefinitions ?? []), duplicate]
+    });
+    this.selectedLayoutId = duplicate.id;
+    this.selectedNodeId = duplicate.rootNode?.id ?? "";
+  }
+
   private updateLayout(id: string, updater: (layout: LayoutDefinition) => LayoutDefinition): void {
     this.replaceProject({
       ...this.project,
@@ -2339,6 +2441,23 @@ export class EpPaperEditorApp extends LitElement {
       themes: [...this.project.themes, theme]
     });
     this.selectedThemeId = theme.id;
+  }
+
+  private duplicateTheme(themeId: string): void {
+    const theme = this.project.themes.find((entry) => entry.id === themeId);
+    if (!theme) {
+      return;
+    }
+    const duplicate: WidgetTheme = {
+      ...structuredClone(theme),
+      id: nextId("theme"),
+      name: copyName(theme.name)
+    };
+    this.replaceProject({
+      ...this.project,
+      themes: [...this.project.themes, duplicate]
+    });
+    this.selectedThemeId = duplicate.id;
   }
 
   private updateTheme(id: string, updater: (theme: WidgetTheme) => WidgetTheme): void {
@@ -2444,10 +2563,26 @@ export class EpPaperEditorApp extends LitElement {
     return findInspectionNodeAtPoint(root, x, y);
   }
 
+  private structureHitCycleNode(event: PointerEvent, target: HTMLElement): LayoutInspectionNode | undefined {
+    const { x, y } = this.structurePreviewCoords(event, target);
+    const root = this.structurePreviewRoot();
+    const nodes = findInspectionNodesAtPoint(root, x, y);
+    if (!nodes.length) {
+      this.structureHitCycle = { key: "", index: 0 };
+      return undefined;
+    }
+    const selectable = nodes.slice().reverse();
+    const key = selectable.map((node) => node.nodeId).join("|");
+    const samePoint = this.structureHitCycle.key === key;
+    const index = samePoint ? (this.structureHitCycle.index + 1) % selectable.length : 0;
+    this.structureHitCycle = { key, index };
+    return selectable[index];
+  }
+
   private handleStructurePointerDown(event: PointerEvent): void {
     const owner = this.editorOwner;
     const target = event.currentTarget as HTMLElement;
-    const hit = this.structureHitNode(event, target);
+    const hit = this.structureHitCycleNode(event, target);
     if (!owner || !hit) {
       return;
     }
@@ -2541,6 +2676,70 @@ export class EpPaperEditorApp extends LitElement {
     const next = removeNode(owner.rootNode, this.selectedNodeId);
     this.setRootNode(owner, next.root);
     this.selectedNodeId = parentId ?? owner.rootNode.id;
+  }
+
+  private copySelectedNode(owner: { id: string; rootNode?: LayoutNode }): void {
+    const node = owner.rootNode && this.selectedNodeId ? getNodeById(owner.rootNode, this.selectedNodeId) : undefined;
+    if (!node) {
+      return;
+    }
+    this.nodeClipboard = { node: structuredClone(node) };
+  }
+
+  private duplicateSelectedNode(owner: { id: string; rootNode?: LayoutNode }): void {
+    if (!owner.rootNode || !this.selectedNodeId) {
+      return;
+    }
+    const parentId = parentIdForNode(owner.rootNode, this.selectedNodeId);
+    const node = getNodeById(owner.rootNode, this.selectedNodeId);
+    const parent = parentId ? getNodeById(owner.rootNode, parentId) : undefined;
+    if (!parentId || !node || !(parent?.type === "stack" || parent?.type === "zstack" || parent?.type === "grid")) {
+      return;
+    }
+    const duplicate = cloneLayoutNodeWithNewIds(node);
+    this.setRootNode(owner, appendChild(owner.rootNode, parentId, duplicate));
+    this.selectedNodeId = duplicate.id;
+  }
+
+  private clipboardNodeClone(): LayoutNode | undefined {
+    return this.nodeClipboard ? cloneLayoutNodeWithNewIds(this.nodeClipboard.node) : undefined;
+  }
+
+  private pasteChildNode(owner: { id: string; rootNode?: LayoutNode }, parentId: string): void {
+    if (!owner.rootNode) {
+      return;
+    }
+    const pasted = this.clipboardNodeClone();
+    if (!pasted) {
+      return;
+    }
+    this.setRootNode(owner, appendChild(owner.rootNode, parentId, pasted));
+    this.selectedNodeId = pasted.id;
+  }
+
+  private pasteRootNode(owner: { id: string; rootNode?: LayoutNode }): void {
+    const pasted = this.clipboardNodeClone();
+    if (!pasted) {
+      return;
+    }
+    this.setRootNode(owner, pasted);
+    this.selectedNodeId = pasted.id;
+  }
+
+  private pasteMetaChildNode(owner: { id: string; rootNode?: LayoutNode }, nodeId: string): void {
+    const pasted = this.clipboardNodeClone();
+    if (!pasted) {
+      return;
+    }
+    this.setMetaChildNode(owner, nodeId, pasted);
+  }
+
+  private pasteConditionalBranchNode(owner: { id: string; rootNode?: LayoutNode }, nodeId: string, branch: "thenChild" | "elseChild"): void {
+    const pasted = this.clipboardNodeClone();
+    if (!pasted) {
+      return;
+    }
+    this.setConditionalBranchNode(owner, nodeId, branch, pasted);
   }
 
   private createChildNode(owner: { id: string; rootNode?: LayoutNode }, parentId: string, kind: NodeCreateKind): void {
@@ -2656,7 +2855,8 @@ export class EpPaperEditorApp extends LitElement {
         dateVariableName: queryKind === "calendar_events" ? (current.dateVariableName ?? "date") : current.dateVariableName,
         calendarEntityIds: queryKind === "calendar_events" ? current.calendarEntityIds : [],
         entityIds: queryKind === "entity_states" ? (current.entityIds ?? []) : [],
-        offsetDays: queryKind === "calendar_events" ? current.offsetDays : 0
+        offsetDays: queryKind === "calendar_events" ? current.offsetDays : 0,
+        offsetDaysExpression: queryKind === "calendar_events" ? current.offsetDaysExpression : undefined
       };
     }));
   }
@@ -2664,6 +2864,24 @@ export class EpPaperEditorApp extends LitElement {
   private updateDataQuerySource(owner: { id: string; rootNode?: LayoutNode }, nodeId: string, sourceProviderInstanceId: string): void {
     this.updateRootNode(owner, (root) => updateNode(root, nodeId, (current) => (
       current.type === "data_query" ? { ...current, sourceProviderInstanceId } : current
+    )));
+  }
+
+  private addEntityStateQueryEntity(owner: { id: string; rootNode?: LayoutNode }, nodeId: string, entityId: string): void {
+    this.updateRootNode(owner, (root) => updateNode(root, nodeId, (current) => {
+      if (current.type !== "data_query") {
+        return current;
+      }
+      const entityIds = current.entityIds ?? [];
+      return entityIds.includes(entityId) ? current : { ...current, entityIds: [...entityIds, entityId] };
+    }));
+  }
+
+  private removeEntityStateQueryEntity(owner: { id: string; rootNode?: LayoutNode }, nodeId: string, entityId: string): void {
+    this.updateRootNode(owner, (root) => updateNode(root, nodeId, (current) => (
+      current.type === "data_query"
+        ? { ...current, entityIds: (current.entityIds ?? []).filter((entry) => entry !== entityId) }
+        : current
     )));
   }
 
@@ -3611,13 +3829,12 @@ export class EpPaperEditorApp extends LitElement {
   }
 
   private renderWidgetBoxControls(owner: { id: string; rootNode?: LayoutNode }, node: LayoutNode): TemplateResult {
-    const paddingSource = node.type === "primitive_instance" ? node.props?.padding ?? node.style?.padding : node.style?.padding;
-    const uniformPadding = Number(node.type === "primitive_instance" ? node.props?.paddingPx ?? node.style?.paddingPx ?? 0 : node.style?.paddingPx ?? 0);
+    const paddingSource = node.style?.padding;
     const padding: EdgeInsets = {
-      top: Number(paddingSource?.top ?? uniformPadding),
-      right: Number(paddingSource?.right ?? uniformPadding),
-      bottom: Number(paddingSource?.bottom ?? uniformPadding),
-      left: Number(paddingSource?.left ?? uniformPadding)
+      top: Number(paddingSource?.top ?? 0),
+      right: Number(paddingSource?.right ?? 0),
+      bottom: Number(paddingSource?.bottom ?? 0),
+      left: Number(paddingSource?.left ?? 0)
     };
     const border = node.style?.border;
     const legacySize = String(node.type === "primitive_instance" ? node.props?.borderToken ?? node.style?.borderToken ?? "none" : node.style?.borderToken ?? "none") as WidgetBorderSize;
@@ -3628,8 +3845,7 @@ export class EpPaperEditorApp extends LitElement {
       })));
     };
     const updatePadding = (edge: EdgeName, value: number) => updateStyle({
-      padding: { ...(node.style?.padding ?? {}), [edge]: Math.max(0, Math.trunc(value || 0)) },
-      paddingPx: undefined
+      padding: { ...(node.style?.padding ?? {}), [edge]: Math.max(0, Math.trunc(value || 0)) }
     });
     const updateBorder = (edge: EdgeName, patch: Partial<WidgetBorderSide>) => {
       const current = border?.[edge] ?? { size: legacySize, pattern: "solid" as WidgetBorderPattern, thicknessPx: defaultBorderThicknessForSize(legacySize) };
@@ -3734,10 +3950,6 @@ export class EpPaperEditorApp extends LitElement {
         <select .value=${node.primitiveType} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), primitiveType: (event.target as HTMLSelectElement).value as PrimitiveWidgetKind })))}>
           ${BUILT_IN_WIDGET_DEFINITIONS.map((entry) => selectOption(entry.primitiveType ?? "text", entry.name, node.primitiveType))}
         </select>
-      </label>
-      <label>
-        Content padding
-        <input type="number" .value=${String(node.props?.paddingPx ?? node.style?.paddingPx ?? 4)} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, paddingPx: Number((event.target as HTMLInputElement).value) } })))}/>
       </label>
       ${node.primitiveType === "text"
         ? html`
@@ -3968,6 +4180,8 @@ export class EpPaperEditorApp extends LitElement {
 
   private renderNodeEditor(node: LayoutNode, owner: { id: string; rootNode?: LayoutNode }, parentId?: string): TemplateResult {
     const showLayoutControls = !isMetaWidgetNode(node);
+    const parentNode = owner.rootNode && parentId ? getNodeById(owner.rootNode, parentId) : undefined;
+    const canDuplicateNode = parentNode?.type === "stack" || parentNode?.type === "zstack" || parentNode?.type === "grid";
     return html`
       <div class="inspector-panel">
         <div class="row">
@@ -3978,8 +4192,10 @@ export class EpPaperEditorApp extends LitElement {
           ${parentId
             ? html`
                 <button class="danger" @click=${() => this.deleteSelectedNode(owner)}>Delete node</button>
+                ${canDuplicateNode ? html`<button @click=${() => this.duplicateSelectedNode(owner)}>Duplicate node</button>` : nothing}
               `
             : html`<button class="danger" @click=${() => this.deleteSelectedNode(owner)}>Delete root node</button>`}
+          <button @click=${() => this.copySelectedNode(owner)}>Copy node</button>
           ${isContainerNode(node)
             ? html`<button @click=${() => {
                 this.createChildTargetNodeId = this.createChildTargetNodeId === node.id ? "" : node.id;
@@ -4006,6 +4222,7 @@ export class EpPaperEditorApp extends LitElement {
                 <button @click=${() => this.createChildNode(owner, node.id, "foreach")}>Foreach</button>
                 <button @click=${() => this.createChildNode(owner, node.id, "script")}>Script</button>
                 <button @click=${() => this.createChildNode(owner, node.id, "if_else")}>If/Else</button>
+                ${this.nodeClipboard ? html`<button @click=${() => this.pasteChildNode(owner, node.id)}>From clipboard</button>` : nothing}
               </div>
             `
           : nothing}
@@ -4102,6 +4319,10 @@ export class EpPaperEditorApp extends LitElement {
                   <input type="number" .value=${String(node.offsetDays ?? 0)} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), offsetDays: Number((event.target as HTMLInputElement).value) } )))} />
                 </label>
                 <label>
+                  Offset days expression
+                  <input placeholder='Number(entities["sensor.calendar_offset"]?.state ?? 0)' .value=${node.offsetDaysExpression ?? ""} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), offsetDaysExpression: (event.target as HTMLInputElement).value || undefined } )))} />
+                </label>
+                <label>
                   Rollover time
                   <input placeholder="23:00" .value=${node.rolloverTime ?? ""} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), rolloverTime: (event.target as HTMLInputElement).value || undefined } )))} />
                 </label>
@@ -4122,21 +4343,61 @@ export class EpPaperEditorApp extends LitElement {
                 </label>
               ` : nothing}
               ${queryKind === "entity_states" ? html`
-                <label>
-                  Entities
-                  <select
-                    multiple
-                    size="8"
-                    @change=${(event: Event) => {
-                      const selected = Array.from((event.target as HTMLSelectElement).selectedOptions).map((option) => option.value);
-                      this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), entityIds: selected } )));
-                    }}
-                  >
-                    ${this.entityCatalog
-                      .filter((entry) => entry.domain !== "calendar")
-                      .map((entry) => html`<option value=${entry.entityId} ?selected=${(node.entityIds ?? []).includes(entry.entityId)}>${entry.friendlyName}</option>`)}
-                  </select>
-                </label>
+                ${(() => {
+                  const selectedIds = node.entityIds ?? [];
+                  const query = this.entityPickerQueries[node.id] ?? "";
+                  const normalizedQuery = query.trim().toLowerCase();
+                  const selected = selectedIds.map((entityId) => this.entityCatalog.find((entry) => entry.entityId === entityId) ?? { entityId, friendlyName: entityId, domain: "", unit: undefined });
+                  const matches = normalizedQuery
+                    ? this.entityCatalog
+                        .filter((entry) => entry.domain !== "calendar")
+                        .filter((entry) => !selectedIds.includes(entry.entityId))
+                        .filter((entry) => `${entry.friendlyName} ${entry.entityId} ${entry.domain}`.toLowerCase().includes(normalizedQuery))
+                        .slice(0, 20)
+                    : [];
+                  return html`
+                    <div class="section-title">Entities</div>
+                    <label>
+                      Search entities
+                      <input
+                        placeholder="name or entity id"
+                        .value=${query}
+                        @input=${(event: Event) => {
+                          this.entityPickerQueries = {
+                            ...this.entityPickerQueries,
+                            [node.id]: (event.target as HTMLInputElement).value
+                          };
+                        }}
+                      />
+                    </label>
+                    ${selected.length
+                      ? html`
+                          <div class="variable-list">
+                            ${selected.map((entry) => html`
+                              <div class="row">
+                                <span>${entityCatalogLabel(entry)}</span>
+                                <button @click=${() => this.removeEntityStateQueryEntity(owner, node.id, entry.entityId)}>Remove</button>
+                              </div>
+                            `)}
+                          </div>
+                        `
+                      : html`<div class="muted">No entities selected.</div>`}
+                    ${normalizedQuery
+                      ? html`
+                          <div class="variable-list">
+                            ${matches.length
+                              ? matches.map((entry) => html`
+                                  <div class="row">
+                                    <span>${entityCatalogLabel(entry)}</span>
+                                    <button @click=${() => this.addEntityStateQueryEntity(owner, node.id, entry.entityId)}>Add</button>
+                                  </div>
+                                `)
+                              : html`<div class="muted">No matches.</div>`}
+                          </div>
+                        `
+                      : html`<div class="muted">Search to add entities. Each result includes state, attributes, and last changed.</div>`}
+                  `;
+                })()}
               ` : nothing}
               ${queryKind === "weather_forecast" ? html`
                 <label>Location id <input .value=${node.locationId ?? ""} @input=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), locationId: (event.target as HTMLInputElement).value || undefined } )))} /></label>
@@ -4163,6 +4424,7 @@ export class EpPaperEditorApp extends LitElement {
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultUniqueNode())}>${node.child ? "Replace" : "Add"} unique</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultScriptNode())}>${node.child ? "Replace" : "Add"} script</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultForEachNode())}>${node.child ? "Replace" : "Add"} foreach</button>
+                ${this.nodeClipboard ? html`<button @click=${() => this.pasteMetaChildNode(owner, node.id)}>From clipboard</button>` : nothing}
               </div>
               ${node.child ? nothing : html`<div class="muted">No child subtree.</div>`}
             `;
@@ -4205,6 +4467,7 @@ export class EpPaperEditorApp extends LitElement {
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultUniqueNode())}>${node.child ? "Replace" : "Add"} unique</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultScriptNode())}>${node.child ? "Replace" : "Add"} script</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultForEachNode())}>${node.child ? "Replace" : "Add"} foreach</button>
+                ${this.nodeClipboard ? html`<button @click=${() => this.pasteMetaChildNode(owner, node.id)}>From clipboard</button>` : nothing}
               </div>
               ${node.child ? nothing : html`<div class="muted">No child subtree.</div>`}
             `
@@ -4245,6 +4508,7 @@ export class EpPaperEditorApp extends LitElement {
                 <button @click=${() => this.setMetaChildNode(owner, node.id, emptyStackRoot())}>${node.child ? "Replace" : "Add"} child stack</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultForEachNode())}>${node.child ? "Replace" : "Add"} foreach</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultScriptNode())}>${node.child ? "Replace" : "Add"} script</button>
+                ${this.nodeClipboard ? html`<button @click=${() => this.pasteMetaChildNode(owner, node.id)}>From clipboard</button>` : nothing}
               </div>
               ${node.child ? nothing : html`<div class="muted">No child subtree.</div>`}
             `
@@ -4278,6 +4542,7 @@ export class EpPaperEditorApp extends LitElement {
               <div class="row">
                 <button @click=${() => this.setMetaChildNode(owner, node.id, emptyStackRoot())}>${node.child ? "Replace" : "Add"} template stack</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultPrimitiveNode("text"))}>${node.child ? "Replace" : "Add"} template text</button>
+                ${this.nodeClipboard ? html`<button @click=${() => this.pasteMetaChildNode(owner, node.id)}>From clipboard</button>` : nothing}
               </div>
               ${node.child ? nothing : html`<div class="muted">No template child.</div>`}
             `
@@ -4343,6 +4608,7 @@ export class EpPaperEditorApp extends LitElement {
                 <button @click=${() => this.addScriptBinding(owner, node.id)}>Add binding</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, emptyStackRoot())}>${node.child ? "Replace" : "Add"} child stack</button>
                 <button @click=${() => this.setMetaChildNode(owner, node.id, defaultPrimitiveNode("text"))}>${node.child ? "Replace" : "Add"} child text</button>
+                ${this.nodeClipboard ? html`<button @click=${() => this.pasteMetaChildNode(owner, node.id)}>From clipboard</button>` : nothing}
               </div>
               ${node.child ? nothing : html`<div class="muted">No child subtree.</div>`}
             `
@@ -4365,6 +4631,10 @@ export class EpPaperEditorApp extends LitElement {
               <div class="row">
                 <button @click=${() => this.setConditionalBranchNode(owner, node.id, "thenChild", defaultPrimitiveNode("text"))}>Then text</button>
                 <button @click=${() => this.setConditionalBranchNode(owner, node.id, "elseChild", defaultPrimitiveNode("text"))}>Else text</button>
+                ${this.nodeClipboard ? html`
+                  <button @click=${() => this.pasteConditionalBranchNode(owner, node.id, "thenChild")}>Then from clipboard</button>
+                  <button @click=${() => this.pasteConditionalBranchNode(owner, node.id, "elseChild")}>Else from clipboard</button>
+                ` : nothing}
               </div>
               ${!node.thenChild && !node.elseChild ? html`<div class="muted">No branches yet.</div>` : nothing}
             `
@@ -5148,6 +5418,7 @@ export class EpPaperEditorApp extends LitElement {
                   <label>Name <input .value=${definition.name} @input=${(event: Event) => this.updateWidgetDefinition(definition.id, (current) => ({ ...current, name: (event.target as HTMLInputElement).value }))} /></label>
                   <div class="detail-danger-action">
                     <button class="danger" @click=${() => this.removeWidgetDefinition(definition.id)}>Delete compound widget</button>
+                    <button @click=${() => this.duplicateWidgetDefinition(definition.id)}>Duplicate compound widget</button>
                   </div>
                   <div class="section">
                     <h3>Inputs</h3>
@@ -5234,6 +5505,7 @@ export class EpPaperEditorApp extends LitElement {
                             <button @click=${() => this.setRootNode(definition, defaultRootNode("stack"))}>Add Stack Root</button>
                             <button @click=${() => this.setRootNode(definition, defaultRootNode("grid"))}>Add Grid Root</button>
                             <button @click=${() => this.setRootNode(definition, defaultRootNode("zstack"))}>Add ZStack Root</button>
+                            ${this.nodeClipboard ? html`<button @click=${() => this.pasteRootNode(definition)}>Root from clipboard</button>` : nothing}
                           </div>
                         </div>
                       `}
@@ -5255,6 +5527,7 @@ export class EpPaperEditorApp extends LitElement {
                   <label>Name <input .value=${layout.name} @input=${(event: Event) => this.updateLayout(layout.id, (current) => ({ ...current, name: (event.target as HTMLInputElement).value }))} /></label>
                   <div class="detail-danger-action">
                     <button class="danger" @click=${() => this.removeLayout(layout.id)}>Delete layout</button>
+                    <button @click=${() => this.duplicateLayout(layout.id)}>Duplicate layout</button>
                   </div>
                   <label>
                     Kind
@@ -5289,6 +5562,7 @@ export class EpPaperEditorApp extends LitElement {
                             <button @click=${() => this.setRootNode(layout, defaultRootNode("stack"))}>Add Stack Root</button>
                             <button @click=${() => this.setRootNode(layout, defaultRootNode("grid"))}>Add Grid Root</button>
                             <button @click=${() => this.setRootNode(layout, defaultRootNode("zstack"))}>Add ZStack Root</button>
+                            ${this.nodeClipboard ? html`<button @click=${() => this.pasteRootNode(layout)}>Root from clipboard</button>` : nothing}
                           </div>
                         </div>
                       `}
@@ -5310,6 +5584,7 @@ export class EpPaperEditorApp extends LitElement {
                   <label>Name <input .value=${theme.name} @input=${(event: Event) => this.updateTheme(theme.id, (current) => ({ ...current, name: (event.target as HTMLInputElement).value }))} /></label>
                   <div class="detail-danger-action">
                     <button class="danger" @click=${() => this.removeTheme(theme.id)}>Delete theme</button>
+                    <button @click=${() => this.duplicateTheme(theme.id)}>Duplicate theme</button>
                   </div>
                   <label>
                     Background fill

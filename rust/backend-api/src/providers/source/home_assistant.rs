@@ -221,10 +221,11 @@ impl SourceProvider for HomeAssistantProvider {
         state: &AppState,
         instance: &ProviderInstance,
         project: &serde_json::Value,
+        scope: &serde_json::Value,
     ) -> Result<(serde_json::Map<String, serde_json::Value>, Vec<String>), ApiError> {
         let settings = home_assistant_settings_from_instance(instance);
         let (mut results, mut warnings) =
-            resolve_meta_queries(&state.http, &settings, project, Some(&instance.id)).await;
+            resolve_meta_queries(&state.http, &settings, project, Some(&instance.id), scope).await;
         let entity_query_nodes = collect_data_query_nodes(project)
             .into_iter()
             .filter(|node| {

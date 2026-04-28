@@ -157,6 +157,7 @@ function normalizeLayoutNode(node: LayoutNode | undefined): LayoutNode | undefin
       ...node,
       dateVariableName: node.dateVariableName ?? "date",
       offsetDays: normalizeLegacyOffsetDays(current),
+      offsetDaysExpression: typeof node.offsetDaysExpression === "string" && node.offsetDaysExpression.trim() ? node.offsetDaysExpression : undefined,
       rolloverTime: typeof node.rolloverTime === "string" && node.rolloverTime.trim() ? node.rolloverTime : undefined,
       child: normalizeLayoutNode(node.child)
     };

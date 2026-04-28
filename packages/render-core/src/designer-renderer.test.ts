@@ -88,14 +88,14 @@ describe("designer renderer", () => {
           axis: "vertical",
           width: { mode: "fill" },
           height: { mode: "fill" },
-          style: { paddingPx: 0, gapPx: 0, borderToken: "none" },
+          style: { gapPx: 0, borderToken: "none" },
           children: [{
             id: "line",
             type: "primitive_instance",
             primitiveType: "line",
             width: { mode: "fill" },
             height: { mode: "fill" },
-            props: { paddingPx: 0, borderToken: "none" }
+            props: { borderToken: "none" }
           }]
         }
       }]
@@ -195,7 +195,7 @@ describe("designer renderer", () => {
               props: { valueKey: "value", minValue: 0, maxValue: 4, baselineValue: 0, barGapPx: 1, colorRole: "accent" },
               width: { mode: "fill" },
               height: { mode: "fill" },
-              style: { paddingPx: 0 }
+              style: {}
             }
           }
         }
@@ -241,7 +241,7 @@ describe("designer renderer", () => {
           props: { minValue: 0, maxValue: 3, baselineValue: 0, barGapPx: 1, colorRole: "accent" },
           width: { mode: "fill" },
           height: { mode: "fill" },
-          style: { paddingPx: 0 }
+          style: {}
         }
       }]
     });
@@ -268,7 +268,7 @@ describe("designer renderer", () => {
             props: { minValue: 0, maxValue: 3, baselineValue: 0, barGapPx: 1, colorRole: "accent" },
             width: { mode: "fill" },
             height: { mode: "fill" },
-            style: { paddingPx: 0 }
+            style: {}
           }
         }
       }]
@@ -309,7 +309,7 @@ describe("designer renderer", () => {
             props: { minValue: 0, maxValue: 1, baselineValue: 0, barGapPx: 0, colorRole: "fg", highlightColorRole: "accent", ...props },
             width: { mode: "fill" },
             height: { mode: "fill" },
-            style: { paddingPx: 0, borderToken: "none" }
+            style: { borderToken: "none" }
           }
         }]
       });
@@ -441,7 +441,7 @@ describe("designer renderer", () => {
             primitiveType: "text",
             width: { mode: "fill" },
             height: { mode: "fill" },
-            props: { text: "{{ fuzzy }}", autoFit: true, paddingPx: 0 }
+            props: { text: "{{ fuzzy }}", autoFit: true }
           }
         }
       }, {
@@ -463,7 +463,7 @@ describe("designer renderer", () => {
             primitiveType: "text",
             width: { mode: "fill" },
             height: { mode: "fill" },
-            props: { text: "{{ fuzzy }}", autoFit: true, paddingPx: 0 }
+            props: { text: "{{ fuzzy }}", autoFit: true }
           }
         }
       }]
@@ -498,7 +498,7 @@ describe("designer renderer", () => {
             primitiveType: "text",
             width: { mode: "fill" },
             height: { mode: "fill" },
-            props: { text: "{{ derivedText }}", autoFit: true, paddingPx: 0 }
+            props: { text: "{{ derivedText }}", autoFit: true }
           }
         }
       }]
@@ -533,9 +533,9 @@ describe("designer renderer", () => {
             props: {
               text: "Header",
               fontRole: "header",
-              paddingPx: 4,
               borderToken: "thin"
-            }
+            },
+            style: { padding: { top: 4, right: 4, bottom: 4, left: 4 } }
           }]
         }
       }]
@@ -567,7 +567,7 @@ describe("designer renderer", () => {
           axis: "vertical",
           width: { mode: "fill" },
           height: { mode: "fill" },
-          style: { paddingPx: 0, borderToken: "none" },
+          style: { borderToken: "none" },
           children: [{
             id: "box",
             type: "stack",
@@ -617,7 +617,7 @@ describe("designer renderer", () => {
           axis: "vertical",
           width: { mode: "fill" },
           height: { mode: "fill" },
-          style: { paddingPx: 0, borderToken: "none" },
+          style: { borderToken: "none" },
           children: [{
             id: "box",
             type: "stack",
@@ -671,9 +671,9 @@ describe("designer renderer", () => {
               text: "Header",
               fontRole: "header",
               autoFit: true,
-              placeholderText: "THIS IS A VERY LONG PLACEHOLDER",
-              paddingPx: 4
-            }
+              placeholderText: "THIS IS A VERY LONG PLACEHOLDER"
+            },
+            style: { padding: { top: 4, right: 4, bottom: 4, left: 4 } }
           }]
         }
       }]
@@ -721,7 +721,6 @@ describe("designer renderer", () => {
               props: {
                 text: "Header",
                 fontRole: "header",
-                paddingPx: 4,
                 borderToken: "thin"
               }
             }]
@@ -766,7 +765,6 @@ describe("designer renderer", () => {
               props: {
                 text: "A",
                 fixedPixelSize: 8,
-                paddingPx: 0,
                 borderToken: "none"
               }
             }, {
@@ -778,7 +776,6 @@ describe("designer renderer", () => {
               props: {
                 text: "B",
                 fixedPixelSize: 8,
-                paddingPx: 0,
                 borderToken: "none"
               }
             }, {
@@ -790,7 +787,6 @@ describe("designer renderer", () => {
               props: {
                 text: "C",
                 fixedPixelSize: 8,
-                paddingPx: 0,
                 borderToken: "none",
                 horizontalAlign: "right"
               }
@@ -838,7 +834,6 @@ describe("designer renderer", () => {
               text: "ALPHA BETA",
               overflow: "wrap",
               fixedPixelSize: 8,
-              paddingPx: 0,
               borderToken: "none"
             }
           }]
@@ -890,7 +885,6 @@ describe("designer renderer", () => {
                 text: "Some very long text that should wrap over multiple lines in this widget",
                 overflow: "wrap",
                 fixedPixelSize: 8,
-                paddingPx: 0,
                 borderToken: "none"
               }
             }]
@@ -952,7 +946,6 @@ describe("designer renderer", () => {
               text: "Some very long text that should wrap",
               overflow: "wrap",
               fixedPixelSize: 8,
-              paddingPx: 0,
               borderToken: "none"
             }
           }]
@@ -1004,7 +997,6 @@ describe("designer renderer", () => {
               text: "Header",
               overflow: "wrap",
               fixedPixelSize: 8,
-              paddingPx: 0,
               borderToken: "none"
             }
           }]
@@ -1066,7 +1058,6 @@ describe("designer renderer", () => {
                   props: {
                     text: "{{ event.start | format(\"HH:MM\") }}",
                     fixedPixelSize: 8,
-                    paddingPx: 0,
                     borderToken: "none"
                   }
                 }, {
@@ -1079,7 +1070,6 @@ describe("designer renderer", () => {
                     text: "{{ event.summary }}",
                     overflow: "wrap",
                     fixedPixelSize: 8,
-                    paddingPx: 0,
                     borderToken: "none"
                   }
                 }]
@@ -1146,7 +1136,6 @@ describe("designer renderer", () => {
               text: "WWWWWWWW",
               overflow,
               fixedPixelSize: 8,
-              paddingPx: 0,
               borderToken: "none"
             }
           }]
@@ -1225,7 +1214,6 @@ describe("designer renderer", () => {
                     text: "ALPHA BETA GAMMA",
                     overflow,
                     fixedPixelSize: 8,
-                    paddingPx: 0,
                     borderToken: "none"
                   }
                 }]
@@ -1270,7 +1258,6 @@ describe("designer renderer", () => {
               text: "Blocked",
               fontRole: "header",
               fixedPixelSize: 8,
-              paddingPx: 0,
               borderToken: "none"
             }
           }]
@@ -1336,8 +1323,7 @@ describe("designer renderer", () => {
             props: {
               text: "Title",
               fontRole: "header",
-              autoFit: false,
-              paddingPx: 0
+              autoFit: false
             }
           }]
         }
@@ -1398,8 +1384,7 @@ describe("designer renderer", () => {
             props: {
               text: "Title",
               fontRole: "normalEmphasis",
-              autoFit: false,
-              paddingPx: 0
+              autoFit: false
             }
           }]
         }
@@ -1444,7 +1429,6 @@ describe("designer renderer", () => {
               text: "half vier",
               fontRole: "header",
               autoFit: true,
-              paddingPx: 0,
               horizontalAlign: "center",
               verticalAlign: "middle"
             }
@@ -1481,10 +1465,10 @@ describe("designer renderer", () => {
             height: { mode: "fixed_px", value: 24 },
             props: {
               icon: "warning",
-              paddingPx: 2,
               horizontalAlign: "right",
               verticalAlign: "bottom"
-            }
+            },
+            style: { padding: { top: 2, right: 2, bottom: 2, left: 2 } }
           }]
         }
       }]
@@ -1526,9 +1510,9 @@ describe("designer renderer", () => {
             width: { mode: "fixed_px", value: 80 },
             height: { mode: "fixed_px", value: 24 },
             props: {
-              text: "Hi",
-              paddingPx: 2
-            }
+              text: "Hi"
+            },
+            style: { padding: { top: 2, right: 2, bottom: 2, left: 2 } }
           }]
         }
       }]
@@ -1561,7 +1545,7 @@ describe("designer renderer", () => {
           axis: "vertical",
           width: { mode: "fixed_px", value: 60 },
           height: { mode: "fixed_px", value: 40 },
-          style: { paddingPx: 4, gapPx: 4, borderToken: "none" },
+          style: { gapPx: 4, borderToken: "none" },
           children: [
             {
               id: "top",
@@ -1569,7 +1553,7 @@ describe("designer renderer", () => {
               primitiveType: "text",
               width: { mode: "fill" },
               height: { mode: "fixed_px", value: 8 },
-              props: { text: "A", paddingPx: 0 }
+              props: { text: "A" }
             },
             {
               id: "bottom",
@@ -1577,7 +1561,7 @@ describe("designer renderer", () => {
               primitiveType: "text",
               width: { mode: "fill" },
               height: { mode: "fixed_px", value: 8 },
-              props: { text: "B", paddingPx: 0 }
+              props: { text: "B" }
             }
           ]
         }
@@ -1611,7 +1595,7 @@ describe("designer renderer", () => {
           axis: "vertical",
           width: { mode: "fixed_px", value: 24 },
           height: { mode: "fixed_px", value: 16 },
-          style: { paddingPx: 0, gapPx: 0, borderToken: "none" },
+          style: { gapPx: 0, borderToken: "none" },
           children: []
         }
       }]
@@ -1646,7 +1630,7 @@ describe("designer renderer", () => {
             bindings: {},
             width: { mode: "fixed_px", value: 20 },
             height: { mode: "fixed_px", value: 12 },
-            style: { paddingPx: 0, borderToken: "none" },
+            style: { borderToken: "none" },
             child: {
               id: "bar-chart",
               type: "primitive_instance",
@@ -1654,7 +1638,7 @@ describe("designer renderer", () => {
               width: { mode: "fill" },
               height: { mode: "fill" },
               bindings: { value: "bars" },
-              props: { colorRole: "light-accent", paddingPx: 0, borderToken: "none" }
+              props: { colorRole: "light-accent", borderToken: "none" }
             }
           }]
         }
@@ -1793,7 +1777,7 @@ describe("designer renderer", () => {
             width: { mode: "fill" },
             height: { mode: "fill" },
             bindings: { entity: "{{Entity Input}}" },
-            props: { renderEntityState: true, paddingPx: 0 }
+            props: { renderEntityState: true }
           }
         }
       ],
@@ -1847,7 +1831,7 @@ describe("designer renderer", () => {
             width: { mode: "fill" },
             height: { mode: "fill" },
             bindings: { entity: "{{Entity Input}}" },
-            props: { renderEntityState: true, paddingPx: 0 }
+            props: { renderEntityState: true }
           }
         }
       ],
@@ -1914,7 +1898,7 @@ describe("designer renderer", () => {
             width: { mode: "fill" },
             height: { mode: "fill" },
             bindings: { entity: "{{Entity Input}}" },
-            props: { digits: 1, autoFit: false, paddingPx: 0, fontRole: "header" }
+            props: { digits: 1, autoFit: false, fontRole: "header" }
           }
         }
       ],
@@ -1985,7 +1969,7 @@ describe("designer renderer", () => {
                 bindings: { entity: "sensor.office_temperature" },
                 width: { mode: "fixed_px", value: 140 },
                 height: { mode: "fixed_px", value: 32 },
-                props: { digits: 1, autoFit: false, paddingPx: 0, fontRole: "header" }
+                props: { digits: 1, autoFit: false, fontRole: "header" }
               }
             ]
           }
@@ -2059,7 +2043,7 @@ describe("designer renderer", () => {
                 bindings: { entity: "sensor.office_temperature" },
                 width: { mode: "fixed_px", value: 140 },
                 height: { mode: "fixed_px", value: 32 },
-                props: { digits: 1, autoFit: false, prefix: "EUR ", suffix: " C", paddingPx: 0, fontRole: "header" }
+                props: { digits: 1, autoFit: false, prefix: "EUR ", suffix: " C", fontRole: "header" }
               }
             ]
           }
@@ -2117,7 +2101,7 @@ describe("designer renderer", () => {
               primitiveType: "text" as const,
               width: { mode: "fill" as const },
               height: { mode: "fill" as const },
-              props: { text: "{{events.0.summary}}", autoFit: false, fixedPixelSize: 8, paddingPx: 0 }
+              props: { text: "{{events.0.summary}}", autoFit: false, fixedPixelSize: 8 }
             }
           },
           {
@@ -2126,7 +2110,7 @@ describe("designer renderer", () => {
             primitiveType: "text" as const,
             width: { mode: "fill" as const },
             height: { mode: "fixed_px" as const, value: 20 },
-            props: { text: "{{events.0.summary}}", autoFit: false, fixedPixelSize: 8, paddingPx: 0 }
+            props: { text: "{{events.0.summary}}", autoFit: false, fixedPixelSize: 8 }
           }
         ]
       }
@@ -2205,7 +2189,7 @@ describe("designer renderer", () => {
               primitiveType: "text" as const,
               width: { mode: "fill" as const },
               height: { mode: "fill" as const },
-              props: { text: "{{index}} {{event.summary}}", autoFit: false, fixedPixelSize: 8, paddingPx: 0 }
+              props: { text: "{{index}} {{event.summary}}", autoFit: false, fixedPixelSize: 8 }
             }
           }
         }
@@ -2303,7 +2287,7 @@ describe("designer renderer", () => {
               primitiveType: "text" as const,
               width: { mode: "fill" as const },
               height: { mode: "fit_content" as const },
-              props: { text: "{{ event.summary }}", autoFit: false, fixedPixelSize: 8, paddingPx: 0, borderToken: "none" as const }
+              props: { text: "{{ event.summary }}", autoFit: false, fixedPixelSize: 8, borderToken: "none" as const }
             }
           }
         }
@@ -2372,7 +2356,7 @@ describe("designer renderer", () => {
               primitiveType: "text" as const,
               width: { mode: "fill" as const },
               height: { mode: "fit_content" as const },
-              props: { text: "{{ event.summary }}", autoFit: false, fixedPixelSize: 8, paddingPx: 0, borderToken: "none" as const }
+              props: { text: "{{ event.summary }}", autoFit: false, fixedPixelSize: 8, borderToken: "none" as const }
             }
           }
         }
@@ -2432,7 +2416,7 @@ describe("designer renderer", () => {
             primitiveType: "text" as const,
             width: { mode: "fill" as const },
             height: { mode: "fit_content" as const },
-            props: { text: "{{ event.summary }}", autoFit: false, fixedPixelSize: 8, paddingPx: 0, borderToken: "none" as const }
+            props: { text: "{{ event.summary }}", autoFit: false, fixedPixelSize: 8, borderToken: "none" as const }
           }
         }
       }
@@ -2489,7 +2473,7 @@ describe("designer renderer", () => {
             primitiveType: "text" as const,
             width: { mode: "fill" as const },
             height: { mode: "fill" as const },
-            props: { text: '{{ date | format("dddd") }}', autoFit: false, fixedPixelSize: 8, paddingPx: 0 }
+            props: { text: '{{ date | format("dddd") }}', autoFit: false, fixedPixelSize: 8 }
           },
           elseChild: {
             id: "else-icon",
@@ -2551,7 +2535,7 @@ describe("designer renderer", () => {
             primitiveType: "text" as const,
             width: { mode: "fill" as const },
             height: { mode: "fixed_px" as const, value: 16 },
-            props: { text: '{{ event.start | format("HH:MM") }}', autoFit: false, fixedPixelSize: 8, paddingPx: 0 }
+            props: { text: '{{ event.start | format("HH:MM") }}', autoFit: false, fixedPixelSize: 8 }
           }
         }
       }
@@ -2593,7 +2577,7 @@ describe("designer renderer", () => {
               primitiveType: "text" as const,
               width: { mode: "fill" as const },
               height: { mode: "fixed_px" as const, value: 16 },
-              props: { text: "09:05", autoFit: false, fixedPixelSize: 8, paddingPx: 0 }
+              props: { text: "09:05", autoFit: false, fixedPixelSize: 8 }
             }
           }
         }
@@ -2651,7 +2635,7 @@ describe("designer renderer", () => {
             primitiveType: "text",
             width: { mode: "fill" },
             height: { mode: "fixed_px", value: 16 },
-            props: { text: '{{ date | format("dddd") }}', autoFit: false, fixedPixelSize: 8, paddingPx: 0 }
+            props: { text: '{{ date | format("dddd") }}', autoFit: false, fixedPixelSize: 8 }
           }
         }
       }]
@@ -2713,7 +2697,6 @@ describe("designer renderer", () => {
                 text: "CLIPPED",
                 autoFit: false,
                 fixedPixelSize: 24,
-                paddingPx: 0,
                 horizontalAlign: "left" as const,
                 verticalAlign: "top" as const
               }

@@ -253,11 +253,9 @@ export interface SizeSpec {
   mode: SizeSpecMode;
   value?: number;
   fontRole?: keyof FontPresetValues;
-  paddingPx?: number;
 }
 
 export interface LayoutStyle {
-  paddingPx?: number;
   padding?: Partial<EdgeInsets>;
   gapPx?: number;
   borderToken?: BorderToken;
@@ -345,6 +343,7 @@ export interface DataQueryLayoutNode extends LayoutNodeBase {
   calendarEntityIds: string[];
   entityIds?: string[];
   offsetDays: number;
+  offsetDaysExpression?: string;
   rolloverTime?: string;
   locationId?: string;
   latitude?: number;
@@ -609,8 +608,6 @@ export interface WidgetProps {
   overflow?: "wrap" | "hide" | "ellipsis";
   lineSpacingPx?: number;
   renderEntityState?: boolean;
-  paddingPx?: number;
-  padding?: Partial<EdgeInsets>;
   borderToken?: BorderToken;
   fontRole?: FontRole;
   fixedPixelSize?: number;

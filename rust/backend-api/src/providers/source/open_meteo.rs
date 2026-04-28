@@ -720,6 +720,7 @@ impl SourceProvider for OpenMeteoProvider {
         state: &AppState,
         instance: &ProviderInstance,
         project: &Value,
+        _scope: &Value,
     ) -> Result<(serde_json::Map<String, Value>, Vec<String>), ApiError> {
         let mut results = serde_json::Map::new();
         let mut warnings = Vec::new();

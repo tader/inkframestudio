@@ -18,7 +18,7 @@ function makeRootNode(title: string) {
     axis: "vertical" as const,
     width: { mode: "fill" as const },
     height: { mode: "fill" as const },
-    style: { paddingPx: 0, gapPx: 0, borderToken: "none" as const },
+    style: { gapPx: 0, borderToken: "none" as const },
     children: [
       {
         id: `header-${title.toLowerCase().replace(/\s+/g, "-")}`,
@@ -29,10 +29,9 @@ function makeRootNode(title: string) {
         props: {
           text: title,
           fontRole: "header" as const,
-          paddingPx: 4,
           horizontalAlign: "left" as const
         },
-        style: { paddingPx: 0, borderToken: "none" as const }
+        style: { borderToken: "none" as const }
       },
       {
         id: `temperature-${title.toLowerCase().replace(/\s+/g, "-")}`,
@@ -49,7 +48,7 @@ function makeRootNode(title: string) {
           horizontalAlign: "center" as const,
           verticalAlign: "middle" as const
         },
-        style: { paddingPx: 4, borderToken: "none" as const }
+        style: { borderToken: "none" as const }
       },
       {
         id: `status-${title.toLowerCase().replace(/\s+/g, "-")}`,
@@ -60,10 +59,9 @@ function makeRootNode(title: string) {
         props: {
           text: "Starter layout",
           fontRole: "normal" as const,
-          paddingPx: 4,
           horizontalAlign: "center" as const
         },
-        style: { paddingPx: 0, borderToken: "none" as const }
+        style: { borderToken: "none" as const }
       }
     ]
   };

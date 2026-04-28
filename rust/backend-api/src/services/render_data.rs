@@ -1,3 +1,4 @@
+use boa_engine::{Context as BoaContext, Source};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use futures::stream::{self, StreamExt};
 use serde_json::{json, Value};
@@ -60,6 +61,96 @@ fn build_local_calendar_window(
     let start = midnight + chrono::Duration::days(effective_offset_days);
     let end = start + chrono::Duration::days(1);
     (start, end, format_local_date(start), effective_offset_days)
+}
+
+fn simple_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first == '_' || first == '$' || first.is_ascii_alphabetic()) {
+        return false;
+    }
+    chars.all(|char| char == '_' || char == '$' || char.is_ascii_alphanumeric())
+}
+
+fn scope_declarations(scope: &Value) -> String {
+    let mut declarations = String::new();
+    if let Some(object) = scope.as_object() {
+        for key in object.keys().filter(|key| simple_identifier(key)) {
+            declarations.push_str("const ");
+            declarations.push_str(key);
+            declarations.push_str(" = scope[");
+            declarations.push_str(&serde_json::to_string(key).unwrap_or_else(|_| "\"\"".into()));
+            declarations.push_str("];\n");
+        }
+    }
+    declarations
+}
+
+fn scope_value(scope: &Value, path: &str) -> Option<Value> {
+    if let Some(object) = scope.as_object() {
+        if let Some(value) = object.get(path) {
+            return Some(value.clone());
+        }
+    }
+    let mut current = scope;
+    for segment in path.split('.') {
+        current = current.get(segment)?;
+    }
+    Some(current.clone())
+}
+
+fn number_from_value(value: &Value) -> Option<i64> {
+    match value {
+        Value::Number(value) => value
+            .as_i64()
+            .or_else(|| value.as_f64().map(|value| value.round() as i64)),
+        Value::String(value) => value
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .map(|value| value.round() as i64),
+        Value::Bool(value) => Some(if *value { 1 } else { 0 }),
+        _ => None,
+    }
+}
+
+fn evaluate_js_value(expression: &str, scope: &Value) -> Result<Value, ApiError> {
+    let mut context = BoaContext::default();
+    let scope_json =
+        serde_json::to_string(scope).map_err(|error| ApiError::internal(error.to_string()))?;
+    let source = format!(
+        "(function(){{ const scope = {scope_json}; {decls} return JSON.stringify({expression}); }})()",
+        decls = scope_declarations(scope)
+    );
+    let value = context
+        .eval(Source::from_bytes(source.as_bytes()))
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    let text = value
+        .to_string(&mut context)
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .to_std_string_escaped();
+    serde_json::from_str(&text).map_err(|error| ApiError::internal(error.to_string()))
+}
+
+fn resolve_offset_days(node: &Value, scope: &Value) -> Result<i64, String> {
+    let fallback = node.get("offsetDays").and_then(Value::as_i64).unwrap_or(0);
+    let Some(expression) = node
+        .get("offsetDaysExpression")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(fallback);
+    };
+    if let Some(value) = scope_value(scope, expression).and_then(|value| number_from_value(&value))
+    {
+        return Ok(value);
+    }
+    let value = evaluate_js_value(expression, scope).map_err(|error| error.message)?;
+    number_from_value(&value)
+        .ok_or_else(|| format!("Offset days expression `{expression}` did not resolve to a number"))
 }
 
 fn extract_event_date_string(value: &Value) -> Option<String> {
@@ -345,6 +436,14 @@ fn scan_layout_requirements_node(
         }
         "data_query" => {
             requirements.needs_data_queries = true;
+            if node
+                .get("offsetDaysExpression")
+                .and_then(Value::as_str)
+                .map(|value| value.contains("entities"))
+                .unwrap_or(false)
+            {
+                requirements.needs_live_entities = true;
+            }
             scan_layout_requirements_node(
                 project,
                 node.get("child"),
@@ -444,6 +543,7 @@ pub(crate) async fn resolve_meta_queries(
     settings: &HomeAssistantSettingsStored,
     project: &Value,
     provider_instance_id: Option<&str>,
+    scope: &Value,
 ) -> (serde_json::Map<String, Value>, Vec<String>) {
     let mut results = serde_json::Map::new();
     let mut warnings = Vec::new();
@@ -460,7 +560,13 @@ pub(crate) async fn resolve_meta_queries(
         if id.is_empty() {
             continue;
         }
-        let offset_days = node.get("offsetDays").and_then(Value::as_i64).unwrap_or(0);
+        let offset_days = match resolve_offset_days(&node, scope) {
+            Ok(value) => value,
+            Err(error) => {
+                warnings.push(format!("Calendar query {id} offset failed. {error}"));
+                node.get("offsetDays").and_then(Value::as_i64).unwrap_or(0)
+            }
+        };
         let rollover_time = node.get("rolloverTime").and_then(Value::as_str);
         let (start, end, date, effective_offset_days) =
             build_local_calendar_window(offset_days, rollover_time);
@@ -519,6 +625,7 @@ pub(crate) async fn resolve_meta_queries(
                     "date": date,
                     "queryKind": "calendar_events",
                     "offsetDays": offset_days,
+                    "offsetDaysExpression": node.get("offsetDaysExpression").and_then(Value::as_str),
                     "effectiveOffsetDays": effective_offset_days,
                     "rolloverTime": rollover_time
                 }
@@ -596,6 +703,12 @@ pub(crate) async fn resolve_project_render_data_value(
     } else {
         serde_json::Map::new()
     };
+    let base_scope = json!({
+        "now": Local::now().to_rfc3339(),
+        "entities": entities,
+        "queries": {},
+        "metaQueries": {}
+    });
     let (meta_queries, meta_warnings) = if requirements.needs_data_queries {
         let referenced_sources = collect_data_query_nodes(project)
             .into_iter()
@@ -630,7 +743,7 @@ pub(crate) async fn resolve_project_render_data_value(
                 continue;
             }
             let (items, provider_warnings) = provider
-                .resolve_meta_queries(state, &instance, project)
+                .resolve_meta_queries(state, &instance, project, &base_scope)
                 .await
                 .unwrap_or_default();
             merged.extend(items);
@@ -647,11 +760,59 @@ pub(crate) async fn resolve_project_render_data_value(
     };
     Ok((
         json!({
-            "now": Local::now().to_rfc3339(),
-            "entities": entities,
+            "now": base_scope.get("now").cloned().unwrap_or_else(|| json!(Local::now().to_rfc3339())),
+            "entities": base_scope.get("entities").cloned().unwrap_or_else(|| json!({})),
             "queries": {},
             "metaQueries": meta_queries
         }),
         message,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offset_days_expression_resolves_from_scope_variable() {
+        let node = json!({
+            "offsetDays": 0,
+            "offsetDaysExpression": "Number(entities[\"sensor.calendar_offset\"].state) + 1"
+        });
+        let scope = json!({
+            "entities": {
+                "sensor.calendar_offset": { "state": "2" }
+            }
+        });
+
+        assert_eq!(resolve_offset_days(&node, &scope).unwrap(), 3);
+    }
+
+    #[test]
+    fn offset_days_expression_falls_back_to_static_value_when_empty() {
+        let node = json!({
+            "offsetDays": 2,
+            "offsetDaysExpression": ""
+        });
+
+        assert_eq!(resolve_offset_days(&node, &json!({})).unwrap(), 2);
+    }
+
+    #[test]
+    fn offset_days_expression_requests_live_entities_when_needed() {
+        let project = json!({
+            "layoutDefinitions": [{
+                "rootNode": {
+                    "id": "query",
+                    "type": "data_query",
+                    "queryKind": "calendar_events",
+                    "offsetDaysExpression": "Number(entities[\"sensor.calendar_offset\"].state)"
+                }
+            }]
+        });
+
+        let requirements = render_data_requirements(&project, None);
+        assert!(requirements.needs_data_queries);
+        assert!(requirements.needs_live_entities);
+    }
 }

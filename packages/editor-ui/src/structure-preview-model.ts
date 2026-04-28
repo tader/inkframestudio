@@ -284,6 +284,16 @@ export function findInspectionNodeAtPoint(node: LayoutInspectionNode | undefined
   return node;
 }
 
+export function findInspectionNodesAtPoint(node: LayoutInspectionNode | undefined, x: number, y: number): LayoutInspectionNode[] {
+  if (!node || !containsPoint(node, x, y)) {
+    return [];
+  }
+  return [
+    node,
+    ...node.children.flatMap((child) => findInspectionNodesAtPoint(child, x, y))
+  ];
+}
+
 export function findInspectionPathAtPoint(
   node: LayoutInspectionNode | undefined,
   x: number,

@@ -175,7 +175,12 @@
             },
             "style": {
               "borderToken": "none",
-              "paddingPx": 4
+              "padding": {
+                "top": 4,
+                "right": 4,
+                "bottom": 4,
+                "left": 4
+              }
             },
             "type": "primitive_instance",
             "width": {
@@ -196,7 +201,6 @@
               "fontRole": "normalEmphasis",
               "horizontalAlign": "center",
               "overflow": "wrap",
-              "paddingPx": 4,
               "placeholderText": "Placeholder",
               "renderEntityState": false,
               "text": "Dandelight is aan!",
@@ -204,7 +208,12 @@
             },
             "style": {
               "borderToken": "none",
-              "paddingPx": 4
+              "padding": {
+                "top": 4,
+                "right": 4,
+                "bottom": 4,
+                "left": 4
+              }
             },
             "type": "primitive_instance",
             "width": {
@@ -219,7 +228,6 @@
         "style": {
           "borderToken": "none",
           "gapPx": 0,
-          "paddingPx": 0,
           "themeId": "soft-fill"
         },
         "type": "stack",
@@ -244,8 +252,7 @@
             "inputBindings": {},
             "inputValues": {},
             "style": {
-              "borderToken": "none",
-              "paddingPx": 0
+              "borderToken": "none"
             },
             "type": "compound_ref",
             "width": {
@@ -259,8 +266,7 @@
         "id": "node-ff9274fe",
         "style": {
           "borderToken": "none",
-          "gapPx": 0,
-          "paddingPx": 0
+          "gapPx": 0
         },
         "type": "stack",
         "width": {
@@ -284,8 +290,7 @@
             "inputBindings": {},
             "inputValues": {},
             "style": {
-              "borderToken": "none",
-              "paddingPx": 0
+              "borderToken": "none"
             },
             "type": "compound_ref",
             "width": {
@@ -299,8 +304,7 @@
         "id": "node-543781a4",
         "style": {
           "borderToken": "none",
-          "gapPx": 0,
-          "paddingPx": 0
+          "gapPx": 0
         },
         "type": "stack",
         "width": {
@@ -705,15 +709,13 @@
               "autoFit": false,
               "fontRole": "header",
               "horizontalAlign": "center",
-              "paddingPx": 4,
               "placeholderText": "Placeholder",
               "renderEntityState": false,
               "text": "{{Title}}",
               "verticalAlign": "top"
             },
             "style": {
-              "borderToken": "none",
-              "paddingPx": 0
+              "borderToken": "none"
             },
             "type": "primitive_instance",
             "width": {
@@ -734,7 +736,6 @@
               "digits": 1,
               "fontRole": "normal",
               "horizontalAlign": "center",
-              "paddingPx": 0,
               "placeholderText": "AA",
               "placeholderValue": "188",
               "renderEntityState": false,
@@ -744,7 +745,12 @@
             },
             "style": {
               "borderToken": "none",
-              "paddingPx": 4
+              "padding": {
+                "top": 4,
+                "right": 4,
+                "bottom": 4,
+                "left": 4
+              }
             },
             "type": "primitive_instance",
             "width": {
@@ -765,7 +771,6 @@
               "digits": 0,
               "fontRole": "normal",
               "horizontalAlign": "center",
-              "paddingPx": 0,
               "placeholderText": "Placeholder",
               "placeholderValue": "188",
               "prefix": "",
@@ -776,7 +781,12 @@
             },
             "style": {
               "borderToken": "none",
-              "paddingPx": 4
+              "padding": {
+                "top": 4,
+                "right": 4,
+                "bottom": 4,
+                "left": 4
+              }
             },
             "type": "primitive_instance",
             "width": {
@@ -790,8 +800,7 @@
         "id": "node-f92db22a",
         "style": {
           "borderToken": "none",
-          "gapPx": 0,
-          "paddingPx": 0
+          "gapPx": 0
         },
         "type": "stack",
         "width": {
@@ -822,7 +831,6 @@
                   "autoFit": true,
                   "horizontalAlign": "left",
                   "lineDirection": "diag_up",
-                  "paddingPx": 0,
                   "placeholderText": "Placeholder",
                   "renderEntityState": false,
                   "text": "Text",
@@ -830,7 +838,12 @@
                 },
                 "style": {
                   "borderToken": "none",
-                  "paddingPx": 4
+                  "padding": {
+                    "top": 4,
+                    "right": 4,
+                    "bottom": 4,
+                    "left": 4
+                  }
                 },
                 "type": "primitive_instance",
                 "width": {
@@ -845,12 +858,16 @@
                 "id": "node-3ff29644",
                 "primitiveType": "line",
                 "props": {
-                  "lineDirection": "diag_down",
-                  "paddingPx": 0
+                  "lineDirection": "diag_down"
                 },
                 "style": {
                   "borderToken": "none",
-                  "paddingPx": 4
+                  "padding": {
+                    "top": 4,
+                    "right": 4,
+                    "bottom": 4,
+                    "left": 4
+                  }
                 },
                 "type": "primitive_instance",
                 "width": {
@@ -870,13 +887,17 @@
                   "autoFit": true,
                   "digits": 1,
                   "horizontalAlign": "center",
-                  "paddingPx": 4,
                   "placeholderValue": "88.8",
                   "verticalAlign": "middle"
                 },
                 "style": {
                   "borderToken": "none",
-                  "paddingPx": 4
+                  "padding": {
+                    "top": 4,
+                    "right": 4,
+                    "bottom": 4,
+                    "left": 4
+                  }
                 },
                 "type": "primitive_instance",
                 "width": {
@@ -891,8 +912,7 @@
             "id": "node-d74c8f11",
             "style": {
               "borderToken": "none",
-              "gapPx": 0,
-              "paddingPx": 0
+              "gapPx": 0
             },
             "type": "zstack",
             "width": {
@@ -915,7 +935,6 @@
                   "autoFit": false,
                   "fontRole": "header",
                   "horizontalAlign": "center",
-                  "paddingPx": 4,
                   "placeholderText": "Placeholder",
                   "renderEntityState": false,
                   "text": "Text",
@@ -923,7 +942,12 @@
                 },
                 "style": {
                   "borderToken": "none",
-                  "paddingPx": 4
+                  "padding": {
+                    "top": 4,
+                    "right": 4,
+                    "bottom": 4,
+                    "left": 4
+                  }
                 },
                 "type": "primitive_instance",
                 "width": {
@@ -944,8 +968,7 @@
                   "input-eb402e73": "Attic"
                 },
                 "style": {
-                  "borderToken": "thin",
-                  "paddingPx": 0
+                  "borderToken": "thin"
                 },
                 "type": "compound_ref",
                 "width": {
@@ -959,8 +982,7 @@
             "id": "node-c0b4496a",
             "style": {
               "borderToken": "none",
-              "gapPx": 0,
-              "paddingPx": 0
+              "gapPx": 0
             },
             "type": "stack",
             "width": {
@@ -974,8 +996,7 @@
         "id": "node-6d3408af",
         "style": {
           "borderToken": "none",
-          "gapPx": 0,
-          "paddingPx": 0
+          "gapPx": 0
         },
         "type": "stack",
         "width": {
@@ -1020,7 +1041,6 @@
                         "autoFit": false,
                         "fontRole": "header",
                         "horizontalAlign": "left",
-                        "paddingPx": 0,
                         "placeholderText": "Placeholder",
                         "renderEntityState": false,
                         "text": "{{date |format(\"dddd\") |title}}",
@@ -1028,7 +1048,12 @@
                       },
                       "style": {
                         "borderToken": "none",
-                        "paddingPx": 4
+                        "padding": {
+                          "top": 4,
+                          "right": 4,
+                          "bottom": 4,
+                          "left": 4
+                        }
                       },
                       "type": "primitive_instance",
                       "width": {
@@ -1048,7 +1073,6 @@
                         "autoFit": false,
                         "fontRole": "header",
                         "horizontalAlign": "right",
-                        "paddingPx": 0,
                         "placeholderText": "Placeholder",
                         "renderEntityState": false,
                         "text": "{{date |format(\"d mmmm\") |title}}",
@@ -1056,7 +1080,12 @@
                       },
                       "style": {
                         "borderToken": "none",
-                        "paddingPx": 4
+                        "padding": {
+                          "top": 4,
+                          "right": 4,
+                          "bottom": 4,
+                          "left": 4
+                        }
                       },
                       "type": "primitive_instance",
                       "width": {
@@ -1071,8 +1100,7 @@
                   "id": "node-9b9635c8",
                   "style": {
                     "borderToken": "none",
-                    "gapPx": 0,
-                    "paddingPx": 0
+                    "gapPx": 0
                   },
                   "type": "stack",
                   "width": {
@@ -1102,7 +1130,6 @@
                                 "autoFit": false,
                                 "fontRole": "normal",
                                 "horizontalAlign": "left",
-                                "paddingPx": 0,
                                 "placeholderText": "Placeholder",
                                 "renderEntityState": false,
                                 "text": "{{ event.start | format(\"HH:MM\") }}",
@@ -1110,8 +1137,13 @@
                               },
                               "style": {
                                 "borderToken": "none",
-                                "paddingPx": 4,
-                                "themeId": "theme-d815117a"
+                                "themeId": "theme-d815117a",
+                                "padding": {
+                                  "top": 4,
+                                  "right": 4,
+                                  "bottom": 4,
+                                  "left": 4
+                                }
                               },
                               "type": "primitive_instance",
                               "width": {
@@ -1132,7 +1164,6 @@
                                 "autoFit": false,
                                 "horizontalAlign": "left",
                                 "overflow": "ellipsis",
-                                "paddingPx": 0,
                                 "placeholderText": "Placeholder",
                                 "renderEntityState": false,
                                 "text": "{{ event.summary }}",
@@ -1140,7 +1171,12 @@
                               },
                               "style": {
                                 "borderToken": "none",
-                                "paddingPx": 4
+                                "padding": {
+                                  "top": 4,
+                                  "right": 4,
+                                  "bottom": 4,
+                                  "left": 4
+                                }
                               },
                               "type": "primitive_instance",
                               "width": {
@@ -1154,8 +1190,7 @@
                           "id": "node-9fc52d8a",
                           "style": {
                             "borderToken": "none",
-                            "gapPx": 0,
-                            "paddingPx": 0
+                            "gapPx": 0
                           },
                           "type": "stack",
                           "width": {
@@ -1168,8 +1203,7 @@
                         "id": "node-39b52f8e",
                         "style": {
                           "borderToken": "none",
-                          "gapPx": 0,
-                          "paddingPx": 0
+                          "gapPx": 0
                         },
                         "thenChild": {
                           "axis": "horizontal",
@@ -1188,7 +1222,6 @@
                                 "fontRole": "normalEmphasis",
                                 "horizontalAlign": "left",
                                 "overflow": "ellipsis",
-                                "paddingPx": 0,
                                 "placeholderText": "Placeholder",
                                 "renderEntityState": false,
                                 "text": "{{ event.summary }}",
@@ -1196,8 +1229,13 @@
                               },
                               "style": {
                                 "borderToken": "none",
-                                "paddingPx": 4,
-                                "themeId": "inherit"
+                                "themeId": "inherit",
+                                "padding": {
+                                  "top": 4,
+                                  "right": 4,
+                                  "bottom": 4,
+                                  "left": 4
+                                }
                               },
                               "type": "primitive_instance",
                               "width": {
@@ -1211,8 +1249,7 @@
                           "id": "node-8b6a8aca",
                           "style": {
                             "borderToken": "none",
-                            "gapPx": 0,
-                            "paddingPx": 0
+                            "gapPx": 0
                           },
                           "type": "stack",
                           "width": {
@@ -1231,8 +1268,7 @@
                     "id": "node-25196ab2",
                     "style": {
                       "borderToken": "none",
-                      "gapPx": 0,
-                      "paddingPx": 0
+                      "gapPx": 0
                     },
                     "type": "stack",
                     "width": {
@@ -1249,8 +1285,7 @@
                   "maxItems": 30,
                   "style": {
                     "borderToken": "none",
-                    "gapPx": 0,
-                    "paddingPx": 0
+                    "gapPx": 0
                   },
                   "type": "foreach",
                   "width": {
@@ -1264,8 +1299,7 @@
               "id": "node-be2cdbf5",
               "style": {
                 "borderToken": "none",
-                "gapPx": 0,
-                "paddingPx": 0
+                "gapPx": 0
               },
               "type": "stack",
               "width": {
@@ -1283,8 +1317,7 @@
             "rolloverTime": "22:00",
             "style": {
               "borderToken": "none",
-              "gapPx": 0,
-              "paddingPx": 0
+              "gapPx": 0
             },
             "type": "data_query",
             "variableName": "events",
@@ -1300,7 +1333,6 @@
         "style": {
           "borderToken": "none",
           "gapPx": 0,
-          "paddingPx": 0,
           "themeId": "inherit"
         },
         "type": "stack",
@@ -1338,7 +1370,6 @@
                       "fontRole": "normalEmphasis",
                       "horizontalAlign": "center",
                       "overflow": "wrap",
-                      "paddingPx": 0,
                       "placeholderText": "kwart over",
                       "renderEntityState": false,
                       "text": "{{ minutes_line }}",
@@ -1346,7 +1377,12 @@
                     },
                     "style": {
                       "borderToken": "none",
-                      "paddingPx": 4
+                      "padding": {
+                        "top": 4,
+                        "right": 4,
+                        "bottom": 4,
+                        "left": 4
+                      }
                     },
                     "type": "primitive_instance",
                     "width": {
@@ -1366,7 +1402,6 @@
                       "autoFit": true,
                       "horizontalAlign": "center",
                       "overflow": "wrap",
-                      "paddingPx": 0,
                       "placeholderText": "kwart over",
                       "renderEntityState": false,
                       "text": "{{ hours_line }}",
@@ -1374,7 +1409,12 @@
                     },
                     "style": {
                       "borderToken": "none",
-                      "paddingPx": 4
+                      "padding": {
+                        "top": 4,
+                        "right": 4,
+                        "bottom": 4,
+                        "left": 4
+                      }
                     },
                     "type": "primitive_instance",
                     "width": {
@@ -1388,8 +1428,7 @@
                 "id": "node-a9d9e5b5",
                 "style": {
                   "borderToken": "none",
-                  "gapPx": 0,
-                  "paddingPx": 0
+                  "gapPx": 0
                 },
                 "type": "stack",
                 "width": {
@@ -1402,8 +1441,7 @@
               "id": "node-47c53031",
               "style": {
                 "borderToken": "none",
-                "gapPx": 0,
-                "paddingPx": 0
+                "gapPx": 0
               },
               "thenChild": {
                 "axis": "vertical",
@@ -1421,7 +1459,6 @@
                       "autoFit": true,
                       "horizontalAlign": "center",
                       "overflow": "wrap",
-                      "paddingPx": 0,
                       "placeholderText": "kwart over",
                       "renderEntityState": false,
                       "text": "{{ hours_line }}",
@@ -1429,7 +1466,12 @@
                     },
                     "style": {
                       "borderToken": "none",
-                      "paddingPx": 4
+                      "padding": {
+                        "top": 4,
+                        "right": 4,
+                        "bottom": 4,
+                        "left": 4
+                      }
                     },
                     "type": "primitive_instance",
                     "width": {
@@ -1443,8 +1485,7 @@
                 "id": "node-359aafd6",
                 "style": {
                   "borderToken": "none",
-                  "gapPx": 0,
-                  "paddingPx": 0
+                  "gapPx": 0
                 },
                 "type": "stack",
                 "width": {
@@ -1464,8 +1505,7 @@
             "source": "const OFFSET_SECONDS = 60;\n\nconst minutes_map = [\n  \"\",             // 0 → exact hour\n  \"vijf over\",    // 5\n  \"tien over\",    // 10\n  \"kwart over\",   // 15\n  \"tien voor\",    // 20\n  \"vijf voor\",    // 25\n  \"\",             // 30 → handled as \"half\"\n  \"vijf over\",    // 35\n  \"tien over\",    // 40\n  \"kwart voor\",   // 45\n  \"tien voor\",    // 50\n  \"vijf voor\",    // 55\n];\n\nconst hours_text = [\n  \"twaalf\",\n  \"één\",\n  \"twee\",\n  \"drie\",\n  \"vier\",\n  \"vijf\",\n  \"zes\",\n  \"zeven\",\n  \"acht\",\n  \"negen\",\n  \"tien\",\n  \"elf\",\n];\n\nconst now = new Date(Date.now() + OFFSET_SECONDS * 1000);\nconst hours = now.getHours();\nconst minutes = now.getMinutes();\nconst seconds = now.getSeconds();\n\n// nearest 5-minute bucket\nconst index = Math.round((minutes + seconds / 60) / 5) % 12;\n\n// determine hour base\nconst isHalfOrAfter = index >= 4; // from 20 min onward → next hour\nconst hourIndex = (hours + (isHalfOrAfter ? 1 : 0)) % 12;\n\n// build hours_line\nlet hours_line;\nif (index === 6) {\n  // exactly half\n  hours_line = `half ${hours_text[hourIndex]}`;\n} else if (index > 3 && index < 9) {\n  // around half (20–40)\n  hours_line = `half ${hours_text[hourIndex]}`;\n} else {\n  // normal hour reference\n  hours_line = hours_text[hourIndex];\n}\n\n// minutes_line\nlet minutes_line = minutes_map[index];\n\n// special case: exact hour\nif (index === 0) {\n  hours_line = `${hours_text[hours % 12]} uur`;\n  minutes_line = \"\";\n}\n\nreturn {\n  minutes_line,\n  hours_line,\n};\n",
             "style": {
               "borderToken": "none",
-              "gapPx": 0,
-              "paddingPx": 0
+              "gapPx": 0
             },
             "type": "script",
             "width": {
@@ -1479,8 +1519,7 @@
         "id": "node-828e12f0",
         "style": {
           "borderToken": "none",
-          "gapPx": 0,
-          "paddingPx": 0
+          "gapPx": 0
         },
         "type": "stack",
         "width": {

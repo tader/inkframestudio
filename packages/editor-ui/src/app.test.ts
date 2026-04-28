@@ -251,7 +251,8 @@ describe("epaper editor app", () => {
         return new Response(
           JSON.stringify([
             { entityId: "calendar.family", friendlyName: "Family Calendar", domain: "calendar" },
-            { entityId: "sensor.temp", friendlyName: "Temp", domain: "sensor", unit: "C" }
+            { entityId: "sensor.temp", friendlyName: "Temp", domain: "sensor", unit: "C" },
+            { entityId: "sensor.outdoor_temp", friendlyName: "Outdoor Temp", domain: "sensor", unit: "C" }
           ]),
           { status: 200 }
         );
@@ -805,7 +806,7 @@ describe("epaper editor app", () => {
       primitiveType: "text",
       width: { mode: "fill" },
       height: { mode: "fill" },
-      style: { paddingPx: 4, borderToken: "none" },
+      style: { borderToken: "none" },
       bindings: { entity: "" },
       props: {
         text: "Text",
@@ -814,8 +815,7 @@ describe("epaper editor app", () => {
         horizontalAlign: "left",
         verticalAlign: "top",
         overflow: "wrap",
-        renderEntityState: false,
-        paddingPx: 4
+        renderEntityState: false
       }
     });
     if (widget?.rootNode) {
@@ -943,6 +943,7 @@ describe("epaper editor app", () => {
     expect(inspectorLabelTexts(element.shadowRoot).some((text) => text.startsWith("Theme override"))).toBe(false);
     expect(inputInLabel<HTMLSelectElement>(element.shadowRoot, "Source", "select").textContent).toContain("Home Assistant");
     expect(element.shadowRoot.textContent).toContain("Calendar entities");
+    expect(element.shadowRoot.textContent).toContain("Offset days expression");
     expect(element.shadowRoot.textContent).toContain("Family Calendar");
     expect(element.shadowRoot.textContent).not.toContain("Forecast days");
 
@@ -953,18 +954,25 @@ describe("epaper editor app", () => {
     expect(dataQuery()?.queryKind).toBe("entity_states");
     expect(dataQuery()?.sourceProviderInstanceId).toBe("home-assistant-default");
     expect(element.shadowRoot.textContent).toContain("Entities");
-    expect(element.shadowRoot.textContent).toContain("Temp");
+    expect(element.shadowRoot.textContent).toContain("Search to add entities");
+    expect(element.shadowRoot.textContent).not.toContain("Outdoor Temp");
     expect(element.shadowRoot.textContent).not.toContain("Calendar entities");
     expect(element.shadowRoot.textContent).not.toContain("Forecast days");
 
-    const entitySelect = inputInLabel<HTMLSelectElement>(element.shadowRoot, "Entities", "select");
-    Array.from(entitySelect.options).forEach((option) => {
-      option.selected = option.value === "sensor.temp";
-    });
-    entitySelect.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    setInputValue(inputInLabel<HTMLInputElement>(element.shadowRoot, "Search entities", "input"), "temp");
+    await flush();
+    await element.updateComplete;
+    expect(element.shadowRoot.textContent).toContain("Temp");
+    expect(element.shadowRoot.textContent).toContain("Outdoor Temp");
+    clickButton(element.shadowRoot, "Add");
     await flush();
     await element.updateComplete;
     expect(dataQuery()?.entityIds).toEqual(["sensor.temp"]);
+    expect(element.shadowRoot.textContent).toContain("Temp (sensor.temp)");
+    clickButton(element.shadowRoot, "Remove");
+    await flush();
+    await element.updateComplete;
+    expect(dataQuery()?.entityIds).toEqual([]);
 
     setSelectValue(inputInLabel<HTMLSelectElement>(element.shadowRoot, "Query type", "select"), "weather_forecast");
     await flush();
@@ -1222,6 +1230,95 @@ describe("epaper editor app", () => {
 
     expect(element.shadowRoot.textContent).toContain("New Theme");
     expect(element.shadowRoot.textContent).toContain("Border color");
+  });
+
+  it("duplicates compound widgets, layouts, and themes", async () => {
+    window.location.hash = "#/widgets";
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    clickButton(element.shadowRoot, "Add compound");
+    await flush();
+    await element.updateComplete;
+    clickButton(element.shadowRoot, "Duplicate compound widget");
+    await flush();
+    await element.updateComplete;
+    const appState = element as unknown as TestEditorElement & {
+      project: TestEditorElement["project"] & { layoutDefinitions?: Array<{ id: string; name: string }>; themes?: Array<{ id: string; name: string }> };
+      activePage: string;
+      selectedLayoutId: string;
+      selectedThemeId: string;
+    };
+    expect(appState.project.widgetDefinitions?.filter((entry) => entry.name.includes("New Compound Widget")).length).toBe(2);
+    expect(new Set(appState.project.widgetDefinitions?.map((entry) => entry.id)).size).toBe(appState.project.widgetDefinitions?.length);
+
+    appState.activePage = "layouts";
+    appState.requestUpdate();
+    await flush();
+    await element.updateComplete;
+    clickButton(element.shadowRoot, "Add layout");
+    await flush();
+    await element.updateComplete;
+    clickButton(element.shadowRoot, "Duplicate layout");
+    await flush();
+    await element.updateComplete;
+    expect(appState.project.layoutDefinitions?.some((entry) => entry.name === "New Layout copy")).toBe(true);
+
+    appState.activePage = "themes";
+    appState.requestUpdate();
+    await flush();
+    await element.updateComplete;
+    clickButton(element.shadowRoot, "Add theme");
+    await flush();
+    await element.updateComplete;
+    clickButton(element.shadowRoot, "Duplicate theme");
+    await flush();
+    await element.updateComplete;
+    expect(appState.project.themes?.some((entry) => entry.name === "New Theme copy")).toBe(true);
+  });
+
+  it("duplicates and copies widget nodes from clipboard", async () => {
+    window.location.hash = "#/widgets";
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    clickButton(element.shadowRoot, "Add compound");
+    await flush();
+    await element.updateComplete;
+
+    const appState = element as unknown as TestEditorElement;
+    const widget = appState.project.widgetDefinitions?.find((entry) => entry.id === appState.selectedWidgetDefinitionId);
+    const firstText = widget?.rootNode?.children?.[0];
+    appState.selectedNodeId = firstText?.id ?? "";
+    appState.requestUpdate();
+    await flush();
+    await element.updateComplete;
+
+    clickButton(element.shadowRoot, "Duplicate node");
+    await flush();
+    await element.updateComplete;
+    const duplicatedWidget = appState.project.widgetDefinitions?.find((entry) => entry.id === appState.selectedWidgetDefinitionId);
+    expect(duplicatedWidget?.rootNode?.children?.length).toBe(2);
+    expect(new Set(duplicatedWidget?.rootNode?.children?.map((node) => node.id)).size).toBe(2);
+
+    clickButton(element.shadowRoot, "Copy node");
+    appState.selectedNodeId = duplicatedWidget?.rootNode?.id ?? "";
+    appState.requestUpdate();
+    await flush();
+    await element.updateComplete;
+    clickButton(element.shadowRoot, "Create child");
+    await flush();
+    await element.updateComplete;
+    clickButton(element.shadowRoot, "From clipboard");
+    await flush();
+    await element.updateComplete;
+
+    const pastedWidget = appState.project.widgetDefinitions?.find((entry) => entry.id === appState.selectedWidgetDefinitionId);
+    expect(pastedWidget?.rootNode?.children?.length).toBe(3);
   });
 
   it("refreshes preview when choosing a theme", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LayoutInspectionNode, LayoutNode } from "../../render-core/src/types.js";
-import { buildStructurePreviewTree, deriveStructureDropIntent, findInspectionNodeAtPoint } from "./structure-preview-model.js";
+import { buildStructurePreviewTree, deriveStructureDropIntent, findInspectionNodeAtPoint, findInspectionNodesAtPoint } from "./structure-preview-model.js";
 
 function sampleInspection(): LayoutInspectionNode {
   return {
@@ -127,5 +127,21 @@ describe("structure preview model", () => {
     expect(schematic?.label).toBe("foreach event x5");
     expect(schematic?.children).toHaveLength(1);
     expect(schematic?.children[0]?.label).toBe("Template: text");
+  });
+
+  it("returns every zstack child at an overlapping point", () => {
+    const root: LayoutNode = {
+      id: "z",
+      type: "zstack",
+      children: [
+        { id: "back", type: "primitive_instance", primitiveType: "text", props: { text: "Back" } },
+        { id: "front", type: "primitive_instance", primitiveType: "text", props: { text: "Front" } }
+      ]
+    };
+    const schematic = buildStructurePreviewTree(root, (node) => node.type === "primitive_instance" ? node.primitiveType : node.type);
+    const hits = findInspectionNodesAtPoint(schematic, 20, 30).map((node) => node.nodeId);
+    expect(hits).toContain("z");
+    expect(hits).toContain("back");
+    expect(hits).toContain("front");
   });
 });

@@ -102,6 +102,7 @@ pub(crate) trait SourceProvider: Sync + Send {
         state: &AppState,
         instance: &ProviderInstance,
         project: &Value,
+        scope: &Value,
     ) -> Result<(serde_json::Map<String, Value>, Vec<String>), ApiError>;
     async fn search_places(
         &self,

@@ -412,22 +412,13 @@ function buildInspectionNode(
   };
 }
 
-function getNodePadding(node: LayoutNode): number {
-  if (node.type === "primitive_instance") {
-    return Math.max(0, Number(node.props?.paddingPx ?? node.style?.paddingPx ?? 0));
-  }
-  return Math.max(0, Number(node.style?.paddingPx ?? 0));
-}
-
 function getNodePaddingEdges(node: LayoutNode): EdgeInsets {
-  const uniform = getNodePadding(node);
   const stylePadding = node.style?.padding;
-  const propPadding = node.type === "primitive_instance" ? node.props?.padding : undefined;
   return {
-    top: Math.max(0, Number(propPadding?.top ?? stylePadding?.top ?? uniform)),
-    right: Math.max(0, Number(propPadding?.right ?? stylePadding?.right ?? uniform)),
-    bottom: Math.max(0, Number(propPadding?.bottom ?? stylePadding?.bottom ?? uniform)),
-    left: Math.max(0, Number(propPadding?.left ?? stylePadding?.left ?? uniform))
+    top: Math.max(0, Number(stylePadding?.top ?? 0)),
+    right: Math.max(0, Number(stylePadding?.right ?? 0)),
+    bottom: Math.max(0, Number(stylePadding?.bottom ?? 0)),
+    left: Math.max(0, Number(stylePadding?.left ?? 0))
   };
 }
 
@@ -1065,7 +1056,7 @@ function resolveSize(
   } as Partial<TextStyle>;
   const metrics = buffer.measureText("Hg", style);
   const chrome = maxVerticalInsets(getNodeChromeInsets(node));
-  const intrinsic = metrics.lineHeight + chrome + Math.max(0, Number(spec.paddingPx ?? 0));
+  const intrinsic = metrics.lineHeight + chrome;
   return Math.max(0, Math.min(available, axis === "height" ? intrinsic : available));
 }
 

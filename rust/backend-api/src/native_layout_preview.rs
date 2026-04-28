@@ -272,8 +272,6 @@ struct GridChild {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LayoutStyle {
-    #[serde(rename = "paddingPx")]
-    padding_px: Option<i32>,
     padding: Option<EdgeInsets>,
     #[serde(rename = "gapPx")]
     gap_px: Option<i32>,
@@ -352,9 +350,6 @@ struct WidgetProps {
     fixed_pixel_size: Option<u32>,
     #[serde(rename = "renderEntityState")]
     render_entity_state: Option<bool>,
-    #[serde(rename = "paddingPx")]
-    padding_px: Option<i32>,
-    padding: Option<EdgeInsets>,
     #[allow(dead_code)]
     #[serde(rename = "fontRole")]
     font_role: Option<String>,
@@ -597,6 +592,24 @@ impl IndexedCanvas {
         for y in y0..y1 {
             for x in x0..x1 {
                 self.set_pixel(x, y, color);
+            }
+        }
+    }
+
+    fn fill_rect_paint(&mut self, rect: Rect, paint: FillPaint) {
+        match paint {
+            FillPaint::Solid(color) => self.fill_rect(rect, color),
+            FillPaint::Checker { primary, secondary } => {
+                let x0 = rect.x.max(0);
+                let y0 = rect.y.max(0);
+                let x1 = (rect.x + rect.w).min(self.width as i32);
+                let y1 = (rect.y + rect.h).min(self.height as i32);
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        let color = if (x + y) % 2 == 0 { primary } else { secondary };
+                        self.set_pixel(x, y, color);
+                    }
+                }
             }
         }
     }
@@ -884,11 +897,37 @@ fn role_color(role: PaletteRole) -> u8 {
     }
 }
 
+#[derive(Clone, Copy)]
+enum FillPaint {
+    Solid(u8),
+    Checker { primary: u8, secondary: u8 },
+}
+
 fn fill_role_color(role: FillRole) -> u8 {
     match role {
         FillRole::Bg => COLOR_BG,
         FillRole::Fg | FillRole::Gray => COLOR_FG,
         FillRole::Accent | FillRole::LightAccent | FillRole::DarkAccent => COLOR_ACCENT,
+    }
+}
+
+fn fill_role_paint(role: FillRole) -> FillPaint {
+    match role {
+        FillRole::Bg => FillPaint::Solid(COLOR_BG),
+        FillRole::Fg => FillPaint::Solid(COLOR_FG),
+        FillRole::Accent => FillPaint::Solid(COLOR_ACCENT),
+        FillRole::Gray => FillPaint::Checker {
+            primary: COLOR_BG,
+            secondary: COLOR_FG,
+        },
+        FillRole::LightAccent => FillPaint::Checker {
+            primary: COLOR_BG,
+            secondary: COLOR_ACCENT,
+        },
+        FillRole::DarkAccent => FillPaint::Checker {
+            primary: COLOR_FG,
+            secondary: COLOR_ACCENT,
+        },
     }
 }
 
@@ -938,12 +977,6 @@ fn get_size_value(spec: &Option<SizeSpec>, total: i32) -> Option<i32> {
     }
 }
 
-fn node_padding(style: &LayoutStyle, props_padding: Option<i32>) -> i32 {
-    props_padding
-        .unwrap_or(style.padding_px.unwrap_or(0))
-        .max(0)
-}
-
 fn edge_value(insets: Option<EdgeInsets>, edge: &str, fallback: i32) -> i32 {
     let value = match edge {
         "top" => insets.and_then(|value| value.top),
@@ -954,14 +987,13 @@ fn edge_value(insets: Option<EdgeInsets>, edge: &str, fallback: i32) -> i32 {
     value.unwrap_or(fallback).max(0)
 }
 
-fn node_padding_edges(style: &LayoutStyle, props: Option<&WidgetProps>) -> EdgeInsets {
-    let fallback = node_padding(style, props.and_then(|props| props.padding_px));
-    let insets = props.and_then(|props| props.padding).or(style.padding);
+fn node_padding_edges(style: &LayoutStyle) -> EdgeInsets {
+    let insets = style.padding;
     EdgeInsets {
-        top: Some(edge_value(insets, "top", fallback)),
-        right: Some(edge_value(insets, "right", fallback)),
-        bottom: Some(edge_value(insets, "bottom", fallback)),
-        left: Some(edge_value(insets, "left", fallback)),
+        top: Some(edge_value(insets, "top", 0)),
+        right: Some(edge_value(insets, "right", 0)),
+        bottom: Some(edge_value(insets, "bottom", 0)),
+        left: Some(edge_value(insets, "left", 0)),
     }
 }
 
@@ -1162,11 +1194,11 @@ fn render_box_chrome(
     let border = node_border_edges(style);
     if should_fill_node_surface(style) {
         if let Some(fill_role) = theme.surface.fill_role {
-            canvas.fill_rect(inset_rect_by(frame, &border), fill_role_color(fill_role));
+            canvas.fill_rect_paint(inset_rect_by(frame, &border), fill_role_paint(fill_role));
         }
     }
     draw_node_border(canvas, frame, style, role_color(theme.border.color_role));
-    let padding = node_padding_edges(style, None);
+    let padding = node_padding_edges(style);
     inset_rect_by(frame, &add_edge_insets(&border, &padding))
 }
 
@@ -3013,8 +3045,8 @@ fn draw_bar_chart(
     if data.is_empty() || frame.w <= 0 || frame.h <= 0 {
         return;
     }
-    let color = fill_role_color(props.color_role.unwrap_or(FillRole::Accent));
-    let highlight_color = fill_role_color(props.highlight_color_role.unwrap_or(FillRole::Fg));
+    let paint = fill_role_paint(props.color_role.unwrap_or(FillRole::Accent));
+    let highlight_paint = fill_role_paint(props.highlight_color_role.unwrap_or(FillRole::Fg));
     let auto_min = data.iter().map(|entry| entry.value).fold(0.0_f64, f64::min);
     let auto_max = data.iter().map(|entry| entry.value).fold(0.0_f64, f64::max);
     let mut min = props
@@ -3048,12 +3080,12 @@ fn draw_bar_chart(
             if h == 0 {
                 continue;
             }
-            canvas.fill_rect(
+            canvas.fill_rect_paint(
                 Rect { x, y, w, h },
                 if entry.highlighted {
-                    highlight_color
+                    highlight_paint
                 } else {
-                    color
+                    paint
                 },
             );
         }
@@ -3076,12 +3108,12 @@ fn draw_bar_chart(
         if w == 0 {
             continue;
         }
-        canvas.fill_rect(
+        canvas.fill_rect_paint(
             Rect { x, y, w, h },
             if entry.highlighted {
-                highlight_color
+                highlight_paint
             } else {
-                color
+                paint
             },
         );
     }
@@ -3121,7 +3153,6 @@ struct PrimitiveTextSpec {
     default_px: u32,
     h_align: String,
     v_align: String,
-    padding: i32,
     line_spacing_px: i32,
     top_padding_px: i32,
     overflow: String,
@@ -3144,7 +3175,6 @@ fn primitive_render_spec(
         return Ok(None);
     };
     let theme = theme_for_node(project, style);
-    let padding = node_padding(style, props.padding_px);
     let font_role = props
         .font_role
         .as_deref()
@@ -3208,7 +3238,6 @@ fn primitive_render_spec(
                 .unwrap_or("left")
                 .to_string(),
             v_align: props.vertical_align.as_deref().unwrap_or("top").to_string(),
-            padding,
             line_spacing_px: role_style
                 .and_then(|style| style.line_spacing_px)
                 .unwrap_or(0),
@@ -3292,7 +3321,6 @@ fn primitive_render_spec(
                 .as_deref()
                 .unwrap_or("middle")
                 .to_string(),
-            padding,
             line_spacing_px: role_style
                 .and_then(|style| style.line_spacing_px)
                 .unwrap_or(0),
@@ -3320,7 +3348,6 @@ fn measure_primitive(
     let Some(spec) = primitive_render_spec(project, scope, node, user_fonts)? else {
         let Node::PrimitiveInstance {
             primitive_type,
-            props,
             style,
             ..
         } = node
@@ -3328,30 +3355,21 @@ fn measure_primitive(
             return Ok(None);
         };
         if primitive_type == "line" {
-            let chrome = add_edge_insets(
-                &node_border_edges(style),
-                &node_padding_edges(style, Some(props)),
-            );
+            let chrome = add_edge_insets(&node_border_edges(style), &node_padding_edges(style));
             return Ok(Some((
                 1 + horizontal_insets(&chrome),
                 1 + vertical_insets(&chrome),
             )));
         }
         if primitive_type == "icon" {
-            let chrome = add_edge_insets(
-                &node_border_edges(style),
-                &node_padding_edges(style, Some(props)),
-            );
+            let chrome = add_edge_insets(&node_border_edges(style), &node_padding_edges(style));
             return Ok(Some((
                 10 + horizontal_insets(&chrome),
                 10 + vertical_insets(&chrome),
             )));
         }
         if primitive_type == "bar_chart" {
-            let chrome = add_edge_insets(
-                &node_border_edges(style),
-                &node_padding_edges(style, Some(props)),
-            );
+            let chrome = add_edge_insets(&node_border_edges(style), &node_padding_edges(style));
             return Ok(Some((
                 24 + horizontal_insets(&chrome),
                 16 + vertical_insets(&chrome),
@@ -3370,17 +3388,14 @@ fn measure_primitive(
         return Ok(None);
     }
     let (text_w, text_h) = text_lines_block_size(&runs, spec.line_spacing_px);
-    let chrome = if let Node::PrimitiveInstance { props, style, .. } = node {
-        add_edge_insets(
-            &node_border_edges(style),
-            &node_padding_edges(style, Some(props)),
-        )
+    let chrome = if let Node::PrimitiveInstance { style, .. } = node {
+        add_edge_insets(&node_border_edges(style), &node_padding_edges(style))
     } else {
         EdgeInsets::default()
     };
     Ok(Some((
-        text_w + horizontal_insets(&chrome).max(spec.padding * 2),
-        text_h + vertical_insets(&chrome).max(spec.padding * 2) + spec.top_padding_px.max(0),
+        text_w + horizontal_insets(&chrome),
+        text_h + vertical_insets(&chrome) + spec.top_padding_px.max(0),
     )))
 }
 
@@ -3398,7 +3413,7 @@ fn measure_node(
             style,
             ..
         } => {
-            let padding = style.padding_px.unwrap_or(0).max(0);
+            let padding = node_padding_edges(style);
             let gap = style.gap_px.unwrap_or(0).max(0);
             let mut width = 0;
             let mut height = 0;
@@ -3422,7 +3437,10 @@ fn measure_node(
                     width += gap * (count - 1);
                 }
             }
-            Ok(Some((width + padding * 2, height + padding * 2)))
+            Ok(Some((
+                width + horizontal_insets(&padding),
+                height + vertical_insets(&padding),
+            )))
         }
         Node::Script(node) => {
             let globals = globals_value(
@@ -3618,11 +3636,11 @@ fn render_primitive(
     };
     let theme = theme_for_node(project, style);
     let border = node_border_edges(style);
-    let padding = node_padding_edges(style, Some(props));
+    let padding = node_padding_edges(style);
     let chrome = add_edge_insets(&border, &padding);
     if should_fill_node_surface(style) {
         if let Some(fill_role) = theme.surface.fill_role {
-            canvas.fill_rect(inset_rect_by(frame, &border), fill_role_color(fill_role));
+            canvas.fill_rect_paint(inset_rect_by(frame, &border), fill_role_paint(fill_role));
         }
     }
     draw_node_border(canvas, frame, style, role_color(theme.border.color_role));
@@ -3848,50 +3866,54 @@ fn child_rects(
     let mut flex_count = 0;
     let mut sizes = Vec::with_capacity(children.len());
     for child in children {
-        let (width, height, style, props_padding) = match child {
+        let (width, height, style) = match child {
             Node::Stack {
                 width,
                 height,
                 style,
                 ..
-            } => (width, height, style, None),
+            } => (width, height, style),
             Node::Zstack {
                 width,
                 height,
                 style,
                 ..
-            } => (width, height, style, None),
+            } => (width, height, style),
             Node::Grid {
                 width,
                 height,
                 style,
                 ..
-            } => (width, height, style, None),
-            Node::DataQuery(node) => (&node.width, &node.height, &node.style, None),
-            Node::ForEach(node) => (&node.width, &node.height, &node.style, None),
-            Node::CompoundRef(node) => (&node.width, &node.height, &node.style, None),
-            Node::Script(node) => (&node.width, &node.height, &node.style, None),
-            Node::IfElse(node) => (&node.width, &node.height, &node.style, None),
+            } => (width, height, style),
+            Node::DataQuery(node) => (&node.width, &node.height, &node.style),
+            Node::ForEach(node) => (&node.width, &node.height, &node.style),
+            Node::CompoundRef(node) => (&node.width, &node.height, &node.style),
+            Node::Script(node) => (&node.width, &node.height, &node.style),
+            Node::IfElse(node) => (&node.width, &node.height, &node.style),
             Node::PrimitiveInstance {
                 width,
                 height,
                 style,
-                props,
                 ..
-            } => (width, height, style, props.padding_px),
+            } => (width, height, style),
             Node::Spacer {
                 width,
                 height,
                 style,
                 ..
-            } => (width, height, style, None),
+            } => (width, height, style),
             Node::Unsupported => {
                 sizes.push(None);
                 continue;
             }
         };
         let spec = if is_vertical { height } else { width };
-        let padding = node_padding(style, props_padding);
+        let padding = node_padding_edges(style);
+        let padding_extent = if is_vertical {
+            vertical_insets(&padding)
+        } else {
+            horizontal_insets(&padding)
+        };
         let measured = match spec.as_ref().and_then(|spec| spec.mode.as_deref()) {
             Some("fit_content") | Some("fit_glyph_bounds") | Some("intrinsic_font_height") => {
                 match measure_node(project, scope, child, user_fonts) {
@@ -3901,7 +3923,7 @@ fn child_rects(
             }
             _ => get_size_value(spec, total),
         }
-        .map(|value| value.max(1 + padding * 2));
+        .map(|value| value.max(1 + padding_extent));
         if let Some(value) = measured {
             fixed += value;
             sizes.push(Some(value));
@@ -4465,14 +4487,14 @@ fn render_layout_preview(
     if let Some(theme_id) = project.active_theme_id.as_deref() {
         if let Some(theme) = project.themes.iter().find(|theme| theme.id == theme_id) {
             if let Some(fill_role) = theme.surface.fill_role {
-                canvas.fill_rect(
+                canvas.fill_rect_paint(
                     Rect {
                         x: 0,
                         y: 0,
                         w: display_type.width as i32,
                         h: display_type.height as i32,
                     },
-                    fill_role_color(fill_role),
+                    fill_role_paint(fill_role),
                 );
             }
         }
@@ -4831,7 +4853,7 @@ mod tests {
                 "input-1a1d2a4a": "sensor.bathroom_climate_temperature",
                 "input-82491d75": "sensor.bathroom_climate_humidity"
             },
-            "style": { "borderToken": "none", "paddingPx": 0 },
+            "style": { "borderToken": "none" },
             "width": { "mode": "fill" },
             "height": { "mode": "fill" }
         });
@@ -4858,7 +4880,7 @@ mod tests {
                     "input-1a1d2a4a": "sensor.bathroom_climate_temperature",
                     "input-82491d75": "sensor.bathroom_climate_humidity"
                 },
-                "style": { "borderToken": "none", "paddingPx": 0 },
+                "style": { "borderToken": "none" },
                 "width": { "mode": "fill" },
                 "height": { "mode": "fill" }
             }
@@ -4903,15 +4925,15 @@ mod tests {
                 "id": "root",
                 "type": "stack",
                 "axis": "vertical",
-                "style": { "borderToken": "none", "paddingPx": 0 },
+                "style": { "borderToken": "none" },
                 "width": { "mode": "fill" },
                 "height": { "mode": "fill" },
                 "children": [{
                     "id": "line",
                     "type": "primitive_instance",
                     "primitiveType": "line",
-                    "style": { "borderToken": "none", "paddingPx": 0 },
-                    "props": { "paddingPx": 0 },
+                    "style": { "borderToken": "none" },
+                    "props": {},
                     "width": { "mode": "fill" },
                     "height": { "mode": "fill" }
                 }]
@@ -4966,14 +4988,14 @@ mod tests {
                     "sourceProviderInstanceId": "open-meteo-default",
                     "width": { "mode": "fill" },
                     "height": { "mode": "fill" },
-                    "style": { "borderToken": "none", "paddingPx": 0 },
+                    "style": { "borderToken": "none" },
                     "child": {
                         "id": "weather-text",
                         "type": "primitive_instance",
                         "primitiveType": "text",
                         "width": { "mode": "fill" },
                         "height": { "mode": "fill" },
-                        "style": { "borderToken": "none", "paddingPx": 4 },
+                        "style": { "borderToken": "none", "padding": { "top": 4, "right": 4, "bottom": 4, "left": 4 } },
                         "bindings": {},
                         "props": {
                             "text": "{{weather.temperature}}",
@@ -5035,7 +5057,7 @@ mod tests {
                     "variableName": "items",
                     "width": { "mode": "fill" },
                     "height": { "mode": "fill" },
-                    "style": { "borderToken": "none", "paddingPx": 0 },
+                    "style": { "borderToken": "none" },
                     "child": {
                         "id": "each",
                         "type": "foreach",
@@ -5046,14 +5068,14 @@ mod tests {
                         "maxItems": 1,
                         "width": { "mode": "fill" },
                         "height": { "mode": "fill" },
-                        "style": { "borderToken": "none", "paddingPx": 0 },
+                        "style": { "borderToken": "none" },
                         "child": {
                             "id": "line",
                             "type": "primitive_instance",
                             "primitiveType": "line",
                             "width": { "mode": "fill" },
                             "height": { "mode": "fixed_px", "value": 1 },
-                            "style": { "borderToken": "none", "paddingPx": 0 },
+                            "style": { "borderToken": "none" },
                             "props": { "lineDirection": "horizontal" }
                         }
                     }
@@ -5116,14 +5138,14 @@ mod tests {
                     "bindings": {},
                     "width": { "mode": "fill" },
                     "height": { "mode": "fill" },
-                    "style": { "borderToken": "none", "paddingPx": 0 },
+                    "style": { "borderToken": "none" },
                     "child": {
                         "id": "bars",
                         "type": "primitive_instance",
                         "primitiveType": "bar_chart",
                         "width": { "mode": "fill" },
                         "height": { "mode": "fill" },
-                        "style": { "borderToken": "none", "paddingPx": 0 },
+                        "style": { "borderToken": "none" },
                         "bindings": { "value": "chart", "query": "" },
                         "props": { "valueKey": "value" }
                     }
@@ -5182,7 +5204,7 @@ mod tests {
                     "primitiveType": "bar_chart",
                     "width": { "mode": "fill" },
                     "height": { "mode": "fill" },
-                    "style": { "borderToken": "none", "paddingPx": 0 },
+                    "style": { "borderToken": "none" },
                     "bindings": { "value": "[1,2,3,4,5,6,7,8,9,10]" },
                     "props": { "minValue": 0, "maxValue": 10, "baselineValue": 0, "barGapPx": 1, "colorRole": "fg" }
                 }
@@ -5208,6 +5230,70 @@ mod tests {
             .filter(|pixel| pixel.0[0..3] == [0, 0, 0])
             .count();
         assert!(black_pixels > 20, "bar chart should draw visible bars");
+    }
+
+    #[test]
+    fn bar_chart_renders_halftone_fill() {
+        let project_value = json!({
+            "id": "demo",
+            "name": "Demo",
+            "locale": "en-US",
+            "fontPresets": { "tiny": 8, "normal": 12, "header": 24 },
+            "themes": [{
+                "id": "classic-outline",
+                "accentRole": "fg",
+                "text": { "title": "fg", "body": "fg", "value": "fg" }
+            }],
+            "displayTypes": [{
+                "id": "tiny",
+                "width": 12,
+                "height": 8,
+                "palette": { "bg": "#ffffff", "fg": "#000000", "accent": "#ff0000" }
+            }],
+            "layoutDefinitions": [{
+                "id": "layout-bar-chart",
+                "displayTypeId": "tiny",
+                "rootNode": {
+                    "id": "bars",
+                    "type": "primitive_instance",
+                    "primitiveType": "bar_chart",
+                    "width": { "mode": "fill" },
+                    "height": { "mode": "fill" },
+                    "style": { "borderToken": "none" },
+                    "bindings": { "value": "[1]" },
+                    "props": { "minValue": 0, "maxValue": 1, "baselineValue": 0, "barGapPx": 0, "colorRole": "light-accent" }
+                }
+            }]
+        });
+        let rendered = render_layout_preview(
+            &project_value,
+            &json!({}),
+            &json!({ "now": "2026-04-24T22:00:00+02:00" }),
+            "layout-bar-chart",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let image = image::load_from_memory(&rendered.png_bytes)
+            .unwrap()
+            .to_rgba8();
+        let left = image.get_pixel(4, 4).0;
+        let right = image.get_pixel(5, 4).0;
+        assert_ne!(
+            left, right,
+            "halftone fill should alternate adjacent pixels"
+        );
+        assert!(
+            [left, right].contains(&[255, 255, 255, 255]),
+            "halftone fill should include background pixels"
+        );
+        assert!(
+            [left, right].contains(&[255, 0, 0, 255]),
+            "halftone fill should include accent pixels"
+        );
     }
 
     #[test]
@@ -5237,7 +5323,7 @@ mod tests {
                     "primitiveType": "bar_chart",
                     "width": { "mode": "fill" },
                     "height": { "mode": "fill" },
-                    "style": { "borderToken": "none", "paddingPx": 0 },
+                    "style": { "borderToken": "none" },
                     "bindings": { "value": "[1,1,1]", "highlightIndexes": "[1]" },
                     "props": { "minValue": 0, "maxValue": 1, "baselineValue": 0, "barGapPx": 0, "colorRole": "fg", "highlightColorRole": "accent" }
                 }
@@ -5312,7 +5398,7 @@ mod tests {
                     "primitiveType": "graph",
                     "width": { "mode": "fill" },
                     "height": { "mode": "fill" },
-                    "style": { "borderToken": "none", "paddingPx": 0 },
+                    "style": { "borderToken": "none" },
                     "props": {}
                 }
             }]
@@ -5574,7 +5660,7 @@ mod tests {
                 "renderEntityState": false,
                 "autoFit": true
             },
-            "style": { "borderToken": "none", "paddingPx": 4 },
+            "style": { "borderToken": "none", "padding": { "top": 4, "right": 4, "bottom": 4, "left": 4 } },
             "width": { "mode": "fill" },
             "height": { "mode": "fill" }
         }))
