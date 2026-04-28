@@ -5313,6 +5313,38 @@ export class EpPaperEditorApp extends LitElement {
                       <option value="dark-accent">${fillRoleLabel("dark-accent")}</option>
                     </select>
                   </label>
+                  <details open>
+                    <summary>Border</summary>
+                    <label>
+                      <input type="checkbox" .checked=${theme.border.visible} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({
+                        ...current,
+                        border: { ...current.border, visible: (event.target as HTMLInputElement).checked }
+                      }))} />
+                      Show borders
+                    </label>
+                    <label>
+                      Border color
+                      <select .value=${theme.border.colorRole} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({
+                        ...current,
+                        border: { ...current.border, colorRole: (event.target as HTMLSelectElement).value as "bg" | "fg" | "accent" },
+                        borderTokens: {
+                          thin: { thicknessPx: current.borderTokens?.thin?.thicknessPx ?? 1, colorRole: (event.target as HTMLSelectElement).value as "bg" | "fg" | "accent" },
+                          thick: { thicknessPx: current.borderTokens?.thick?.thicknessPx ?? 2, colorRole: (event.target as HTMLSelectElement).value as "bg" | "fg" | "accent" }
+                        }
+                      }))}>
+                        <option value="fg">black</option>
+                        <option value="bg">white</option>
+                        <option value="accent">accent</option>
+                      </select>
+                    </label>
+                    <label>
+                      <input type="checkbox" .checked=${theme.border.mergeAdjacentBorders} @change=${(event: Event) => this.updateTheme(theme.id, (current) => ({
+                        ...current,
+                        border: { ...current.border, mergeAdjacentBorders: (event.target as HTMLInputElement).checked }
+                      }))} />
+                      Merge adjacent borders
+                    </label>
+                  </details>
                   ${(["tiny", "normal", "normalEmphasis", "header"] as const).map(
                     (role) => {
                       const roleStyle = this.coerceTextStyleVariant(theme.fontRoles?.[role]);

@@ -93,6 +93,8 @@ struct DisplayType {
     id: String,
     width: u32,
     height: u32,
+    #[serde(rename = "contentPadding")]
+    content_padding: Option<EdgeInsets>,
     palette: Palette,
 }
 
@@ -1053,6 +1055,10 @@ fn inset_rect_by(rect: Rect, insets: &EdgeInsets) -> Rect {
     }
 }
 
+fn inset_rect_by_optional(rect: Rect, insets: Option<&EdgeInsets>) -> Rect {
+    insets.map_or(rect, |insets| inset_rect_by(rect, insets))
+}
+
 fn add_edge_insets(left: &EdgeInsets, right: &EdgeInsets) -> EdgeInsets {
     EdgeInsets {
         top: Some(edge_inset(left, "top") + edge_inset(right, "top")),
@@ -1706,9 +1712,9 @@ fn unsupported_node_self_reason(node: &Node) -> Option<String> {
             primitive_type,
             bindings,
             ..
-    } if !bindings
-        .keys()
-        .all(|key| matches!(key.as_str(), "entity" | "value" | "icon")) =>
+        } if !bindings
+            .keys()
+            .all(|key| matches!(key.as_str(), "entity" | "value" | "icon")) =>
         {
             let keys = bindings.keys().cloned().collect::<Vec<_>>().join(", ");
             Some(format!("unsupported primitive binding keys: {keys}"))
@@ -3735,7 +3741,7 @@ fn render_child_or_placeholder(
     frame: Rect,
     user_fonts: &HashMap<String, RuntimeFontFamilyData>,
 ) {
-    if render_node(canvas, project, scope, node, frame, user_fonts).is_err() {
+    if render_node(canvas, project, scope, node, frame, user_fonts, None).is_err() {
         draw_error_placeholder(canvas, frame);
     }
 }
@@ -3903,6 +3909,7 @@ fn render_node(
     node: &Node,
     frame: Rect,
     user_fonts: &HashMap<String, RuntimeFontFamilyData>,
+    content_insets: Option<&EdgeInsets>,
 ) -> Result<(), ApiError> {
     if let Some(_reason) = unsupported_node_self_reason(node) {
         draw_error_placeholder(canvas, frame);
@@ -3917,7 +3924,10 @@ fn render_node(
         } => {
             let theme = theme_for_node(project, style);
             let gap = style.gap_px.unwrap_or(0).max(0);
-            let inner = render_box_chrome(canvas, theme, style, frame);
+            let inner = inset_rect_by_optional(
+                render_box_chrome(canvas, theme, style, frame),
+                content_insets,
+            );
             let mut rects = child_rects(axis, children, inner, project, scope, user_fonts);
             if !rects.is_empty() && gap > 0 {
                 let total_gap = gap * (rects.len().saturating_sub(1) as i32);
@@ -3955,7 +3965,10 @@ fn render_node(
             children, style, ..
         } => {
             let theme = theme_for_node(project, style);
-            let inner = render_box_chrome(canvas, theme, style, frame);
+            let inner = inset_rect_by_optional(
+                render_box_chrome(canvas, theme, style, frame),
+                content_insets,
+            );
             for child in children {
                 render_child_or_placeholder(canvas, project, scope, child, inner, user_fonts);
             }
@@ -3970,7 +3983,10 @@ fn render_node(
         } => {
             let theme = theme_for_node(project, style);
             let gap = style.gap_px.unwrap_or(0).max(0);
-            let inner = render_box_chrome(canvas, theme, style, frame);
+            let inner = inset_rect_by_optional(
+                render_box_chrome(canvas, theme, style, frame),
+                content_insets,
+            );
             let row_sizes = track_sizes(rows, inner.h, gap);
             let col_sizes = track_sizes(columns, inner.w, gap);
             let row_offsets = grid_line_offsets(&row_sizes, inner.y, gap);
@@ -4004,7 +4020,10 @@ fn render_node(
         }
         Node::DataQuery(node) => {
             let theme = theme_for_node(project, &node.style);
-            let inner = render_box_chrome(canvas, theme, &node.style, frame);
+            let inner = inset_rect_by_optional(
+                render_box_chrome(canvas, theme, &node.style, frame),
+                content_insets,
+            );
             let mut nested_scope = scope.clone();
             let items = scope
                 .get("metaQueries")
@@ -4057,7 +4076,10 @@ fn render_node(
             };
             let gap = node.style.gap_px.unwrap_or(0).max(0);
             let theme = theme_for_node(project, &node.style);
-            let inner = render_box_chrome(canvas, theme, &node.style, frame);
+            let inner = inset_rect_by_optional(
+                render_box_chrome(canvas, theme, &node.style, frame),
+                content_insets,
+            );
             let horizontal = node.axis == "horizontal";
             let available_main =
                 if horizontal { inner.w } else { inner.h } - gap * (count.saturating_sub(1) as i32);
@@ -4184,7 +4206,19 @@ fn render_node(
                 scope_object.insert(key.clone(), value.clone());
                 scope_object.insert(alias.clone(), value);
             }
-            render_child_or_placeholder(canvas, project, &nested_scope, root, frame, user_fonts);
+            if render_node(
+                canvas,
+                project,
+                &nested_scope,
+                root,
+                frame,
+                user_fonts,
+                content_insets,
+            )
+            .is_err()
+            {
+                draw_error_placeholder(canvas, frame);
+            }
             Ok(())
         }
         Node::Script(script) => {
@@ -4216,14 +4250,19 @@ fn render_node(
                 scope.clone()
             };
             if let Some(child) = script.child.as_deref() {
-                render_child_or_placeholder(
+                if render_node(
                     canvas,
                     project,
                     &merged_scope,
                     child,
                     frame,
                     user_fonts,
-                );
+                    content_insets,
+                )
+                .is_err()
+                {
+                    draw_error_placeholder(canvas, frame);
+                }
             }
             Ok(())
         }
@@ -4238,11 +4277,24 @@ fn render_node(
                 node.else_child.as_deref()
             };
             if let Some(child) = child {
-                render_child_or_placeholder(canvas, project, scope, child, frame, user_fonts);
+                if render_node(
+                    canvas,
+                    project,
+                    scope,
+                    child,
+                    frame,
+                    user_fonts,
+                    content_insets,
+                )
+                .is_err()
+                {
+                    draw_error_placeholder(canvas, frame);
+                }
             }
             Ok(())
         }
         Node::PrimitiveInstance { .. } => {
+            let frame = inset_rect_by_optional(frame, content_insets);
             render_primitive(canvas, project, scope, node, frame, user_fonts)
         }
         Node::Spacer { .. } => Ok(()),
@@ -4337,6 +4389,11 @@ fn render_layout_preview(
             }
         }
     }
+    let root_content_padding = if layout.kind == "fullscreen" {
+        display_type.content_padding.as_ref()
+    } else {
+        None
+    };
     if render_node(
         &mut canvas,
         &project,
@@ -4349,6 +4406,7 @@ fn render_layout_preview(
             h: display_type.height as i32,
         },
         &user_fonts,
+        root_content_padding,
     )
     .is_err()
     {
@@ -4375,6 +4433,7 @@ fn render_layout_preview(
                 h: display_type.height as i32,
             },
             &user_fonts,
+            None,
         )
         .is_err()
         {
@@ -4738,6 +4797,60 @@ mod tests {
     }
 
     #[test]
+    fn render_layout_preview_respects_display_type_content_padding() {
+        let mut project_value = demo_project();
+        project_value["displayTypes"] = json!([{
+            "id": "padded",
+            "width": 40,
+            "height": 24,
+            "rotation": 0,
+            "contentPadding": { "top": 5, "right": 6, "bottom": 7, "left": 8 },
+            "palette": { "bg": "#ffffff", "fg": "#111111", "accent": "#d7261b" }
+        }]);
+        project_value["layoutDefinitions"] = json!([{
+            "id": "layout-padded-native",
+            "kind": "fullscreen",
+            "displayTypeId": "padded",
+            "rootNode": {
+                "id": "root",
+                "type": "stack",
+                "axis": "vertical",
+                "style": { "borderToken": "none", "paddingPx": 0 },
+                "width": { "mode": "fill" },
+                "height": { "mode": "fill" },
+                "children": [{
+                    "id": "line",
+                    "type": "primitive_instance",
+                    "primitiveType": "line",
+                    "style": { "borderToken": "none", "paddingPx": 0 },
+                    "props": { "paddingPx": 0 },
+                    "width": { "mode": "fill" },
+                    "height": { "mode": "fill" }
+                }]
+            }
+        }]);
+        let rendered = render_layout_preview(
+            &project_value,
+            &json!({}),
+            &json!({}),
+            "layout-padded-native",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let image = image::load_from_memory(&rendered.png_bytes)
+            .unwrap()
+            .to_rgba8();
+
+        assert_eq!(image.get_pixel(8, 4).0, [255, 255, 255, 255]);
+        assert_eq!(image.get_pixel(8, 11).0, [17, 17, 17, 255]);
+        assert_eq!(image.get_pixel(1, 11).0, [255, 255, 255, 255]);
+    }
+
+    #[test]
     fn render_layout_preview_handles_weather_data_query() {
         let project_value = json!({
             "id": "demo",
@@ -4946,8 +5059,10 @@ mod tests {
             .unwrap_or_default()
             .iter()
             .any(|warning| warning.contains("rendered placeholder")));
-        let reason =
-            unsupported_layout_preview_reason(&project_value, &json!({ "layoutId": "layout-bar-chart" }));
+        let reason = unsupported_layout_preview_reason(
+            &project_value,
+            &json!({ "layoutId": "layout-bar-chart" }),
+        );
         assert!(reason.contains("unsupported primitive binding keys"));
         assert!(reason.contains("query"));
     }

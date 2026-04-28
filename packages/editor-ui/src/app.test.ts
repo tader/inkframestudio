@@ -1221,6 +1221,7 @@ describe("epaper editor app", () => {
     await element.updateComplete;
 
     expect(element.shadowRoot.textContent).toContain("New Theme");
+    expect(element.shadowRoot.textContent).toContain("Border color");
   });
 
   it("refreshes preview when choosing a theme", async () => {
