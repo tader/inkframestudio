@@ -896,6 +896,7 @@ describe("epaper editor app", () => {
     appState.requestUpdate();
     await flush();
     await element.updateComplete;
+    expect(inputInLabel<HTMLSelectElement>(element.shadowRoot, "Primitive", "select").value).toBe("number");
     setInputValue(inputInLabel<HTMLInputElement>(element.shadowRoot, "Value variable", "input"), "weather.current.temperature_2m");
     await flush();
     await element.updateComplete;
@@ -904,6 +905,7 @@ describe("epaper editor app", () => {
     appState.requestUpdate();
     await flush();
     await element.updateComplete;
+    expect(inputInLabel<HTMLSelectElement>(element.shadowRoot, "Primitive", "select").value).toBe("icon");
     setInputValue(inputInLabel<HTMLInputElement>(element.shadowRoot, "Icon variable", "input"), "weather.current.icon");
     await flush();
     await element.updateComplete;

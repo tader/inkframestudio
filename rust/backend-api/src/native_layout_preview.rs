@@ -2880,15 +2880,14 @@ fn binding_scope_value(scope: &Value, binding: Option<&String>, locale: &str) ->
     if raw.contains("{{") {
         return render_template(raw, scope, locale).map(Value::String);
     }
-    if raw.contains('|') {
-        let resolved = resolve_scope_or_literal_expression(raw, scope, locale);
-        return if resolved.is_null() {
-            None
-        } else {
-            Some(resolved)
-        };
+    if let Some(resolved) = scope_value(scope, raw) {
+        return Some(resolved);
     }
-    scope_value(scope, raw).or_else(|| Some(Value::String(raw.to_string())))
+    let resolved = resolve_scope_or_literal_expression(raw, scope, locale);
+    if !resolved.is_null() {
+        return Some(resolved);
+    }
+    Some(Value::String(raw.to_string()))
 }
 
 fn binding_scope_text(scope: &Value, binding: Option<&String>, locale: &str) -> Option<String> {
@@ -4951,6 +4950,61 @@ mod tests {
             unsupported_layout_preview_reason(&project_value, &json!({ "layoutId": "layout-bar-chart" }));
         assert!(reason.contains("unsupported primitive binding keys"));
         assert!(reason.contains("query"));
+    }
+
+    #[test]
+    fn bar_chart_renders_json_literal_data() {
+        let project_value = json!({
+            "id": "demo",
+            "name": "Demo",
+            "locale": "en-US",
+            "fontPresets": { "tiny": 8, "normal": 12, "header": 24 },
+            "themes": [{
+                "id": "classic-outline",
+                "accentRole": "fg",
+                "text": { "title": "fg", "body": "fg", "value": "fg" }
+            }],
+            "displayTypes": [{
+                "id": "tiny",
+                "width": 40,
+                "height": 20,
+                "palette": { "bg": "#ffffff", "fg": "#000000", "accent": "#ff0000" }
+            }],
+            "layoutDefinitions": [{
+                "id": "layout-bar-chart",
+                "displayTypeId": "tiny",
+                "rootNode": {
+                    "id": "bars",
+                    "type": "primitive_instance",
+                    "primitiveType": "bar_chart",
+                    "width": { "mode": "fill" },
+                    "height": { "mode": "fill" },
+                    "style": { "borderToken": "none", "paddingPx": 0 },
+                    "bindings": { "value": "[1,2,3,4,5,6,7,8,9,10]" },
+                    "props": { "minValue": 0, "maxValue": 10, "baselineValue": 0, "barGapPx": 1, "colorRole": "fg" }
+                }
+            }]
+        });
+        let rendered = render_layout_preview(
+            &project_value,
+            &json!({}),
+            &json!({ "now": "2026-04-24T22:00:00+02:00" }),
+            "layout-bar-chart",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        let image = image::load_from_memory(&rendered.png_bytes)
+            .unwrap()
+            .to_rgba8();
+        let black_pixels = image
+            .pixels()
+            .filter(|pixel| pixel.0[0..3] == [0, 0, 0])
+            .count();
+        assert!(black_pixels > 20, "bar chart should draw visible bars");
     }
 
     #[test]

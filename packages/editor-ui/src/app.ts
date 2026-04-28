@@ -400,6 +400,11 @@ function lastSixMacDigits(value: string): string {
   return compact.length >= 6 ? compact.slice(-6) : compact;
 }
 
+function selectOption(value: string | number | boolean | undefined, label: unknown, selectedValue: string | number | boolean | undefined): TemplateResult {
+  const stringValue = String(value ?? "");
+  return html`<option value=${stringValue} ?selected=${String(selectedValue ?? "") === stringValue}>${label}</option>`;
+}
+
 function displayMac(display: Pick<ManagedDisplay, "metadata" | "providerRef" | "providerDeviceRef">): string {
   return String(display.metadata?.mac ?? display.providerDeviceRef ?? display.providerRef ?? "");
 }
@@ -3363,7 +3368,7 @@ export class EpPaperEditorApp extends LitElement {
                     void this.refreshPreview();
                   }}
                 >
-                  ${(this.project.displayTypes ?? []).map((displayType) => html`<option value=${displayType.id}>${displayType.name}</option>`)}
+                  ${(this.project.displayTypes ?? []).map((displayType) => selectOption(displayType.id, displayType.name, this.selectedDisplayTypeId))}
                 </select>
               </label>
             `
@@ -3379,7 +3384,7 @@ export class EpPaperEditorApp extends LitElement {
                     void this.refreshPreview();
                   }}
                 >
-                  ${this.project.themes.map((theme) => html`<option value=${theme.id}>${theme.name}</option>`)}
+                  ${this.project.themes.map((theme) => selectOption(theme.id, theme.name, this.effectivePreviewThemeId ?? ""))}
                 </select>
               </label>
             `
@@ -3397,9 +3402,7 @@ export class EpPaperEditorApp extends LitElement {
                     const mac = candidateMac(candidate);
                     const displayType = candidate.suggestedDisplayType;
                     return html`
-                      <option value=${mac}>
-                        ${candidate.name} ${mac}${displayType ? ` (${displayType.width}x${displayType.height})` : ""}
-                      </option>
+                      ${selectOption(mac, `${candidate.name} ${mac}${displayType ? ` (${displayType.width}x${displayType.height})` : ""}`, effectivePreviewTagMac)}
                     `;
                   })}
                 </select>
@@ -3474,7 +3477,7 @@ export class EpPaperEditorApp extends LitElement {
       const effective = allowedSizes.includes(value) ? value : allowedSizes[0]!;
       return html`
         <select .value=${String(effective)} @change=${(event: Event) => onChange(Number((event.target as HTMLSelectElement).value))}>
-          ${allowedSizes.map((size) => html`<option value=${size}>${size}px</option>`)}
+          ${allowedSizes.map((size) => selectOption(size, `${size}px`, effective))}
         </select>
       `;
     }
@@ -3511,7 +3514,7 @@ export class EpPaperEditorApp extends LitElement {
           }}
         >
           ${variants.map((variant) => html`
-            <option value=${variant}>${variantKeyLabel(variant)}</option>
+            ${selectOption(variant, variantKeyLabel(variant), selectedVariant)}
           `)}
         </select>
       </label>
@@ -3672,13 +3675,13 @@ export class EpPaperEditorApp extends LitElement {
                   const nextSize = (event.target as HTMLSelectElement).value as WidgetBorderSize;
                   updateBorder(edge, { size: nextSize, thicknessPx: defaultBorderThicknessForSize(nextSize) });
                 }}>
-                  ${BORDER_SIZES.map((entry) => html`<option value=${entry}>${entry}</option>`)}
+                  ${BORDER_SIZES.map((entry) => selectOption(entry, entry, size))}
                 </select>
               </label>
               <label>
                 pattern
                 <select .value=${pattern} ?disabled=${size === "none"} @change=${(event: Event) => updateBorder(edge, { pattern: (event.target as HTMLSelectElement).value as WidgetBorderPattern })}>
-                  ${BORDER_PATTERNS.map((entry) => html`<option value=${entry}>${entry}</option>`)}
+                  ${BORDER_PATTERNS.map((entry) => selectOption(entry, entry, pattern))}
                 </select>
               </label>
             </div>
@@ -3729,7 +3732,7 @@ export class EpPaperEditorApp extends LitElement {
       <label>
         Primitive
         <select .value=${node.primitiveType} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), primitiveType: (event.target as HTMLSelectElement).value as PrimitiveWidgetKind })))}>
-          ${BUILT_IN_WIDGET_DEFINITIONS.map((entry) => html`<option value=${entry.primitiveType ?? "text"}>${entry.name}</option>`)}
+          ${BUILT_IN_WIDGET_DEFINITIONS.map((entry) => selectOption(entry.primitiveType ?? "text", entry.name, node.primitiveType))}
         </select>
       </label>
       <label>
@@ -3860,7 +3863,7 @@ export class EpPaperEditorApp extends LitElement {
                 const iconId = (event.target as HTMLSelectElement).value;
                 this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as PrimitiveInstanceNode), props: { ...(current as PrimitiveInstanceNode).props, icon: iconId } })));
               }}>
-                ${iconOptions.map((icon) => html`<option value=${icon.id}>${icon.pack ? `${icon.pack} · ` : ""}${icon.label} (${icon.id})</option>`)}
+                ${iconOptions.map((icon) => selectOption(icon.id, `${icon.pack ? `${icon.pack} · ` : ""}${icon.label} (${icon.id})`, selectedIconId))}
               </select>
             </label>
             <label>
@@ -3997,7 +4000,7 @@ export class EpPaperEditorApp extends LitElement {
                 Theme override
                 <select .value=${String(node.style?.themeId ?? "inherit")} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, style: { ...current.style, themeId: (event.target as HTMLSelectElement).value } })))} }>
                   <option value="inherit">Inherit</option>
-                  ${this.project.themes.map((theme) => html`<option value=${theme.id}>${theme.name}</option>`)}
+                  ${this.project.themes.map((theme) => selectOption(theme.id, theme.name, node.style?.themeId ?? "inherit"))}
                 </select>
               </label>
             `
@@ -4064,7 +4067,7 @@ export class EpPaperEditorApp extends LitElement {
                 Source
                 <select .value=${selectedSourceId} @change=${(event: Event) => this.updateDataQuerySource(owner, node.id, (event.target as HTMLSelectElement).value)}>
                   <option value="">Default source</option>
-                  ${sourceOptions.map((instance) => html`<option value=${instance.id}>${instance.name}</option>`)}
+                  ${sourceOptions.map((instance) => selectOption(instance.id, instance.name, selectedSourceId))}
                 </select>
               </label>
               <label>
@@ -4356,7 +4359,7 @@ export class EpPaperEditorApp extends LitElement {
                 <select .value=${node.definitionId} @change=${(event: Event) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...(current as typeof node), definitionId: (event.target as HTMLSelectElement).value })))} >
                   ${(this.project.widgetDefinitions ?? [])
                     .filter((entry) => entry.kind === "compound")
-                    .map((entry) => html`<option value=${entry.id}>${entry.name}</option>`)}
+                    .map((entry) => selectOption(entry.id, entry.name, node.definitionId))}
                 </select>
               </label>
               ${(() => {
@@ -4659,7 +4662,7 @@ export class EpPaperEditorApp extends LitElement {
                 : { type: "activate_fullscreen_layout", layoutId: (event.target as HTMLSelectElement).value }
             } : entry)
           }))}>
-            ${layoutOptions.map((layout) => html`<option value=${layout.id}>${layout.name}</option>`)}
+            ${layoutOptions.map((layout) => selectOption(layout.id, layout.name, rule.action.type === "activate_popup_layout" || rule.action.type === "activate_fullscreen_layout" ? rule.action.layoutId : ""))}
           </select>
         </label>
       </details>
@@ -4687,7 +4690,7 @@ export class EpPaperEditorApp extends LitElement {
         Default fullscreen
         <select .value=${selectedFullscreenLayoutId} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({ ...current, defaultFullscreenLayoutId: (event.target as HTMLSelectElement).value || undefined }))}>
           <option value="">None</option>
-          ${fullscreenLayouts.map((layout) => html`<option value=${layout.id}>${layout.name}</option>`)}
+          ${fullscreenLayouts.map((layout) => selectOption(layout.id, layout.name, selectedFullscreenLayoutId))}
         </select>
       </label>
       ${fullscreenLayouts.length
@@ -4696,7 +4699,7 @@ export class EpPaperEditorApp extends LitElement {
       <label>
         Theme
         <select .value=${this.project.themes.some((theme) => theme.id === assignment.defaultThemeId) ? assignment.defaultThemeId : this.project.themes[0]?.id ?? ""} @change=${(event: Event) => this.updateAssignmentForDisplay(device.id, (current) => ({ ...current, defaultThemeId: (event.target as HTMLSelectElement).value || undefined }))}>
-          ${this.project.themes.map((theme) => html`<option value=${theme.id}>${theme.name}</option>`)}
+          ${this.project.themes.map((theme) => selectOption(theme.id, theme.name, this.project.themes.some((entry) => entry.id === assignment.defaultThemeId) ? assignment.defaultThemeId : this.project.themes[0]?.id ?? ""))}
         </select>
       </label>
       <div class="section">
@@ -4900,7 +4903,7 @@ export class EpPaperEditorApp extends LitElement {
             .value=${String(value ?? field.options?.[0]?.value ?? "")}
             @change=${(event: Event) => this.updateProviderInstanceDraft(instance.id, field.key, (event.target as HTMLSelectElement).value)}
           >
-            ${(field.options ?? []).map((option) => html`<option value=${option.value}>${option.label}</option>`)}
+            ${(field.options ?? []).map((option) => selectOption(String(option.value), option.label, String(value ?? field.options?.[0]?.value ?? "")))}
           </select>
         </label>
       `;
@@ -5017,7 +5020,7 @@ export class EpPaperEditorApp extends LitElement {
             <label>
               Display type
               <select .value=${definition.displayTypeId} @change=${(event: Event) => this.updateVirtualDisplayDefinition(instance.id, definition.id, { displayTypeId: (event.target as HTMLSelectElement).value })}>
-                ${(this.project.displayTypes ?? []).map((displayType) => html`<option value=${displayType.id}>${displayType.name}</option>`)}
+                ${(this.project.displayTypes ?? []).map((displayType) => selectOption(displayType.id, displayType.name, definition.displayTypeId))}
               </select>
             </label>
             <button class="danger" @click=${() => this.removeVirtualDisplayDefinition(instance.id, definition.id)}>Remove virtual display</button>
@@ -5094,7 +5097,7 @@ export class EpPaperEditorApp extends LitElement {
                   <label>
                     Display type
                     <select .value=${device.displayTypeId} @change=${(event: Event) => this.updateDisplayDisplayType(device.id, (event.target as HTMLSelectElement).value)}>
-                      ${(this.project.displayTypes ?? []).map((displayType) => html`<option value=${displayType.id}>${displayType.name}</option>`)}
+                      ${(this.project.displayTypes ?? []).map((displayType) => selectOption(displayType.id, displayType.name, device.displayTypeId))}
                     </select>
                   </label>
                   <label>
@@ -5412,7 +5415,7 @@ export class EpPaperEditorApp extends LitElement {
                 await this.refreshPreview();
               }}>
                 <option value="">Auto</option>
-                ${this.sourceProviderOptions().map((instance) => html`<option value=${instance.id}>${instance.name || this.providerDescriptor(instance.providerId)?.label || instance.providerId}</option>`)}
+                ${this.sourceProviderOptions().map((instance) => selectOption(instance.id, instance.name || this.providerDescriptor(instance.providerId)?.label || instance.providerId, this.project.defaultSourceProviderInstanceId ?? this.activeSourceProviderInstance?.id ?? ""))}
               </select>
             </label>
             <div class="muted">Live data and widget entity lists use this provider.</div>
@@ -5566,7 +5569,7 @@ export class EpPaperEditorApp extends LitElement {
                 this.selectedDisplayTypeId = (event.target as HTMLSelectElement).value;
                 void this.refreshFontSpecimens();
               }}>
-                ${(this.project.displayTypes ?? []).map((displayType) => html`<option value=${displayType.id}>${displayType.name}</option>`)}
+                ${(this.project.displayTypes ?? []).map((displayType) => selectOption(displayType.id, displayType.name, this.selectedDisplayTypeId))}
               </select>
             </label>
             <label>

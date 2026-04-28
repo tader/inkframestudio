@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.21
 FROM $BUILD_FROM
 ARG BUILD_ARCH=amd64
@@ -26,13 +27,20 @@ RUN apk add --no-cache nodejs npm curl freetype-dev harfbuzz-dev pkgconf build-b
   && cargo --version
 
 WORKDIR /app
-COPY package.json package-lock.json tsconfig.json vitest.config.ts ./
+COPY package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+  npm_config_foreground_scripts=true npm ci
+
+COPY tsconfig.json vitest.config.ts ./
 COPY scripts ./scripts
 COPY packages ./packages
 COPY rust ./rust
 COPY docs ./docs
-RUN npm_config_foreground_scripts=true npm ci
-RUN npm run build
+RUN --mount=type=cache,target=/root/.npm \
+  --mount=type=cache,target=/usr/local/cargo/registry \
+  --mount=type=cache,target=/usr/local/cargo/git \
+  --mount=type=cache,target=/app/rust/target \
+  npm run build
 
 ENV PORT=8099
 COPY addon/run.sh /run.sh
