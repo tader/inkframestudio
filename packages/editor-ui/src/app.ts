@@ -439,7 +439,7 @@ function variantKeyLabel(variant: string): string {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function variantKeyToStyle(variant: FontVariantKey): [string, string] {
+function variantKeyToStyle(variant: FontVariantKey): [TextStyle["weight"], FontSlope] {
   if (variant === "boldItalic") {
     return ["bold", "italic"];
   }
@@ -453,6 +453,19 @@ function variantKeyToStyle(variant: FontVariantKey): [string, string] {
     return [variant.slice(0, -"Italic".length), "italic"];
   }
   return [variant, "roman"];
+}
+
+function variantKeyForStyle(weight: TextStyle["weight"], slope: FontSlope): FontVariantKey {
+  if (weight === "bold" && slope === "italic") {
+    return "boldItalic";
+  }
+  if (weight === "bold") {
+    return "bold";
+  }
+  if (weight !== "regular") {
+    return slope === "italic" ? `${weight}Italic` : weight;
+  }
+  return slope === "italic" ? "italic" : "regular";
 }
 
 function defaultVirtualDisplayDefinition(displayTypeId: string, index = 1): VirtualDisplayDefinition {
@@ -846,7 +859,7 @@ function defaultAssignment(displayId: string, layoutId?: string): DeviceAssignme
     id: nextId("assignment"),
     displayId,
     defaultFullscreenLayoutId: layoutId,
-    defaultThemeId: "classic-outline",
+    defaultThemeId: undefined,
     schedule: {
       enabled: false,
       intervalMinutes: 15
@@ -2146,7 +2159,10 @@ export class EpPaperEditorApp extends LitElement {
       devices: [...(this.project.devices ?? []), device],
       deviceAssignments: [
         ...(this.project.deviceAssignments ?? []),
-        defaultAssignment(device.id, this.project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen")?.id)
+        {
+          ...defaultAssignment(device.id, this.project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen")?.id),
+          defaultThemeId: this.project.themes[0]?.id
+        }
       ]
     });
     this.selectedDisplayId = device.id;
@@ -2240,12 +2256,32 @@ export class EpPaperEditorApp extends LitElement {
     });
   }
 
+  private updateAssignmentForDisplay(displayId: string, updater: (assignment: DeviceAssignment) => DeviceAssignment): void {
+    const assignments = this.project.deviceAssignments ?? [];
+    const existing = assignments.find((entry) => entry.displayId === displayId);
+    const base = existing ?? defaultAssignment(
+      displayId,
+      this.project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen")?.id
+    );
+    const next = updater(base);
+    this.replaceProject({
+      ...this.project,
+      deviceAssignments: existing
+        ? assignments.map((entry) => (entry.id === existing.id ? next : entry))
+        : [...assignments, next]
+    });
+    this.selectedAssignmentId = next.id;
+  }
+
   private addAssignment(displayId = this.selectedDisplayId || this.project.devices?.[0]?.id): void {
     if (!displayId) {
       return;
     }
     const layoutId = this.project.layoutDefinitions?.find((entry) => entry.kind === "fullscreen")?.id;
-    const assignment = defaultAssignment(displayId, layoutId);
+    const assignment = {
+      ...defaultAssignment(displayId, layoutId),
+      defaultThemeId: this.project.themes[0]?.id
+    };
     this.replaceProject({
       ...this.project,
       deviceAssignments: [...(this.project.deviceAssignments ?? []), assignment]
@@ -3361,40 +3397,28 @@ export class EpPaperEditorApp extends LitElement {
     const currentFamily = family ?? this.fonts[0]?.id ?? "arial";
     const currentWeight = style?.weight ?? "regular";
     const currentSlope = style?.slope ?? "roman";
-    const variantStyles = availableFontVariants(this.fontOption(currentFamily)).map((variant) => {
+    const currentVariant = variantKeyForStyle(currentWeight, currentSlope);
+    const variants = Array.from(new Set([
+      ...availableFontVariants(this.fontOption(currentFamily)),
+      currentVariant
+    ])).filter((variant) => {
       const [weight, slope] = variantKeyToStyle(variant);
-      return { variant, weight, slope };
+      return this.fontVariantAvailable(currentFamily, weight, slope);
     });
-    const weights = Array.from(new Set([
-      currentWeight,
-      ...variantStyles.filter((variant) => variant.slope === "roman").map((variant) => variant.weight)
-    ]));
-    const italicAvailable = this.fontVariantAvailable(currentFamily, currentWeight, "italic");
-    const regularAvailable = this.fontVariantAvailable(currentFamily, currentWeight, "roman");
+    const selectedVariant = variants.includes(currentVariant) ? currentVariant : variants[0] ?? "regular";
     return html`
       <label>
-        Weight
+        Variant
         <select
-          .value=${currentWeight}
+          .value=${selectedVariant}
           @change=${(event: Event) => {
-            const nextWeight = (event.target as HTMLSelectElement).value as TextStyle["weight"];
-            const nextSlope = this.fontVariantAvailable(currentFamily, nextWeight, currentSlope) ? currentSlope : "roman";
+            const [nextWeight, nextSlope] = variantKeyToStyle((event.target as HTMLSelectElement).value as FontVariantKey);
             onChange({ weight: nextWeight, slope: nextSlope });
           }}
         >
-          ${weights.map((weight) => html`
-            <option value=${weight} ?disabled=${!this.fontVariantAvailable(currentFamily, weight, "roman")}>${variantKeyLabel(weight)}</option>
+          ${variants.map((variant) => html`
+            <option value=${variant}>${variantKeyLabel(variant)}</option>
           `)}
-        </select>
-      </label>
-      <label>
-        Slope
-        <select
-          .value=${regularAvailable ? currentSlope : "roman"}
-          @change=${(event: Event) => onChange({ slope: (event.target as HTMLSelectElement).value as FontSlope })}
-        >
-          <option value="roman">Roman</option>
-          <option value="italic" ?disabled=${!italicAvailable}>Italic</option>
         </select>
       </label>
       <label>
@@ -3438,16 +3462,7 @@ export class EpPaperEditorApp extends LitElement {
     }
     const option = this.fontOption(family);
     const variants = availableFontVariants(option);
-    const variant: FontVariantKey =
-      weight === "bold" && slope === "italic"
-        ? "boldItalic"
-        : weight === "bold"
-          ? "bold"
-          : weight !== "regular"
-            ? (slope === "italic" ? `${weight}Italic` : weight)
-            : slope === "italic"
-              ? "italic"
-              : "regular";
+    const variant = variantKeyForStyle(weight, slope);
     return variants.includes(variant) || supportsFontVariant(family, weight, slope);
   }
 
@@ -4488,7 +4503,7 @@ export class EpPaperEditorApp extends LitElement {
         : html`<div class="muted">No fullscreen layouts.</div>`}
       <label>
         Theme
-        <select .value=${assignment.defaultThemeId ?? "inherit"} @change=${(event: Event) => this.updateAssignment(assignment.id, (current) => ({ ...current, defaultThemeId: (event.target as HTMLSelectElement).value || undefined }))}>
+        <select .value=${this.project.themes.some((theme) => theme.id === assignment.defaultThemeId) ? assignment.defaultThemeId : this.project.themes[0]?.id ?? ""} @change=${(event: Event) => this.updateAssignmentForDisplay(device.id, (current) => ({ ...current, defaultThemeId: (event.target as HTMLSelectElement).value || undefined }))}>
           ${this.project.themes.map((theme) => html`<option value=${theme.id}>${theme.name}</option>`)}
         </select>
       </label>

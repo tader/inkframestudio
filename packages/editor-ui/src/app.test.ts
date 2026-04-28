@@ -493,6 +493,90 @@ describe("epaper editor app", () => {
     expect(project.layoutDefinitions?.some((layout) => "displayTypeId" in layout)).toBe(false);
   });
 
+  it("normalizes invalid display theme assignments to an available theme", () => {
+    const project = normalizeProject({
+      ...SAMPLE_PROJECT,
+      deviceAssignments: (SAMPLE_PROJECT.deviceAssignments ?? []).map((assignment, index) => ({
+        ...assignment,
+        defaultThemeId: index === 0 ? "missing-theme" : assignment.defaultThemeId
+      }))
+    });
+
+    expect(project.deviceAssignments?.[0]?.defaultThemeId).toBe(project.themes[0]?.id);
+  });
+
+  it("keeps display theme assignment when edited", async () => {
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    const app = element as unknown as {
+      project: typeof SAMPLE_PROJECT;
+      selectedDisplayId: string;
+      requestUpdate: () => void;
+    };
+    const displayId = app.project.devices?.[0]?.id ?? "";
+    app.selectedDisplayId = displayId;
+    app.requestUpdate();
+    await flush();
+    await element.updateComplete;
+
+    const themeSelect = inputInLabel<HTMLSelectElement>(element.shadowRoot, "Theme", "select");
+    setSelectValue(themeSelect, "soft-fill");
+    await flush();
+    await element.updateComplete;
+
+    expect(app.project.deviceAssignments?.find((entry) => entry.displayId === displayId)?.defaultThemeId).toBe("soft-fill");
+  });
+
+  it("changes theme font variants atomically", async () => {
+    window.location.hash = "#/themes";
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    const app = element as unknown as {
+      fonts: Array<{ id: string; label: string; source: string; variants: string[]; allowedPixelSizes: number[] }>;
+      project: typeof SAMPLE_PROJECT;
+      selectedThemeId: string;
+      requestUpdate: () => void;
+    };
+    const themeId = app.project.themes[0]?.id ?? "";
+    app.fonts = [{ id: "arial", label: "Arial", source: "user", variants: ["regular", "bold"], allowedPixelSizes: [] }];
+    app.selectedThemeId = themeId;
+    app.project = normalizeProject({
+      ...app.project,
+      themes: app.project.themes.map((theme) => theme.id === themeId
+        ? {
+            ...theme,
+            fontRoles: {
+              ...theme.fontRoles,
+              normalEmphasis: { family: "arial", weight: "bold", slope: "roman" }
+            }
+          }
+        : theme)
+    });
+    app.requestUpdate();
+    await flush();
+    await element.updateComplete;
+
+    const roleDetails = Array.from(element.shadowRoot.querySelectorAll("details")).find((entry) =>
+      entry.querySelector("summary")?.textContent?.includes("normal emphasis font")
+    );
+    expect(roleDetails).toBeTruthy();
+    const variantSelect = Array.from(roleDetails!.querySelectorAll("label")).find((entry) => entry.textContent?.includes("Variant"))?.querySelector("select");
+    expect(variantSelect).toBeTruthy();
+    setSelectValue(variantSelect as HTMLSelectElement, "regular");
+    await flush();
+    await element.updateComplete;
+
+    const role = app.project.themes.find((theme) => theme.id === themeId)?.fontRoles?.normalEmphasis;
+    expect(role?.weight).toBe("regular");
+    expect(role?.slope).toBe("roman");
+  });
+
   it("renders multi-page navigation and defaults to displays", async () => {
     const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
     document.body.append(element);

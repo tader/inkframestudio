@@ -227,10 +227,18 @@ function defaultFullscreenLayoutIdForDisplay(layouts: LayoutDefinition[], displa
   return layouts.find((entry) => entry.kind === "fullscreen")?.id;
 }
 
+function defaultThemeIdForAssignment(themes: WidgetTheme[], preferredId?: string): WidgetThemeId | undefined {
+  if (preferredId && themes.some((entry) => entry.id === preferredId)) {
+    return preferredId;
+  }
+  return themes[0]?.id ?? DEFAULT_WIDGET_THEME_ID;
+}
+
 function normalizeDeviceAssignments(
   project: Project,
   devices: ManagedDisplay[],
-  layouts: LayoutDefinition[]
+  layouts: LayoutDefinition[],
+  themes: WidgetTheme[]
 ): DeviceAssignment[] {
   const existing = new Map((project.deviceAssignments ?? []).map((assignment) => [assignment.displayId, assignment]));
   return devices.map((display) => {
@@ -239,7 +247,7 @@ function normalizeDeviceAssignments(
       id: assignment?.id ?? `assignment-${display.id}`,
       displayId: display.id,
       defaultFullscreenLayoutId: defaultFullscreenLayoutIdForDisplay(layouts, display, assignment?.defaultFullscreenLayoutId),
-      defaultThemeId: assignment?.defaultThemeId ?? DEFAULT_WIDGET_THEME_ID,
+      defaultThemeId: defaultThemeIdForAssignment(themes, assignment?.defaultThemeId),
       schedule: normalizeAssignmentSchedule(assignment?.schedule),
       fullscreenRules: assignment?.fullscreenRules ?? [],
       popupRules: assignment?.popupRules ?? []
@@ -271,7 +279,7 @@ export function normalizeProject(project: Project): Project {
   const widgetDefinitions = project.widgetDefinitions?.length
     ? project.widgetDefinitions
     : BUILT_IN_WIDGET_DEFINITIONS;
-  const deviceAssignments = normalizeDeviceAssignments(project, devices, layoutDefinitions);
+  const deviceAssignments = normalizeDeviceAssignments(project, devices, layoutDefinitions, themes);
   const scripting = project.scripting
     ? {
         sharedSource: typeof project.scripting.sharedSource === "string" ? project.scripting.sharedSource : undefined,
