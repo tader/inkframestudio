@@ -1,6 +1,6 @@
 import { LitElement, css, html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import { BUILT_IN_WIDGET_DEFINITIONS, DEFAULT_FONT_PRESETS, DISPLAY_PROFILES, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type EdgeInsets, type EdgeName, type FillRole, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutNode, type ManagedDisplay, type PlaceSearchEntry, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type ProviderConnectionStatus, type ProviderDescriptor, type ProviderInstance, type RenderData, type Rule, type SizeSpec, type TextStyle, type WidgetBorderPattern, type WidgetBorderSide, type WidgetBorderSize, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
+import { BUILT_IN_WIDGET_DEFINITIONS, DEFAULT_FONT_PRESETS, DISPLAY_PROFILES, evaluateArrayExpression, normalizeProject, supportsFontVariant, type BorderToken, type CompoundInputDefinition, type Condition, type DeviceAssignment, type DiscoveredDisplayCandidate, type DisplayType, type EdgeInsets, type EdgeName, type FillRole, type FontOption, type FontRole, type FontSlope, type FontVariantKey, type IconDefinition, type LayoutDefinition, type LayoutInspectionNode, type LayoutNode, type ManagedDisplay, type PlaceSearchEntry, type PrimitiveInstanceNode, type PrimitiveWidgetKind, type Project, type ProviderConnectionStatus, type ProviderDescriptor, type ProviderInstance, type RenderData, type Rule, type ScopeContext, type ScopeValue, type SizeSpec, type TextStyle, type WidgetBorderPattern, type WidgetBorderSide, type WidgetBorderSize, type WidgetDefinition, type WidgetTheme } from "../../render-core/src/index.js";
 import {
   deleteProviderInstance,
   deleteFont,
@@ -92,6 +92,22 @@ type WidgetPreviewVariable = {
   name: string;
   source: string;
   value: unknown;
+};
+
+type ScopedPreviewVariable = WidgetPreviewVariable;
+
+type ScopedPreviewForeachSelection = {
+  nodeId: string;
+  itemAlias: string;
+  indexAlias: string;
+  selectedIndex: number;
+  itemCount: number;
+};
+
+type ScopedPreviewState = {
+  variables: ScopedPreviewVariable[];
+  foreachSelections: ScopedPreviewForeachSelection[];
+  message?: string;
 };
 
 type NodeClipboard = {
@@ -990,6 +1006,9 @@ export class EpPaperEditorApp extends LitElement {
     previewWidth: { state: true },
     previewHeight: { state: true },
     previewMessage: { state: true },
+    previewRenderData: { state: true },
+    previewRenderDataKey: { state: true },
+    nodePreviewForeachIndexes: { state: true },
     widgetPreviewRenderData: { state: true },
     widgetPreviewDefinitionId: { state: true },
     widgetPreviewDataMessage: { state: true },
@@ -1394,6 +1413,9 @@ export class EpPaperEditorApp extends LitElement {
   declare private previewWidth: number;
   declare private previewHeight: number;
   declare private previewMessage: string;
+  declare private previewRenderData: RenderData | null;
+  declare private previewRenderDataKey: string;
+  declare private nodePreviewForeachIndexes: Record<string, number>;
   declare private widgetPreviewRenderData: RenderData | null;
   declare private widgetPreviewDefinitionId: string;
   declare private widgetPreviewDataMessage: string;
@@ -1456,6 +1478,9 @@ export class EpPaperEditorApp extends LitElement {
     this.previewWidth = 0;
     this.previewHeight = 0;
     this.previewMessage = "";
+    this.previewRenderData = null;
+    this.previewRenderDataKey = "";
+    this.nodePreviewForeachIndexes = {};
     this.widgetPreviewRenderData = null;
     this.widgetPreviewDefinitionId = "";
     this.widgetPreviewDataMessage = "";
@@ -1626,6 +1651,8 @@ export class EpPaperEditorApp extends LitElement {
       this.widgetPreviewRenderData = null;
       this.widgetPreviewDefinitionId = "";
       this.widgetPreviewDataMessage = "";
+      this.previewRenderData = null;
+      this.previewRenderDataKey = "";
     }
     this.selectedLayoutId = this.project.layoutDefinitions?.some((entry) => entry.id === this.selectedLayoutId)
       ? this.selectedLayoutId
@@ -1802,6 +1829,8 @@ export class EpPaperEditorApp extends LitElement {
       this.previewPngBase64 = "";
       this.previewHash = "";
       this.previewMessage = "";
+      this.previewRenderData = null;
+      this.previewRenderDataKey = "";
       this.widgetPreviewRenderData = null;
       this.widgetPreviewDefinitionId = "";
       this.widgetPreviewDataMessage = "";
@@ -1831,13 +1860,20 @@ export class EpPaperEditorApp extends LitElement {
       if (!this.selectedLayoutId) {
         return [undefined, undefined] as const;
       }
-      const preview = await fetchLayoutPreview(
-        this.project.id,
-        this.selectedLayoutId,
-        undefined,
-        this.projectWithPreviewThemeForLayout(this.selectedLayoutId),
-        this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id
-      );
+      const previewProject = this.projectWithPreviewThemeForLayout(this.selectedLayoutId);
+      const displayTypeId = this.selectedDisplayTypeId || this.project.displayTypes?.[0]?.id;
+      const [preview, renderData] = await Promise.all([
+        fetchLayoutPreview(
+          this.project.id,
+          this.selectedLayoutId,
+          undefined,
+          previewProject,
+          displayTypeId
+        ),
+        fetchLiveData(this.project.id, previewProject, this.selectedLayoutId).catch(() => null)
+      ]);
+      this.previewRenderData = renderData;
+      this.previewRenderDataKey = `layout:${this.selectedLayoutId}`;
       return [preview, undefined] as const;
     }
     if (this.activePage === "widgets") {
@@ -1860,6 +1896,8 @@ export class EpPaperEditorApp extends LitElement {
       ]);
       this.widgetPreviewRenderData = renderData;
       this.widgetPreviewDefinitionId = definition.id;
+      this.previewRenderData = renderData;
+      this.previewRenderDataKey = `widget:${definition.id}`;
       if (renderData) {
         this.widgetPreviewDataMessage = "";
       }
@@ -2061,7 +2099,10 @@ export class EpPaperEditorApp extends LitElement {
       return undefined;
     }
     const globals = {
+      now: String(scope.now ?? ""),
+      today: String(scope.today ?? String(scope.now ?? "").slice(0, 10)),
       locale: this.project.locale ?? "en-US",
+      display: scope.display ?? {},
       project: { id: this.project.id, name: this.project.name }
     };
     const context = { scope, globals, bindings, helpers: {}, shared: {}, locale: globals.locale, warn: () => undefined };
@@ -2138,6 +2179,222 @@ export class EpPaperEditorApp extends LitElement {
               </div>
             `
           : html`<div class="muted">No variables for this widget.</div>`}
+      </div>
+    `;
+  }
+
+  private previewKeyForOwner(owner: { id: string; kind?: string }): string {
+    return isLayoutOwner(owner) ? `layout:${owner.id}` : `widget:${owner.id}`;
+  }
+
+  private previewRenderDataForOwner(owner: { id: string; kind?: string }): RenderData | null {
+    const key = this.previewKeyForOwner(owner);
+    if (this.previewRenderDataKey === key) {
+      return this.previewRenderData;
+    }
+    if (!isLayoutOwner(owner) && this.widgetPreviewDefinitionId === owner.id) {
+      return this.widgetPreviewRenderData;
+    }
+    return null;
+  }
+
+  private previewDisplayType(owner: { id: string; kind?: string; rootNode?: LayoutNode; displayTypeId?: string }): DisplayType | undefined {
+    const displayTypeId = isLayoutOwner(owner)
+      ? owner.displayTypeId || this.selectedDisplayTypeId
+      : this.selectedDisplayTypeId;
+    return this.project.displayTypes?.find((entry) => entry.id === displayTypeId) ?? this.project.displayTypes?.[0];
+  }
+
+  private previewBaseScope(owner: { id: string; name?: string; kind?: string; displayTypeId?: string; inputSchema?: CompoundInputDefinition[] }, renderData: RenderData | null): ScopeContext {
+    const displayType = this.previewDisplayType(owner);
+    const now = String(renderData?.now ?? "");
+    const scope: ScopeContext = {
+      now,
+      today: now.slice(0, 10),
+      locale: String(this.project.locale ?? "en-US"),
+      display: {
+        id: displayType?.id ?? "",
+        width: displayType?.width ?? 0,
+        height: displayType?.height ?? 0,
+        palette: displayType?.palette ?? "bw",
+        rotation: displayType?.rotation ?? 0
+      },
+      project: {
+        id: this.project.id,
+        name: this.project.name
+      }
+    };
+    if (!isLayoutOwner(owner)) {
+      for (const input of owner.inputSchema ?? []) {
+        const value = input.previewValue ?? input.defaultValue ?? (input.valueType === "boolean" ? false : input.valueType === "number" ? 0 : "");
+        scope[input.id] = value as ScopeValue;
+        scope[input.name] = value as ScopeValue;
+      }
+    }
+    return scope;
+  }
+
+  private findNodePath(root: LayoutNode | undefined, nodeId: string, path: LayoutNode[] = []): LayoutNode[] | undefined {
+    if (!root) {
+      return undefined;
+    }
+    const nextPath = [...path, root];
+    if (root.id === nodeId) {
+      return nextPath;
+    }
+    if (root.type === "stack" || root.type === "zstack") {
+      for (const child of root.children ?? []) {
+        const result = this.findNodePath(child, nodeId, nextPath);
+        if (result) {
+          return result;
+        }
+      }
+    }
+    if (root.type === "grid") {
+      for (const child of root.children ?? []) {
+        const result = this.findNodePath(child.node, nodeId, nextPath);
+        if (result) {
+          return result;
+        }
+      }
+    }
+    if (root.type === "data_query" || root.type === "filter" || root.type === "unique" || root.type === "foreach" || root.type === "script") {
+      return this.findNodePath(root.child, nodeId, nextPath);
+    }
+    if (root.type === "if_else") {
+      return this.findNodePath(root.thenChild, nodeId, nextPath) ?? this.findNodePath(root.elseChild, nodeId, nextPath);
+    }
+    return undefined;
+  }
+
+  private previewArrayItems(expression: string | undefined, scope: ScopeContext, itemAlias?: string, indexAlias?: string): ScopeValue[] {
+    return evaluateArrayExpression(expression, scope, {
+      locale: this.project.locale ?? "en-US",
+      scope,
+      itemAlias,
+      indexAlias
+    });
+  }
+
+  private applyPreviewScopeForChild(
+    node: LayoutNode,
+    scope: ScopeContext,
+    renderData: RenderData | null,
+    foreachSelections: ScopedPreviewForeachSelection[]
+  ): ScopeContext {
+    if (node.type === "data_query") {
+      const query = renderData?.metaQueries?.[node.id] ?? renderData?.queries?.[node.id];
+      const dateName = node.dateVariableName ?? "date";
+      return {
+        ...scope,
+        [node.variableName]: (query?.items ?? []) as ScopeValue,
+        ...(node.queryKind === "calendar_events" ? { [dateName]: String(query?.meta?.date ?? "") } : {})
+      };
+    }
+    if (node.type === "filter") {
+      const items = this.previewArrayItems(node.itemsRef, scope, node.itemAlias, node.indexAlias);
+      const filtered = this.previewArrayItems(`__items | filter(${node.condition})`, { ...scope, __items: items }, node.itemAlias, node.indexAlias);
+      return { ...scope, [node.outputVariableName]: filtered };
+    }
+    if (node.type === "unique") {
+      const items = this.previewArrayItems(node.itemsRef, scope, node.itemAlias, node.indexAlias);
+      const unique = this.previewArrayItems(`__items | unique_by(${JSON.stringify(node.keyTemplate)})`, { ...scope, __items: items }, node.itemAlias, node.indexAlias);
+      return { ...scope, [node.outputVariableName]: unique };
+    }
+    if (node.type === "script") {
+      const bindings = this.previewScriptBindings(node, scope);
+      const values = this.previewScriptValues(node, scope, bindings);
+      return values ? { ...scope, ...values } as ScopeContext : scope;
+    }
+    if (node.type === "foreach") {
+      const rawItems = this.previewArrayItems(node.itemsRef, scope, node.itemAlias, node.indexAlias);
+      const maxItems = typeof node.maxItems === "number" && Number.isFinite(node.maxItems)
+        ? Math.max(0, Math.floor(node.maxItems))
+        : rawItems.length;
+      const items = rawItems.slice(0, maxItems);
+      const selectedIndex = Math.max(0, Math.min(Number(this.nodePreviewForeachIndexes[node.id] ?? 0), Math.max(0, items.length - 1)));
+      foreachSelections.push({
+        nodeId: node.id,
+        itemAlias: node.itemAlias,
+        indexAlias: node.indexAlias,
+        selectedIndex,
+        itemCount: items.length
+      });
+      return {
+        ...scope,
+        [node.itemAlias]: (items[selectedIndex] ?? null) as ScopeValue,
+        [node.indexAlias]: selectedIndex
+      };
+    }
+    return scope;
+  }
+
+  private scopedPreviewState(owner: { id: string; name?: string; kind?: string; rootNode?: LayoutNode; displayTypeId?: string; inputSchema?: CompoundInputDefinition[] }, nodeId: string): ScopedPreviewState {
+    const renderData = this.previewRenderDataForOwner(owner);
+    const path = this.findNodePath(owner.rootNode, nodeId);
+    if (!path) {
+      return { variables: [], foreachSelections: [], message: "Node not found." };
+    }
+    let scope = this.previewBaseScope(owner, renderData);
+    const foreachSelections: ScopedPreviewForeachSelection[] = [];
+    for (const node of path) {
+      if (node.id === nodeId) {
+        break;
+      }
+      scope = this.applyPreviewScopeForChild(node, scope, renderData, foreachSelections);
+    }
+    const variables = Object.keys(scope)
+      .sort((left, right) => left.localeCompare(right))
+      .map((name) => ({ name, source: "scope", value: scope[name] }));
+    return {
+      variables,
+      foreachSelections,
+      message: renderData ? undefined : "Live preview data unavailable; showing static scope only."
+    };
+  }
+
+  private renderNodeScopedPreviewVariables(owner: { id: string; name?: string; kind?: string; rootNode?: LayoutNode; displayTypeId?: string; inputSchema?: CompoundInputDefinition[] }, node: LayoutNode): TemplateResult {
+    const state = this.scopedPreviewState(owner, node.id);
+    return html`
+      <div class="section">
+        <h3>Scope Variables</h3>
+        ${state.message ? html`<div class="muted">${state.message}</div>` : nothing}
+        ${state.foreachSelections.length
+          ? html`
+              <div class="variable-list">
+                ${state.foreachSelections.map((selection) => html`
+                  <label>
+                    ${selection.itemAlias} iteration
+                    <select
+                      .value=${String(selection.selectedIndex)}
+                      @change=${(event: Event) => {
+                        this.nodePreviewForeachIndexes = {
+                          ...this.nodePreviewForeachIndexes,
+                          [selection.nodeId]: Number((event.target as HTMLSelectElement).value)
+                        };
+                      }}
+                    >
+                      ${Array.from({ length: selection.itemCount }, (_entry, index) => html`
+                        <option value=${String(index)}>${index}</option>
+                      `)}
+                    </select>
+                  </label>
+                `)}
+              </div>
+            `
+          : nothing}
+        ${state.variables.length
+          ? html`
+              <div class="variable-list">
+                ${state.variables.map((variable) => html`
+                  <details>
+                    <summary><code>${variable.name}</code></summary>
+                    <pre class="variable-value">${this.formatPreviewVariableValue(variable.value)}</pre>
+                  </details>
+                `)}
+              </div>
+            `
+          : html`<div class="muted">No variables for this node.</div>`}
       </div>
     `;
   }
@@ -4226,6 +4483,7 @@ export class EpPaperEditorApp extends LitElement {
               </div>
             `
           : nothing}
+        ${this.renderNodeScopedPreviewVariables(owner, node)}
         ${showLayoutControls
           ? html`
               ${this.renderSizeSpecEditor("Width", node.width, (next) => this.updateRootNode(owner, (root) => updateNode(root, node.id, (current) => ({ ...current, width: next }))))}
@@ -5493,7 +5751,6 @@ export class EpPaperEditorApp extends LitElement {
                     </div>
                     ${this.renderStructurePreviewStage()}
                   </div>
-                  ${this.renderWidgetPreviewVariables(definition)}
                   ${definition.rootNode
                     ? this.selectedEditorNode
                       ? this.renderNodeEditor(this.selectedEditorNode, definition, parentIdForNode(definition.rootNode, this.selectedEditorNode.id))

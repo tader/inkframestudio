@@ -57,6 +57,11 @@ type TestLayoutNode = {
   child?: TestLayoutNode;
   thenChild?: TestLayoutNode;
   elseChild?: TestLayoutNode;
+  itemsRef?: string;
+  itemAlias?: string;
+  indexAlias?: string;
+  maxItems?: number;
+  axis?: string;
   width?: Record<string, unknown>;
   height?: Record<string, unknown>;
   style?: Record<string, unknown>;
@@ -1046,11 +1051,12 @@ describe("epaper editor app", () => {
       }
     };
     appState.widgetPreviewDefinitionId = widget?.id ?? "";
+    appState.selectNode("weather-text-under-test");
     appState.requestUpdate();
     await flush();
     await element.updateComplete;
 
-    expect(element.shadowRoot.textContent).toContain("Preview Variables");
+    expect(element.shadowRoot.textContent).toContain("Scope Variables");
     expect(element.shadowRoot.textContent).toContain("weather");
     expect(element.shadowRoot.textContent).toContain("16.6");
     expect(element.shadowRoot.textContent).toContain("cloudy");
@@ -1106,6 +1112,87 @@ describe("epaper editor app", () => {
     expect(element.shadowRoot.textContent).toContain("Done");
   });
 
+  it("lets selected node preview choose foreach iterations", async () => {
+    window.location.hash = "#/widgets";
+    const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
+    document.body.append(element);
+    await flush();
+    await element.updateComplete;
+
+    const appState = element as unknown as TestEditorElement & {
+      widgetPreviewRenderData: unknown;
+      widgetPreviewDefinitionId: string;
+    };
+    Array.from(element.shadowRoot.querySelectorAll<HTMLButtonElement>("button")).find((button) => button.textContent?.includes("Add compound"))?.click();
+    await flush();
+    await element.updateComplete;
+
+    const widget = appState.project.widgetDefinitions?.find((entry) => entry.id === appState.selectedWidgetDefinitionId);
+    if (widget?.rootNode) {
+      appState.setRootNode(widget, {
+        ...widget.rootNode,
+        children: [{
+          id: "events-query-under-test",
+          type: "data_query",
+          queryKind: "calendar_events",
+          variableName: "events",
+          child: {
+            id: "events-loop-under-test",
+            type: "foreach",
+            axis: "vertical",
+            itemsRef: "events",
+            itemAlias: "event",
+            indexAlias: "eventIndex",
+            maxItems: 2,
+            child: {
+              id: "event-text-under-test",
+              type: "primitive_instance",
+              primitiveType: "text",
+              props: { text: "{{ event.summary }}" }
+            }
+          }
+        }]
+      });
+    }
+    appState.selectNode("event-text-under-test");
+    appState.widgetPreviewRenderData = {
+      now: "2026-04-27T12:00:00+02:00",
+      entities: {},
+      queries: {},
+      metaQueries: {
+        "events-query-under-test": {
+          kind: "calendar_events",
+          items: [{ summary: "First event" }, { summary: "Second event" }],
+          meta: { date: "2026-04-27" }
+        }
+      }
+    };
+    appState.widgetPreviewDefinitionId = widget?.id ?? "";
+    appState.requestUpdate();
+    await flush();
+    await element.updateComplete;
+
+    const scopedValue = (name: string) => {
+      const details = Array.from(element.shadowRoot.querySelectorAll("details")).find((entry) =>
+        entry.querySelector("summary code")?.textContent === name
+      );
+      return details?.querySelector("pre")?.textContent ?? "";
+    };
+
+    expect(element.shadowRoot.textContent).toContain("event iteration");
+    expect(scopedValue("event")).toContain("First event");
+    expect(scopedValue("event")).not.toContain("Second event");
+
+    setSelectValue(inputInLabel<HTMLSelectElement>(element.shadowRoot, "event iteration", "select"), "1");
+    await flush();
+    await element.updateComplete;
+
+    expect(scopedValue("event")).toContain("Second event");
+    expect(scopedValue("event")).not.toContain("First event");
+    expect(element.shadowRoot.textContent).toContain("eventIndex");
+    expect(element.shadowRoot.textContent).toContain("1");
+  });
+
   it("keeps widget preview variables scoped to selected widget", async () => {
     window.location.hash = "#/widgets";
     const element = document.createElement("epaper-editor-app") as HTMLElement & { updateComplete: Promise<boolean>; shadowRoot: ShadowRoot };
@@ -1148,6 +1235,7 @@ describe("epaper editor app", () => {
     };
     appState.widgetPreviewDefinitionId = firstWidget?.id ?? "";
     expect(appState.widgetPreviewDefinitionId).toBe(firstWidget?.id);
+    appState.selectNode("first-text");
     appState.requestUpdate();
     await flush();
     await element.updateComplete;
@@ -1158,7 +1246,11 @@ describe("epaper editor app", () => {
     await element.updateComplete;
     const secondWidget = appState.project.widgetDefinitions?.find((entry) => entry.id === appState.selectedWidgetDefinitionId);
     expect(secondWidget?.id).not.toBe(firstWidget?.id);
-    expect(element.shadowRoot.textContent).toContain("Preview Variables");
+    appState.selectedNodeId = secondWidget?.rootNode?.id ?? "";
+    appState.requestUpdate();
+    await flush();
+    await element.updateComplete;
+    expect(element.shadowRoot.textContent).toContain("Scope Variables");
     expect(element.shadowRoot.textContent).not.toContain("16.6");
   });
 
